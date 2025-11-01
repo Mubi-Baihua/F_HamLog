@@ -8,5 +8,5 @@ Supports exporting ADI files.
 
 
 
-##### Codeed by [BI8SQL](https://mubi-baihua.github.io/speed.html)
+##### Codeed by [BI8SQL](https://mubi-baihua.github.io/)
 
