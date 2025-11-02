@@ -4,7 +4,7 @@
 
 支持导出ADI文件。
 
-Supports exporting ADI files.
+Supports exporting ADI files
 
 
 
