@@ -2,9 +2,9 @@
 
 
 
-支持导出ADI文件。
+支持导出ADI文件。支持从HAM个人工具导入日志。
 
-Supports exporting ADI files.
+Supports exporting ADI files.Support importing logs from HAM personal tools.
 
 
 
