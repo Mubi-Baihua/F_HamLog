@@ -9,4 +9,4 @@ jobs:
     - name: Install Nuitka
       run: pip install nuitka
     - name: nuitka
-      run: python -m nuitka --standalone --output-filename="F HamLog 1" --main=main.py --windows-icon-from-ico=file\F_HamLog.ico --msvc=latest --windows-console-mode=attach --enable-plugin=pyside6 --windows-uac-admin
+      run: python -m nuitka --standalone --output-filename="F HamLog 1" --main=main.py --msvc=latest --windows-console-mode=attach --enable-plugin=pyside6 --windows-uac-admin
