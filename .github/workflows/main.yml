@@ -1,0 +1,10 @@
+on:
+  workflow_dispatch:
+jobs:
+  my_job:
+    name: deploy to staging
+    runs-on: windows-latest
+
+    steps:
+    - name: nuitka
+      run: .venv/Scripts/python.exe -m nuitka --standalone --output-filename="F HamLog 1" --main=main.py --windows-icon-from-ico=file\F_HamLog.ico --msvc=latest --windows-console-mode=attach --enable-plugin=pyside6 --windows-uac-admin
