@@ -2,6 +2,16 @@
 
 
 
+###### 支持远程共享日志。（暂未上线）
+
+###### Support remote sharing of logs.(Not yet online)
+
+ 	服务端请下载 Remote Log Server for F HamLog 1.1.0。
+
+ 	Please download Remote Log Server for F HamLog 1.1.0 on the server side.
+
+
+
 支持导出ADI文件。支持从HAM个人工具导入日志。
 
 Supports exporting ADI files.Support importing logs from HAM personal tools.
