@@ -1,0 +1,1 @@
+D:\F-Dev\BIG\F_HamLog\Remote_Log_Server_for_F_HamLog_1.1.0\.venv\Scripts\python.exe -m nuitka --standalone --output-filename="Remote Log Server for F HamLog 1.1.0" --main=main.py --windows-icon-from-ico=F_HamLog.ico --msvc=latest --windows-uac-admin --onefile

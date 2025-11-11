@@ -57,6 +57,15 @@ def main(window):
     line.setLineWidth(1)  # 设置线宽
     layout.addWidget(line)
 
+    fk_v = QLabel("F HamLog 版本：1.1.0", central_widget)
+    layout.addWidget(fk_v)
+
+    line = QFrame(central_widget)
+    line.setFrameShape(QFrame.HLine)
+    line.setFrameShadow(QFrame.Sunken)
+    line.setLineWidth(1)  # 设置线宽
+    layout.addWidget(line)
+
     cc_l = QLabel("Coded by BI8SQL", central_widget)
     layout.addWidget(cc_l)
 

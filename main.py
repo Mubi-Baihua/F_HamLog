@@ -27,6 +27,13 @@ def main():
         print(save_path)
         with open(save_path, 'r', encoding='utf-8') as f:
             project.main(project_window, f.read(), save_path)
+        
+    def remote_project():
+        print("远程项目")
+        import remote_project
+        global project_window  # 保持引用，防止被回收
+        project_window = QMainWindow()
+        remote_project.main(project_window)
     def set():
         print("设置")
         import set
@@ -58,19 +65,24 @@ def main():
     font_i.setPointSize(10)
     text_label2.setFont(font_i)
 
-    button_start = QPushButton("新建项目", window)
+    button_start = QPushButton("新建日志", window)
     button_start.setGeometry(200, 100, 100, 30)
     button_start.resize(100, 50)
     button_start.clicked.connect(new_project)
 
-    button_open = QPushButton("打开项目", window)
+    button_open = QPushButton("打开日志", window)
     button_open.setGeometry(200, 150, 100, 30)
     button_open.resize(100, 50)
     button_open.clicked.connect(open_project)
 
+    button_open = QPushButton("远程日志", window)
+    button_open.setGeometry(200, 200, 100, 30)
+    button_open.resize(100, 40)
+    button_open.clicked.connect(remote_project)
+
     button_set = QPushButton("设置", window)
-    button_set.setGeometry(200, 200, 100, 30)
-    button_set.resize(100, 50)
+    button_set.setGeometry(200, 240, 100, 30)
+    button_set.resize(100, 40)
     button_set.clicked.connect(set)
 
     window.show()
