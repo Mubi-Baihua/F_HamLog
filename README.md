@@ -6,9 +6,9 @@
 
 #### Support remote sharing of logs.(Not yet online)
 
- 	    服务端请下载 Remote Log Server for F HamLog 1.1.0。
+ 	服务端请下载 Remote Log Server for F HamLog 1.1.0。
 
- 	    Please download Remote Log Server for F HamLog 1.1.0 on the server side.
+ 	Please download Remote Log Server for F HamLog 1.1.0 on the server side.
 
 
 
