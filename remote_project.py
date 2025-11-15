@@ -11,6 +11,7 @@ import socket
 
 file = []
 socket_ = None
+network_thread = None
 def main(window_ip):
     def remote_project(ip,port,password):
         global socket_
@@ -357,13 +358,16 @@ def main(window_ip):
                     socket_.send('Next'.encode('utf-8'))
                     self.msleep(1000*1) 
 
+        global network_thread
         network_thread = NetworkThread()
         network_thread.start()
 
         def setup_close_handler(window):
+            global network_thread
             original_close_event = window.closeEvent if hasattr(window, 'closeEvent') else None
             
             def close_event(event):
+                global network_thread
                 # 停止网络线程
                 if 'network_thread' in globals() and network_thread.isRunning():
                     network_thread.stop()
@@ -373,6 +377,7 @@ def main(window_ip):
                     original_close_event(event)
                 else:
                     event.accept()
+                print("窗口已关闭")
             
             window.closeEvent = close_event
     
