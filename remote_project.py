@@ -4,6 +4,7 @@ from PySide6.QtWidgets import *
 from PySide6.QtGui import QAction
 from PySide6.QtCore import Qt  # 新增导入 Qt
 from functools import partial
+from PySide6.QtCore import QThread, Signal
 import time as time_
 import sys
 import socket
@@ -22,7 +23,16 @@ def main(window_ip):
             return
         socket_.send(password.encode('utf-8'))
         if socket_.recv(1024).decode('utf-8') == 'Login':
-            QMessageBox.information(window_ip, "登录成功", "登录成功！\n退出时请使用文件菜单中的退出选项！")
+            #QMessageBox.information(window_ip, "登录成功", "登录成功！\n退出时请使用文件菜单中的退出选项！")
+            msg_box = QMessageBox(window_ip)
+            msg_box.setIcon(QMessageBox.Information)
+            msg_box.setWindowTitle("登录成功")
+            msg_box.setText("登录成功！\n退出时请使用文件菜单中的退出选项！")
+            msg_box.setModal(False)  # 设置为非模态
+            msg_box.setWindowFlags(msg_box.windowFlags() | Qt.WindowStaysOnTopHint)
+            msg_box.show()
+            msg_box.raise_()        # 将窗口提升到顶层
+            msg_box.activateWindow()
         else:
             QMessageBox.warning(window_ip, "登录失败", "密码错误！")
             return
@@ -250,12 +260,18 @@ def main(window_ip):
             socket_.send(f'save$#${str(file)}'.encode('utf-8'))
             QMessageBox.information(window, "保存成功", "保存成功！")
             socket_.send('exit'.encode('utf-8'))
-            sys.exit()
+            if 'network_thread' in globals():
+                network_thread.stop()
+                network_thread.wait()
+            window.close()
 
         def ee():
             global socket_
+            if 'network_thread' in globals():
+                network_thread.stop()
+                network_thread.wait()
             socket_.send('exit'.encode('utf-8'))
-            sys.exit()
+            window.close()
 
         def import_from_HAM_tolls_():
             global file
@@ -326,8 +342,43 @@ def main(window_ip):
         table_update(delete=False)
         table_update()
 
-        window.show()
+        class NetworkThread(QThread):
+            update_signal = Signal()
+            
+            def __init__(self):
+                super().__init__()
+                self._running = True
+            
+            def stop(self):
+                self._running = False
+            
+            def run(self):
+                while self._running:
+                    socket_.send('Next'.encode('utf-8'))
+                    self.msleep(1000*1) 
 
+        network_thread = NetworkThread()
+        network_thread.start()
+
+        def setup_close_handler(window):
+            original_close_event = window.closeEvent if hasattr(window, 'closeEvent') else None
+            
+            def close_event(event):
+                # 停止网络线程
+                if 'network_thread' in globals() and network_thread.isRunning():
+                    network_thread.stop()
+                    network_thread.wait(3000)
+                # 调用原始关闭事件
+                if original_close_event:
+                    original_close_event(event)
+                else:
+                    event.accept()
+            
+            window.closeEvent = close_event
+    
+        setup_close_handler(window)
+
+        window.show()
     window_ip.resize(300, 150)
     window_ip.setFixedSize(300, 150)
     window_ip.setWindowTitle(f'F HamLog 1 - 远程日志')

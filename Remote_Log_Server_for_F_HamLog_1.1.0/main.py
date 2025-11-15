@@ -56,6 +56,7 @@ while True:
         else:
             conn.send('Wrong password'.encode('utf-8'))
             conn.close()
+        conn.settimeout(5)
         while True:
             DX_d = conn.recv(1024**3)
             DX_data = DX_d.decode('utf-8')
@@ -72,6 +73,8 @@ while True:
                     print(f'Save log file from - {addr}')
                     with open('main.fhl', 'w') as f:
                         f.write(DX_data.split('$#$')[1])
+            elif DX_data == 'Next':
+                print(f'Next - {addr}')
             
 
     except Exception as e:
