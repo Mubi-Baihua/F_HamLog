@@ -2,9 +2,9 @@
 
 
 
-#### 支持远程共享日志。（暂未上线）
+#### 支持远程共享日志。
 
-#### Support remote sharing of logs.(Not yet online)
+#### Support remote sharing of logs.
 
  	服务端请下载 Remote Log Server for F HamLog 1.1.0。
 
