@@ -18,7 +18,7 @@ def get_free_port():
             port += 1
 
 if not os.path.exists('main.fhl'):
-    with open('main.fhl', 'w') as f:
+    with open('main.fhl', 'w',encoding='utf-8') as f:
         f.write('[]')
 
 absolute_path_fhl = os.path.abspath('main.fhl')
@@ -32,10 +32,10 @@ listener.bind(('0.0.0.0',port))
 rich.print(f'Listening on:\n[bold magenta]ip:[/bold magenta]{ip}\n[bold magenta]port:[/bold magenta]{port}')
 
 if not os.path.exists('password_xml.txt'):
-    with open('password_xml.txt', 'w') as f:
+    with open('password_xml.txt', 'w',encoding='utf-8') as f:
         f.write('000000')
 
-with open('password_xml.txt', 'r') as f:
+with open('password_xml.txt', 'r',encoding='utf-8') as f:
     password = f.read()
 
 absolute_path_password = os.path.abspath('password_xml.txt')
@@ -65,13 +65,13 @@ while True:
                 conn.close()
                 break
             elif DX_data == 'send_fhl':
-                with open('main.fhl', 'r') as f:
+                with open('main.fhl', 'r',encoding='utf-8') as f:
                     conn.send(f.read().encode('utf-8'))
                 print(f'Send log file to - {addr}')
             elif '$#$' in DX_data:
                 if DX_data.split('$#$')[0] == 'save_fhl':
                     print(f'Save log file from - {addr}')
-                    with open('main.fhl', 'w') as f:
+                    with open('main.fhl', 'w',encoding='utf-8') as f:
                         f.write(DX_data.split('$#$')[1])
             elif DX_data == 'Next':
                 print(f'Next - {addr}')
