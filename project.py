@@ -5,6 +5,7 @@ from functools import partial
 import time as time_
 import sys
 import os
+import re
 
 file = None
 
@@ -134,6 +135,20 @@ def main(window, filee='', save_path=''):
             keys_list = list(translation_dict.keys())
             for row in range(len(keys_list)):
                 key = keys_list[row]
+
+                if key == 'date':
+                    if not re.search(r'^\d{4}-\d{2}-\d{2}$', table_others.item(row, 1).text()):
+                        QMessageBox.warning(project_others_window, "格式错误", f"日期格式错误，应为YYYY-MM-DD")
+                        return
+                elif key == 'time':
+                    if not re.search(r'^\d{2}:\d{2}$', table_others.item(row, 1).text()):
+                        QMessageBox.warning(project_others_window, "格式错误", f"时间格式错误，应为HH:MM")
+                        return
+                elif key == 'm_call' or key == 'o_call' or key == 'freq' or key == 'mode'or key == 'm_rst' or key == 'o_rst':
+                    if table_others.item(row, 1).text() == '':
+                        QMessageBox.warning(project_others_window, "格式错误", f"缺少 {translation_dict[key]} (必填)")
+                        return
+
                 item = table_others.item(row, 1)  # 第二列是可编辑的内容
                 if item!=None:
                     file[index][key] = item.text()
@@ -188,6 +203,20 @@ def main(window, filee='', save_path=''):
             keys_list = list(translation_dict.keys())
             for row in range(len(keys_list)):
                 key = keys_list[row]
+
+                if key == 'date':
+                    if not re.search(r'^\d{4}-\d{2}-\d{2}$', table_others.item(row, 1).text()):
+                        QMessageBox.warning(project_others_window, "格式错误", f"日期格式错误，应为YYYY-MM-DD")
+                        return
+                elif key == 'time':
+                    if not re.search(r'^\d{2}:\d{2}$', table_others.item(row, 1).text()):
+                        QMessageBox.warning(project_others_window, "格式错误", f"时间格式错误，应为HH:MM")
+                        return
+                elif key == 'm_call' or key == 'o_call' or key == 'freq' or key == 'mode'or key == 'm_rst' or key == 'o_rst':
+                    if table_others.item(row, 1).text() == '':
+                        QMessageBox.warning(project_others_window, "格式错误", f"缺少 {translation_dict[key]} (必填)")
+                        return
+
                 item = table_others.item(row, 1)  # 第二列是可编辑的内容
                 if item!=None:
                     file[index][key] = item.text()
