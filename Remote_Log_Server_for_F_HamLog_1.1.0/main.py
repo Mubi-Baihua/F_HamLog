@@ -2,7 +2,7 @@ import socket
 import os
 import rich
 
-rich.print('[bold blue]Remote Log Server for F HamLog 1.1.0[/bold blue]')
+rich.print('[bold blue]F HamLog Remote Log Server 1.1.0[/bold blue]')
 rich.print('[bold yellow]Coded by BI8SQL[/bold yellow]')
 
 listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
