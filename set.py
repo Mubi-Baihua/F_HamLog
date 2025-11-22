@@ -17,8 +17,8 @@ def main(window):
                 'm_dig': m_dig
             }))
         window.close()
-    window.resize(500, 300)
-    window.setFixedSize(500, 300)
+    window.resize(600, 350)
+    window.setFixedSize(600, 350)
     window.setWindowTitle('设置')
     central_widget = QWidget()
     window.setCentralWidget(central_widget)
@@ -48,7 +48,13 @@ def main(window):
     line.setLineWidth(1)  # 设置线宽
     layout.addWidget(line)
 
-    fk_l = QLabel("问题反馈到：13577106233@163.com\n版本更新请访问：https://mubi-baihua.github.io", central_widget)
+    fk_l = QLabel()
+    fk_l.setText('<html><head/><style>a {text-decoration: none; color: #0066cc;}</style></head><body>'
+                '<p>问题反馈到：13577106233@163.com</p>'
+                '<p>版本更新请访问：<a href="https://mubi-baihua.github.io">https://mubi-baihua.github.io</a></p>'
+                '<p>Github项目：<a href="https://github.com/Mubi-Baihua/F_HamLog/">https://github.com/Mubi-Baihua/F_HamLog/</a></p>'
+                '</body></html>')
+    fk_l.setOpenExternalLinks(True)
     layout.addWidget(fk_l)
 
     line = QFrame(central_widget)
