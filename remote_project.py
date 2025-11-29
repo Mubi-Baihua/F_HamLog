@@ -64,7 +64,7 @@ def main(window_ip):
             file_length = len(file)
             # 创建表格部件
             table = QTableWidget(file_length, 11) 
-            table.setHorizontalHeaderLabels(["日期","时间","己方呼号","对方呼号","频率","调制模式", "己方信号报告", "对方信号报告", "己方QTH", "对方QTH","更多"])
+            table.setHorizontalHeaderLabels(["日期","时间","己方呼号","对方呼号","频率","调制模式", "己方接收信号", "对方接收信号", "己方QTH", "对方QTH","更多"])
             table.setEditTriggers(QAbstractItemView.NoEditTriggers)
             print(file_length)
             # 添加一些示例数据
@@ -140,7 +140,7 @@ def main(window_ip):
                 'o_call': '对方呼号',
                 'freq': '频率',
                 'mode': '调制模式',
-                'm_rst': '己方信号报告','o_rst': '对方信号报告',
+                'm_rst': '己方接收信号','o_rst': '对方接收信号',
                 'm_qth': '己方QTH','o_qth': '对方QTH',
                 "m_dig": '己方设备','o_dig': '对方设备',
                 'm_ant': '己方天线','o_ant': '对方天线',
@@ -208,7 +208,7 @@ def main(window_ip):
                 'o_call': '对方呼号',
                 'freq': '频率',
                 'mode': '调制模式',
-                'm_rst': '己方信号报告','o_rst': '对方信号报告',
+                'm_rst': '己方接收信号','o_rst': '对方接收信号',
                 'm_qth': '己方QTH','o_qth': '对方QTH',
                 "m_dig": '己方设备','o_dig': '对方设备',
                 'm_ant': '己方天线','o_ant': '对方天线',
