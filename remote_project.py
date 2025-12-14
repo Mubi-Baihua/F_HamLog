@@ -318,12 +318,16 @@ def main(window_ip):
             import output_adi
             output_adi.main(file)
             QMessageBox.information(window, "导出成功", "导出成功！")
+        
+        def output_excel(file):
+            import output_excel
+            output_excel.main(file)
+            QMessageBox.information(window, "导出成功", "导出成功！")
 
         window = QMainWindow()
         window.resize(1200, 700)
         window.setWindowTitle(f'F HamLog 1 - 远程日志({ip}:{port})')
         # window.showMaximized()
-        # 创建菜单栏
         menu_bar = window.menuBar()
 
         # 创建"文件"菜单
@@ -341,18 +345,6 @@ def main(window_ip):
 
         file_menu.addSeparator()
 
-        import_from_HAM_tolls_action = QAction('从 HAM个人工具 导入日志', window)
-        import_from_HAM_tolls_action.triggered.connect(lambda: import_from_HAM_tolls_())
-        file_menu.addAction(import_from_HAM_tolls_action)
-
-        export_adi_action = QAction('导出ADI文件', window)
-        export_adi_action.triggered.connect(lambda: output_adi(file))
-        file_menu.addAction(export_adi_action)
-
-
-
-        file_menu.addSeparator()
-
         sexit_action = QAction('保存并退出', window)
         sexit_action.triggered.connect(lambda: esave())
         file_menu.addAction(sexit_action)
@@ -360,6 +352,22 @@ def main(window_ip):
         zexit_action = QAction('退出', window)
         zexit_action.triggered.connect(lambda: ee())
         file_menu.addAction(zexit_action)
+
+        import_menu = menu_bar.addMenu('导入/导出')
+
+        import_from_HAM_tolls_action = QAction('从 HAM个人工具 导入日志', window)
+        import_from_HAM_tolls_action.triggered.connect(lambda: import_from_HAM_tolls_())
+        import_menu.addAction(import_from_HAM_tolls_action)
+
+        import_menu.addSeparator()
+
+        export_adi_action = QAction('导出ADI文件', window)
+        export_adi_action.triggered.connect(lambda: output_adi(file))
+        import_menu.addAction(export_adi_action)
+
+        export_adi_action = QAction('导出为表格', window)
+        export_adi_action.triggered.connect(lambda: output_excel(file))
+        import_menu.addAction(export_adi_action)
 
         central_widget = QWidget()
         window.setCentralWidget(central_widget)

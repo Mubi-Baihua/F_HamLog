@@ -1,1 +1,1 @@
-pyside6 pandas openpyxl
+pyside6 pandas openpyxl nuitka

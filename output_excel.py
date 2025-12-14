@@ -67,7 +67,7 @@ def main(file):
             
             # 保存为Excel文件并自动调整列宽
             with pd.ExcelWriter(save_path, engine='openpyxl') as writer:
-                df.to_excel(writer, index=False, sheet_name='HAM日志')
+                df.to_excel(writer, index=False, sheet_name='通联日志')
                 
                 # 获取工作表对象以调整列宽
                 worksheet = writer.sheets['通联日志']
