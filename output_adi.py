@@ -1,4 +1,6 @@
 from PySide6.QtWidgets import QFileDialog
+from datetime import datetime
+import pytz
 from PySide6.QtWidgets import *
 def main(file):
     print("导出adi")
@@ -26,16 +28,18 @@ def main(file):
                         f.write(f"<call:{len(qso['o_call'])}>{qso['o_call']}\n")
                     
                     # 处理日期字段
-                    if qso.get('date'):
-                        # 转换日期格式 YYYY-MM-DD 到 YYYYMMDD
-                        date_str = qso['date'].replace('-', '')
-                        f.write(f"<qso_date:8>{date_str}\n")
-                    
-                    # 处理时间字段
-                    if qso.get('time'):
-                        # 时间格式 HH:MM 转换为 HHMM
-                        time_str = qso['time'].replace(':', '')
-                        f.write(f"<time_on:4>{time_str}\n")
+                    if qso.get('time') and qso.get('date'):
+                        # 假设原始时间是本地时间
+                        local_time_str = f"{qso['date']} {qso['time']}"
+                        local_dt = datetime.strptime(local_time_str, "%Y-%m-%d %H:%M")
+                        
+                        # 转换为UTC时间
+                        # 这里需要根据实际的时区设置进行调整
+                        utc_dt = local_dt.astimezone(pytz.UTC)
+                        
+                        # 写入UTC时间
+                        f.write(f"<qso_date:8>{utc_dt.strftime('%Y%m%d')}\n")
+                        f.write(f"<time_on:4>{utc_dt.strftime('%H%M')}\n")
                     
                     # 处理频率字段
                     if qso.get('freq'):
