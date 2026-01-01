@@ -369,6 +369,63 @@ def main(window_ip):
         export_adi_action.triggered.connect(lambda: output_excel(file))
         import_menu.addAction(export_adi_action)
 
+        def list_time():
+            try:
+                file.sort(key=lambda x: (x.get('date', ''), x.get('time', '')))
+                table_update()
+                QMessageBox.information(window, "排序完成", "按时间排序完成。")
+            except Exception as e:
+                QMessageBox.warning(window, "排序失败", str(e))
+
+        def research_call(file_param=None):
+            global research_window
+            text, ok = QInputDialog.getText(window, "按呼号搜索", "请输入呼号或其一部分：")
+            if not ok or text.strip() == '':
+                return
+            q = text.strip().lower()
+            matches = [(i, rec) for i, rec in enumerate(file) if q in rec.get('o_call', '').lower()]
+            if not matches:
+                QMessageBox.information(window, "搜索结果", "未找到任何匹配记录。")
+                return
+            research_window = QMainWindow()
+            research_window.resize(1200, 500)
+            research_window.setWindowTitle(f"搜索结果：{text}")
+            central = QWidget()
+            research_window.setCentralWidget(central)
+            lay = QVBoxLayout(central)
+            table_r = QTableWidget(len(matches), 11)
+            table_r.setHorizontalHeaderLabels(["日期","时间","己方呼号","对方呼号","频率","调制模式", "己方接收信号", "对方接收信号", "己方QTH", "对方QTH","更多"])
+            table_r.setEditTriggers(QAbstractItemView.NoEditTriggers)
+            for row, (orig_index, rec) in enumerate(matches):
+                table_r.setItem(row, 0, QTableWidgetItem(rec.get('date', '')))
+                table_r.setItem(row, 1, QTableWidgetItem(rec.get('time', '')))
+                table_r.setItem(row, 2, QTableWidgetItem(rec.get('m_call', '')))
+                table_r.setItem(row, 3, QTableWidgetItem(rec.get('o_call', '')))
+                table_r.setItem(row, 4, QTableWidgetItem(rec.get('freq', '')))
+                table_r.setItem(row, 5, QTableWidgetItem(rec.get('mode', '')))
+                table_r.setItem(row, 6, QTableWidgetItem(rec.get('m_rst', '')))
+                table_r.setItem(row, 7, QTableWidgetItem(rec.get('o_rst', '')))
+                table_r.setItem(row, 8, QTableWidgetItem(rec.get('m_qth', '')))
+                table_r.setItem(row, 9, QTableWidgetItem(rec.get('o_qth', '')))
+                more_btn = QPushButton("更多")
+                more_btn.clicked.connect(partial(project_others, orig_index))
+                table_r.setCellWidget(row, 10, more_btn)
+            lay.addWidget(table_r)
+            table_r.scrollToBottom()
+            research_window.show()
+
+        tool_menu = menu_bar.addMenu('功能')
+
+        list_action = QAction('按时间排序', window)
+        list_action.setShortcut('Ctrl+L')
+        list_action.triggered.connect(lambda: list_time())
+        tool_menu.addAction(list_action)
+
+        research_call_action = QAction('按呼号搜索', window)
+        research_call_action.setShortcut('Ctrl+R')
+        research_call_action.triggered.connect(lambda: research_call(file))
+        tool_menu.addAction(research_call_action)
+
         central_widget = QWidget()
         window.setCentralWidget(central_widget)
         layout = QVBoxLayout(central_widget)
