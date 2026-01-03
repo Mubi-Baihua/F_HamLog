@@ -1,0 +1,25 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.14.36717.8 d17.14
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{54435603-DBB4-11D2-8724-00A0C9A8B90C}") = "F HamLog 1.4", "F HamLog 1.4\F HamLog 1.4.vdproj", "{0650574D-73A8-D0AF-C750-82F979ED96FE}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Default = Debug|Default
+		Release|Default = Release|Default
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{0650574D-73A8-D0AF-C750-82F979ED96FE}.Debug|Default.ActiveCfg = Debug
+		{0650574D-73A8-D0AF-C750-82F979ED96FE}.Debug|Default.Build.0 = Debug
+		{0650574D-73A8-D0AF-C750-82F979ED96FE}.Release|Default.ActiveCfg = Release
+		{0650574D-73A8-D0AF-C750-82F979ED96FE}.Release|Default.Build.0 = Release
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {0C652A8A-0580-4BB1-8028-380892682903}
+	EndGlobalSection
+EndGlobal
