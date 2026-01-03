@@ -69,97 +69,99 @@ def main(window, filee='', save_path=''):
         table.scrollToBottom()  # 自动跳到底部
 
     def new():
-        with open('file/m_xml.txt', 'r', encoding='utf-8') as f:
-            xml_dict = eval(f.read())
-        global project_others_window,file
-        index = len(file)
-        date = time_.strftime("%Y-%m-%d", time_.localtime())
-        time = time_.strftime("%H:%M", time_.localtime())
-        file.append({
-            'date': date,
-            'time': time,
-            'm_call': xml_dict['m_call'],
-            'o_call': '',
-            'freq': '',
-            'mode': '',
-            'm_rst': '59',
-            'o_rst': '59',
-            'm_qth': xml_dict['m_qth'],
-            'o_qth': '',
-            "m_dig": xml_dict['m_dig'],
-            'o_dig': '',
-            'm_ant': '',
-            'o_ant': '',
-            'm_pow': '',
-            'o_pow': '',
-            'notes': ''
-        })
-        
-        project_others_window = QMainWindow()
-        project_others_window.resize(400, 600)
-        project_others_window.setWindowTitle('新建日志')
-        table_others = QTableWidget(17, 2)
-        table_others.setColumnWidth(0, 100)  # 设置第1列宽度为100
-        table_others.setColumnWidth(1, 250)
-        
-        table_others.setHorizontalHeaderLabels(["项目", "内容"])
-        translation_dict = {
-            'date': '日期',
-            'time': '时间',
-            'm_call': '己方呼号',
-            'o_call': '对方呼号',
-            'freq': '频率',
-            'mode': '调制模式',
-            'm_rst': '己方接收信号','o_rst': '对方接收信号',
-            'm_qth': '己方QTH','o_qth': '对方QTH',
-            "m_dig": '己方设备','o_dig': '对方设备',
-            'm_ant': '己方天线','o_ant': '对方天线',
-            'm_pow': '己方功率','o_pow': '对方功率',
-            'notes': '备注'
-        }
-        row = 0
-        for i in translation_dict.keys():
-            item = QTableWidgetItem(translation_dict[i])
-            item.setFlags(item.flags() & ~Qt.ItemIsEditable)  # 禁止编辑
-            table_others.setItem(row, 0, item)
+            with open('file/m_xml.txt', 'r', encoding='utf-8') as f:
+                xml_dict = eval(f.read())
+            global project_others_window,file
+            index = len(file)
+            date = time_.strftime("%Y-%m-%d", time_.localtime())
+            time = time_.strftime("%H:%M", time_.localtime())
+            file_app = {
+                'date': date,
+                'time': time,
+                'm_call': xml_dict['m_call'],
+                'o_call': '',
+                'freq': '',
+                'mode': '',
+                'm_rst': '59',
+                'o_rst': '59',
+                'm_qth': xml_dict['m_qth'],
+                'o_qth': '',
+                "m_dig": xml_dict['m_dig'],
+                'o_dig': '',
+                'm_ant': '',
+                'o_ant': '',
+                'm_pow': '',
+                'o_pow': '',
+                'notes': ''
+            }
             
-            item2 = QTableWidgetItem(file[index][i])  # 第2列可以编辑
-            table_others.setItem(row, 1, item2)
-            row += 1
-        central_widget = QWidget()
-        project_others_window.setCentralWidget(central_widget)
-        layout_others = QVBoxLayout(central_widget)
-        layout_others.addWidget(table_others)
-        def save_changes():
-            # 获取表格数据并更新到 file 结构
-            keys_list = list(translation_dict.keys())
-            for row in range(len(keys_list)):
-                key = keys_list[row]
+            project_others_window = QMainWindow()
+            project_others_window.resize(400, 600)
+            project_others_window.setWindowTitle('新建日志')
+            table_others = QTableWidget(17, 2)
+            table_others.setColumnWidth(0, 100)  # 设置第1列宽度为100
+            table_others.setColumnWidth(1, 250)
+            
+            table_others.setHorizontalHeaderLabels(["项目", "内容"])
+            translation_dict = {
+                'date': '日期',
+                'time': '时间',
+                'm_call': '己方呼号',
+                'o_call': '对方呼号',
+                'freq': '频率',
+                'mode': '调制模式',
+                'm_rst': '己方接收信号','o_rst': '对方接收信号',
+                'm_qth': '己方QTH','o_qth': '对方QTH',
+                "m_dig": '己方设备','o_dig': '对方设备',
+                'm_ant': '己方天线','o_ant': '对方天线',
+                'm_pow': '己方功率','o_pow': '对方功率',
+                'notes': '备注'
+            }
+            row = 0
+            for i in translation_dict.keys():
+                item = QTableWidgetItem(translation_dict[i])
+                item.setFlags(item.flags() & ~Qt.ItemIsEditable)  # 禁止编辑
+                table_others.setItem(row, 0, item)
+                
+                item2 = QTableWidgetItem(file_app[i])  # 第2列可以编辑
+                table_others.setItem(row, 1, item2)
+                row += 1
+            central_widget = QWidget()
+            project_others_window.setCentralWidget(central_widget)
+            layout_others = QVBoxLayout(central_widget)
+            layout_others.addWidget(table_others)
+            def save_changes():
+                # 获取表格数据并更新到 file 结构
+                keys_list = list(translation_dict.keys())
+                for row in range(len(keys_list)):
+                    key = keys_list[row]
 
-                if key == 'date':
-                    if not re.search(r'^\d{4}-\d{2}-\d{2}$', table_others.item(row, 1).text()):
-                        QMessageBox.warning(project_others_window, "格式错误", f"日期格式错误，应为YYYY-MM-DD")
-                        return
-                elif key == 'time':
-                    if not re.search(r'^\d{2}:\d{2}$', table_others.item(row, 1).text()):
-                        QMessageBox.warning(project_others_window, "格式错误", f"时间格式错误，应为HH:MM")
-                        return
-                elif key == 'm_call' or key == 'o_call' or key == 'freq' or key == 'mode'or key == 'm_rst' or key == 'o_rst':
-                    if table_others.item(row, 1).text() == '':
-                        QMessageBox.warning(project_others_window, "格式错误", f"缺少 {translation_dict[key]} (必填)")
-                        return
+                    if key == 'date':
+                        if not re.search(r'^\d{4}-\d{2}-\d{2}$', table_others.item(row, 1).text()):
+                                QMessageBox.warning(project_others_window, "格式错误", f"日期格式错误，应为YYYY-MM-DD")
+                                return
+                    elif key == 'time':
+                        if not re.search(r'^\d{2}:\d{2}$', table_others.item(row, 1).text()):
+                            QMessageBox.warning(project_others_window, "格式错误", f"时间格式错误，应为HH:MM")
+                            return
+                    elif key == 'm_call' or key == 'o_call' or key == 'freq' or key == 'mode'or key == 'm_rst' or key == 'o_rst':
+                        if table_others.item(row, 1).text() == '':
+                            QMessageBox.warning(project_others_window, "格式错误", f"缺少 {translation_dict[key]} (必填)")
+                            return
 
-                item = table_others.item(row, 1)  # 第二列是可编辑的内容
-                if item!=None:
-                    file[index][key] = item.text()
-            project_others_window.close()
+                    item = table_others.item(row, 1)  # 第二列是可编辑的内容
+                    if item!=None:
+                        file_app[key] = item.text()
+                project_others_window.close()
 
-            table_update()
-        save_button = QPushButton("新建日志")
-        save_button.clicked.connect(save_changes)
-        layout_others.addWidget(save_button)
-        
-        project_others_window.show()
+                file.append(file_app)
+
+                table_update()
+            save_button = QPushButton("新建日志")
+            save_button.clicked.connect(save_changes)
+            layout_others.addWidget(save_button)
+            
+            project_others_window.show()
 
     def project_others(index):
         global project_others_window,file
@@ -272,6 +274,20 @@ def main(window, filee='', save_path=''):
             file = old_file
             table_update()  # 确保界面更新
     
+    def import_from_ADI():
+        global file
+        old_file = file.copy()
+        import input_adi
+        try:
+            file = input_adi.main(file)
+        except Exception as e:
+            QMessageBox.warning(window, "导入失败", f"导入 ADI 失败：{e}")
+            return
+        table_update()
+        if QMessageBox.question(window, "导入日志", "应用导入吗？") == QMessageBox.No:
+            file = old_file
+            table_update()
+    
     def output_adi(file):
         import output_adi
         output_adi.main(file)
@@ -281,6 +297,8 @@ def main(window, filee='', save_path=''):
         import output_excel
         output_excel.main(file)
         QMessageBox.information(window, "导出成功", "导出成功！")
+    
+    
 
     if save_path == '':
         save_path, _ = QFileDialog.getSaveFileName(
@@ -322,6 +340,10 @@ def main(window, filee='', save_path=''):
     file_menu.addAction(zexit_action)
 
     import_menu = menu_bar.addMenu('导入/导出')
+
+    import_from_ADI_action = QAction('从ADI导入日志', window)
+    import_from_ADI_action.triggered.connect(lambda: import_from_ADI())
+    import_menu.addAction(import_from_ADI_action)
 
     import_from_HAM_tolls_action = QAction('从 HAM个人工具 导入日志', window)
     import_from_HAM_tolls_action.triggered.connect(lambda: import_from_HAM_tolls_())
@@ -388,6 +410,8 @@ def main(window, filee='', save_path=''):
     list_action.setShortcut('Ctrl+L')
     list_action.triggered.connect(lambda: list_time())
     tool_menu.addAction(list_action)
+
+    tool_menu.addSeparator()
 
     research_call_action = QAction('按呼号搜索', window)
     research_call_action.setShortcut('Ctrl+R')

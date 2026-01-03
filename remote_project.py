@@ -105,7 +105,7 @@ def main(window_ip):
             index = len(file)
             date = time_.strftime("%Y-%m-%d", time_.localtime())
             time = time_.strftime("%H:%M", time_.localtime())
-            file.append({
+            file_app = {
                 'date': date,
                 'time': time,
                 'm_call': xml_dict['m_call'],
@@ -123,7 +123,7 @@ def main(window_ip):
                 'm_pow': '',
                 'o_pow': '',
                 'notes': ''
-            })
+            }
             
             project_others_window = QMainWindow()
             project_others_window.resize(400, 600)
@@ -153,7 +153,7 @@ def main(window_ip):
                 item.setFlags(item.flags() & ~Qt.ItemIsEditable)  # 禁止编辑
                 table_others.setItem(row, 0, item)
                 
-                item2 = QTableWidgetItem(file[index][i])  # 第2列可以编辑
+                item2 = QTableWidgetItem(file_app[i])  # 第2列可以编辑
                 table_others.setItem(row, 1, item2)
                 row += 1
             central_widget = QWidget()
@@ -181,8 +181,10 @@ def main(window_ip):
 
                     item = table_others.item(row, 1)  # 第二列是可编辑的内容
                     if item!=None:
-                        file[index][key] = item.text()
+                        file_app[key] = item.text()
                 project_others_window.close()
+
+                file.append(file_app)
 
                 table_update()
             save_button = QPushButton("新建日志")
@@ -313,6 +315,20 @@ def main(window_ip):
             if QMessageBox.question(window, "导入日志", "应用导入吗？") == QMessageBox.No:
                 file = old_file
                 table_update()  # 确保界面更新
+
+        def import_from_ADI():
+            global file
+            old_file = file.copy()
+            import input_adi
+            try:
+                file = input_adi.main(file)
+            except Exception as e:
+                QMessageBox.warning(window, "导入失败", f"导入 ADI 失败：{e}")
+                return
+            table_update()
+            if QMessageBox.question(window, "导入日志", "应用导入吗？") == QMessageBox.No:
+                file = old_file
+                table_update()
         
         def output_adi(file):
             import output_adi
@@ -354,6 +370,10 @@ def main(window_ip):
         file_menu.addAction(zexit_action)
 
         import_menu = menu_bar.addMenu('导入/导出')
+
+        import_from_ADI_action = QAction('从ADI导入日志', window)
+        import_from_ADI_action.triggered.connect(lambda: import_from_ADI())
+        import_menu.addAction(import_from_ADI_action)
 
         import_from_HAM_tolls_action = QAction('从 HAM个人工具 导入日志', window)
         import_from_HAM_tolls_action.triggered.connect(lambda: import_from_HAM_tolls_())
@@ -420,6 +440,8 @@ def main(window_ip):
         list_action.setShortcut('Ctrl+L')
         list_action.triggered.connect(lambda: list_time())
         tool_menu.addAction(list_action)
+
+        tool_menu.addSeparator()
 
         research_call_action = QAction('按呼号搜索', window)
         research_call_action.setShortcut('Ctrl+R')

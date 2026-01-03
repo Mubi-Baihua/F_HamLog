@@ -1,98 +1,105 @@
 from PySide6.QtWidgets import QFileDialog
-from datetime import datetime
-import pytz
-from PySide6.QtWidgets import *
+from datetime import datetime, timezone
+from PySide6.QtWidgets import QApplication
+
+
+def _to_utc_datetime(date_str, time_str):
+    if not date_str or not time_str:
+        return None
+    # 支持 YYYY-MM-DD 或 YYYYMMDD
+    ds = date_str.strip()
+    if '-' in ds:
+        parts = ds.split('-')
+        if len(parts) != 3:
+            return None
+        y, m, d = parts
+    elif len(ds) >= 8 and ds.isdigit():
+        y, m, d = ds[0:4], ds[4:6], ds[6:8]
+    else:
+        return None
+
+    ts = time_str.strip()
+    ts = ts.replace(':', '')
+    if len(ts) < 4 or not ts[:4].isdigit():
+        return None
+    hh, mm = int(ts[0:2]), int(ts[2:4])
+
+    try:
+        naive = datetime(int(y), int(m), int(d), hh, mm)
+    except Exception:
+        return None
+
+    local_tz = datetime.now().astimezone().tzinfo
+    local_dt = naive.replace(tzinfo=local_tz)
+    return local_dt.astimezone(timezone.utc)
+
+
 def main(file):
-    print("导出adi")
-    
-    
-    
-    # 选择保存文件路径
-    file_path, _ = QFileDialog.getSaveFileName(
-        None, "导出ADIF文件", "", "ADIF文件 (*.adi)"
-    )
-    
-    if file_path:
-        try:
-            with open(file_path, 'w', encoding='utf-8') as f:
-                # 写入ADIF文件头
-                f.write("ADIF export from F HamLog\n")
-                f.write("<adif_ver:5>3.1.0\n")
-                f.write("<programid:8>F HamLog\n")
-                f.write("<eos>\n\n")
-                
-                # 遍历每条QSO记录
-                for qso in file:
-                    # 导出基本字段
-                    if qso.get('o_call'):
-                        f.write(f"<call:{len(qso['o_call'])}>{qso['o_call']}\n")
-                    
-                    # 处理日期字段
-                    if qso.get('time') and qso.get('date'):
-                        # 假设原始时间是本地时间
-                        local_time_str = f"{qso['date']} {qso['time']}"
-                        local_dt = datetime.strptime(local_time_str, "%Y-%m-%d %H:%M")
-                        
-                        # 转换为UTC时间
-                        # 这里需要根据实际的时区设置进行调整
-                        utc_dt = local_dt.astimezone(pytz.UTC)
-                        
-                        # 写入UTC时间
-                        f.write(f"<qso_date:8>{utc_dt.strftime('%Y%m%d')}\n")
-                        f.write(f"<time_on:4>{utc_dt.strftime('%H%M')}\n")
-                    
-                    # 处理频率字段
-                    if qso.get('freq'):
-                        freq_str = str(qso['freq'])
-                        f.write(f"<freq:{len(freq_str)}>{freq_str}\n")
-                    
-                    # 处理模式字段
-                    if qso.get('mode'):
-                        mode_str = str(qso['mode'])
-                        f.write(f"<mode:{len(mode_str)}>{mode_str}\n")
-                    
-                    # 处理信号报告
-                    if qso.get('m_rst'):
-                        rst_sent = str(qso['m_rst'])
-                        f.write(f"<rst_sent:{len(rst_sent)}>{rst_sent}\n")
-                    
-                    if qso.get('o_rst'):
-                        rst_rcvd = str(qso['o_rst'])
-                        f.write(f"<rst_rcvd:{len(rst_rcvd)}>{rst_rcvd}\n")
-                    
-                    # 处理己方呼号
-                    if qso.get('m_call'):
-                        my_call = str(qso['m_call'])
-                        f.write(f"<my_call:{len(my_call)}>{my_call}\n")
-                    
-                    # 处理QTH信息
-                    if qso.get('o_qth'):
-                        qth = str(qso['o_qth'])
-                        f.write(f"<qth:{len(qth)}>{qth}\n")
-                    
-                    if qso.get('m_qth'):
-                        my_qth = str(qso['m_qth'])
-                        f.write(f"<my_qth:{len(my_qth)}>{my_qth}\n")
-                    
-                    # 处理备注
-                    if qso.get('notes'):
-                        notes = str(qso['notes'])
-                        f.write(f"<comment:{len(notes)}>{notes}\n")
-                    
-                    # 结束当前记录
-                    f.write("<eor>\n\n")
-            
-            print(f"ADIF文件已成功导出到: {file_path}")
-            return True
-            
-        except Exception as e:
-            print(f"导出ADIF文件时出错: {e}")
-            return False
-    
-    return False
+    file_path, _ = QFileDialog.getSaveFileName(None, "导出ADIF文件", "", "ADIF 文件 (*.adi);;All Files (*)")
+    if not file_path:
+        return False
+
+    try:
+        with open(file_path, 'w', encoding='utf-8') as f:
+            # 标准化 ADIF 头部，使用大写 TAG
+            f.write("ADIF export from F HamLog\n")
+            f.write("<ADIF_VER:5>3.1.0\n")
+            f.write("<PROGRAMID:8>F HAMLOG\n")
+            f.write("<EOH>\n\n")
+
+            for qso in file:
+                # 输出字段均使用大写 TAG 和 <TAG:len>value 格式
+                if qso.get('o_call'):
+                    val = str(qso['o_call']).strip()
+                    f.write(f"<CALL:{len(val)}>{val}\n")
+
+                # 日期/时间 -> 转为 UTC 写入 QSO_DATE / TIME_ON
+                utc = _to_utc_datetime(qso.get('date', ''), qso.get('time', ''))
+                if utc is not None:
+                    f.write(f"<QSO_DATE:8>{utc.strftime('%Y%m%d')}\n")
+                    f.write(f"<TIME_ON:4>{utc.strftime('%H%M')}\n")
+
+                if qso.get('freq'):
+                    val = str(qso['freq']).strip()
+                    f.write(f"<FREQ:{len(val)}>{val}\n")
+
+                if qso.get('mode'):
+                    val = str(qso['mode']).strip()
+                    f.write(f"<MODE:{len(val)}>{val}\n")
+
+                if qso.get('m_rst'):
+                    val = str(qso['m_rst']).strip()
+                    f.write(f"<RST_SENT:{len(val)}>{val}\n")
+
+                if qso.get('o_rst'):
+                    val = str(qso['o_rst']).strip()
+                    f.write(f"<RST_RCVD:{len(val)}>{val}\n")
+
+                if qso.get('m_call'):
+                    val = str(qso['m_call']).strip()
+                    f.write(f"<MY_CALL:{len(val)}>{val}\n")
+
+                if qso.get('o_qth'):
+                    val = str(qso['o_qth']).strip()
+                    f.write(f"<QTH:{len(val)}>{val}\n")
+
+                if qso.get('m_qth'):
+                    val = str(qso['m_qth']).strip()
+                    f.write(f"<MY_QTH:{len(val)}>{val}\n")
+
+                if qso.get('notes'):
+                    val = str(qso['notes']).strip()
+                    f.write(f"<COMMENT:{len(val)}>{val}\n")
+
+                f.write("<EOR>\n\n")
+
+        return True
+    except Exception as e:
+        print(f"导出 ADIF 时出错: {e}")
+        return False
+
 
 if __name__ == '__main__':
-    # 测试数据
     test_data = [
         {
             'o_call': 'BI8SQL',
@@ -109,4 +116,4 @@ if __name__ == '__main__':
         }
     ]
     app = QApplication([])
-    main(test_data)
+    print(main(test_data))
