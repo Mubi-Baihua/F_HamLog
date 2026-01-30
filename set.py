@@ -17,6 +17,13 @@ def main(window):
                 'm_dig': m_dig
             }))
         window.close()
+    def pack_set():
+        print("插件设置")
+        import pack_set
+        global pack_set_window  # 保持引用，防止被回收
+        pack_set_window = QMainWindow()
+        pack_set.main(pack_set_window)
+        # pack_set.main 会在内部 show 窗口，但保留全局引用以防被回收
     window.resize(600, 350)
     window.setFixedSize(600, 350)
     window.setWindowTitle('设置')
@@ -48,6 +55,17 @@ def main(window):
     line.setLineWidth(1)  # 设置线宽
     layout.addWidget(line)
 
+    pack_button = QPushButton("插件设置", central_widget)
+    pack_button.clicked.connect(lambda: pack_set())
+    layout.addWidget(pack_button)
+
+    line = QFrame(central_widget)
+    line.setFrameShape(QFrame.HLine)
+    line.setFrameShadow(QFrame.Sunken)
+    line.setLineWidth(1)  # 设置线宽
+    layout.addWidget(line)
+
+
     fk_l = QLabel()
     fk_l.setText('<html><head/><style>a {text-decoration: none; color: #0066cc;}</style></head><body>'
                 '<p>问题反馈到：13577106233@163.com</p>'
@@ -63,7 +81,7 @@ def main(window):
     line.setLineWidth(1)  # 设置线宽
     layout.addWidget(line)
 
-    fk_v = QLabel("F HamLog 版本：1.4.0", central_widget)
+    fk_v = QLabel("F HamLog 版本：1.5.0 Beta", central_widget)
     layout.addWidget(fk_v)
 
     line = QFrame(central_widget)

@@ -6,6 +6,7 @@ import time as time_
 import sys
 import os
 import re
+import subprocess
 
 file = None
 
@@ -355,10 +356,9 @@ def main(window, filee='', save_path=''):
     export_adi_action.triggered.connect(lambda: output_adi(file))
     import_menu.addAction(export_adi_action)
 
-    export_adi_action = QAction('导出为表格', window)
-    export_adi_action.triggered.connect(lambda: output_excel(file))
-    import_menu.addAction(export_adi_action)
-
+    export_excel_action = QAction('导出为表格', window)
+    export_excel_action.triggered.connect(lambda: output_excel(file))
+    import_menu.addAction(export_excel_action)
     def list_time():
         try:
             file.sort(key=lambda x: (x.get('date', ''), x.get('time', '')))
@@ -426,6 +426,40 @@ def main(window, filee='', save_path=''):
     button_new.setShortcut('Ctrl+N')
     button_new.clicked.connect(lambda: new())
     layout.addWidget(button_new)
+
+    pack_menu = menu_bar.addMenu('插件')
+    with open('file/pack_list.txt', 'r', encoding='utf-8') as f:
+        pack_list = eval(f.read())
+    # 在菜单栏上显示插件状态（若无插件则显示“未安装插件”）
+    plugin_label = QLabel()
+    plugin_label.setStyleSheet("color: gray; padding: 4px;")
+    plugin_label.setAlignment(Qt.AlignCenter)
+    plugin_action = QWidgetAction(window)
+    plugin_action.setDefaultWidget(plugin_label)
+    pack_menu.addAction(plugin_action)
+    if not pack_list:
+        plugin_label.setText("未安装插件，请前往 设置 安装插件")
+    else:
+        plugin_action.setVisible(False)
+    
+    def run_pack(pack_name):
+        """返回一个 QAction，触发时执行插件文件夹下的 main.py 或 run.py（使用 runpy）。"""
+        action = QAction(pack_name, window)
+
+        def handler():
+            global file
+            with open(f'file/pypack/{pack_name}/input.fhl','w',encoding='utf-8') as f:
+                f.write(str(file))
+            subprocess.run(['python', f'file/pypack/{pack_name}/main.py'])
+            with open(f'file/pypack/{pack_name}/output.fhl','r',encoding='utf-8') as f:
+                file = eval(f.read())
+            table_update()
+
+        action.triggered.connect(handler)
+        return action
+
+    for pack in pack_list:
+        pack_menu.addAction(run_pack(pack))
 
     table_update(delete=False)
     table_update()
