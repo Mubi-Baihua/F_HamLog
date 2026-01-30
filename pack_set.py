@@ -210,8 +210,6 @@ def main(window):
             btn.clicked.connect(lambda _, p=folder: on_delete(p))
             table_others.setCellWidget(row, 4, btn)
         
-
-
     def on_delete(folder_path):
         reply = QMessageBox.question(window, '删除确认', f"确定删除插件：{os.path.basename(folder_path)} ?",
                                      QMessageBox.Yes | QMessageBox.No)
