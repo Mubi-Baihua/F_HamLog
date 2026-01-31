@@ -45,7 +45,12 @@ def main(window_ip):
         global file
 
         socket_.send('send_fhl'.encode('utf-8'))
-        file = eval(socket_.recv(1024**3).decode('utf-8'))
+        import json
+        received_data = socket_.recv(1024**3).decode('utf-8')
+        try:
+            file = json.loads(received_data)
+        except json.JSONDecodeError:
+            file = eval(received_data)
        
         table = None
 
@@ -271,11 +276,13 @@ def main(window_ip):
             project_others_window.show()
 
         def save(masage=True):
-            socket_.send(f'save_fhl$#${str(file)}'.encode('utf-8'))
+            import json
+            socket_.send(f'save_fhl$#${json.dumps(file, ensure_ascii=False)}'.encode('utf-8'))
             if masage:
                 QMessageBox.information(window, "保存成功", "保存成功！")
 
         def osave():
+            import json
             save_path, _ = QFileDialog.getSaveFileName(
                 window,  # 父窗口，可以是None或者您的主窗口
                 "另存为文件",  # 对话框标题
@@ -285,12 +292,12 @@ def main(window_ip):
             if save_path == '':
                 return
             with open(save_path, 'w', encoding='utf-8') as f:
-                f.write(str(file))
+                json.dump(file, f, ensure_ascii=False, indent=2)
                 QMessageBox.information(window, "另存成功", "另存成功！")
 
         def esave():
-            global socket_
-            socket_.send(f'save$#${str(file)}'.encode('utf-8'))
+            import json
+            socket_.send(f'save$#${json.dumps(file, ensure_ascii=False)}'.encode('utf-8'))
             QMessageBox.information(window, "保存成功", "保存成功！")
             socket_.send('exit'.encode('utf-8'))
             if 'network_thread' in globals():
@@ -467,7 +474,7 @@ def main(window_ip):
         plugin_action = QWidgetAction(window)
         plugin_action.setDefaultWidget(plugin_label)
         pack_menu.addAction(plugin_action)
-        if not pack_list:
+        if len(pack_list) == 0:
             plugin_label.setText("未安装插件，请前往 设置 安装插件")
         else:
             plugin_action.setVisible(False)
@@ -481,8 +488,11 @@ def main(window_ip):
                 with open(f'file/pypack/{pack_name}/input.fhl','w',encoding='utf-8') as f:
                     f.write(str(file))
                 subprocess.run(['python', f'file/pypack/{pack_name}/main.py'])
-                with open(f'file/pypack/{pack_name}/output.fhl','r',encoding='utf-8') as f:
-                    file = eval(f.read())
+                try:
+                    with open(f'file/pypack/{pack_name}/output.fhl','r',encoding='utf-8') as f:
+                        file = json.load(f)
+                except FileNotFoundError:
+                    QMessageBox.warning(window, "插件错误", f"插件 {pack_name} 未正确生成输出文件！")
                 table_update()
 
             action.triggered.connect(handler)

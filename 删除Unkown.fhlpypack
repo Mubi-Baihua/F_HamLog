@@ -1,8 +1,0 @@
-XML:{'describe':'删除Unkown','pack version':'1.0','available fhl version':'1.5.0','producer':'木比白桦'}
-python:
-from pathlib import Path
-abs_path = Path(__file__).resolve().parent
-
-print('正在删除Unkown...')
-with open(f'{abs_path}/output.fhl', 'w', encoding='utf-8') as f:
-    f.write(str([]))

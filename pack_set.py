@@ -210,6 +210,13 @@ def main(window):
             btn.clicked.connect(lambda _, p=folder: on_delete(p))
             table_others.setCellWidget(row, 4, btn)
         
+        # 调整列宽：先自动调整，然后所有列最小宽度为PySide默认宽度（100像素）
+        table_others.resizeColumnsToContents()
+        min_width = 100
+        for i in range(5):
+            current_width = table_others.columnWidth(i)
+            table_others.setColumnWidth(i, max(current_width, min_width))
+        
     def on_delete(folder_path):
         reply = QMessageBox.question(window, '删除确认', f"确定删除插件：{os.path.basename(folder_path)} ?",
                                      QMessageBox.Yes | QMessageBox.No)
@@ -253,7 +260,10 @@ def main(window):
                 except Exception:
                     xml_data = {}
 
-            base_name = safe_folder_name(xml_data.get('describe') or os.path.splitext(os.path.basename(file_path))[0],
+            # 设置插件名称为fhlpypack文件的名称（不含扩展名）
+            xml_data['name'] = os.path.splitext(os.path.basename(file_path))[0]
+
+            base_name = safe_folder_name(xml_data.get('name') or xml_data.get('describe') or os.path.splitext(os.path.basename(file_path))[0],
                                          os.path.splitext(os.path.basename(file_path))[0])
             target = os.path.join(plugins_dir, base_name)
             idx = 1

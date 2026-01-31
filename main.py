@@ -2,6 +2,7 @@ from PySide6.QtWidgets import *
 from PySide6.QtGui import QIcon
 from PySide6.QtCore import Qt
 import sys
+import json
 def main():
     def new_project():
         print("新建项目")
@@ -25,8 +26,13 @@ def main():
         if save_path == '':
             return
         print(save_path)
-        with open(save_path, 'r', encoding='utf-8') as f:
-            project.main(project_window, f.read(), save_path)
+        try:
+            with open(save_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+        except json.JSONDecodeError:
+            with open(save_path, 'r', encoding='utf-8') as f:
+                data = eval(f.read())
+        project.main(project_window, data, save_path)
         
     def remote_project():
         print("远程项目")

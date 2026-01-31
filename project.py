@@ -13,9 +13,8 @@ file = None
 
 def main(window, filee='', save_path=''):
     global file
-    file = filee
-    if file != '':
-        file = eval(file)
+    if isinstance(filee, list):
+        file = filee
     else:
         file = []
     table = None
@@ -241,12 +240,14 @@ def main(window, filee='', save_path=''):
         project_others_window.show()
 
     def save(masage=True):
+        import json
         with open(save_path, 'w', encoding='utf-8') as f:
-            f.write(str(file))
+            json.dump(file, f, ensure_ascii=False, indent=2)
             if masage:
                 QMessageBox.information(window, "保存成功", "保存成功！")
 
     def osave():
+        import json
         save_path, _ = QFileDialog.getSaveFileName(
             window,  # 父窗口，可以是None或者您的主窗口
             "另存为文件",  # 对话框标题
@@ -256,12 +257,13 @@ def main(window, filee='', save_path=''):
         if save_path == '':
             return
         with open(save_path, 'w', encoding='utf-8') as f:
-            f.write(str(file))
+            json.dump(file, f, ensure_ascii=False, indent=2)
             QMessageBox.information(window, "另存成功", "另存成功！")
 
     def esave():
+        import json
         with open(save_path, 'w', encoding='utf-8') as f:
-            f.write(str(file))
+            json.dump(file, f, ensure_ascii=False, indent=2)
             QMessageBox.information(window, "保存成功", "保存成功！")
         sys.exit()
 
@@ -437,10 +439,10 @@ def main(window, filee='', save_path=''):
     plugin_action = QWidgetAction(window)
     plugin_action.setDefaultWidget(plugin_label)
     pack_menu.addAction(plugin_action)
-    if not pack_list:
+    if len(pack_list) == 0:
         plugin_label.setText("未安装插件，请前往 设置 安装插件")
     else:
-        plugin_action.setVisible(False)
+            plugin_action.setVisible(False)
     
     def run_pack(pack_name):
         """返回一个 QAction，触发时执行插件文件夹下的 main.py 或 run.py（使用 runpy）。"""
@@ -448,11 +450,15 @@ def main(window, filee='', save_path=''):
 
         def handler():
             global file
+            import json
             with open(f'file/pypack/{pack_name}/input.fhl','w',encoding='utf-8') as f:
-                f.write(str(file))
+                json.dump(file, f, ensure_ascii=False, indent=2)
             subprocess.run(['python', f'file/pypack/{pack_name}/main.py'])
-            with open(f'file/pypack/{pack_name}/output.fhl','r',encoding='utf-8') as f:
-                file = eval(f.read())
+            try:
+                with open(f'file/pypack/{pack_name}/output.fhl','r',encoding='utf-8') as f:
+                    file = json.load(f)
+            except FileNotFoundError:
+                QMessageBox.warning(window, "插件错误", f"插件 {pack_name} 未正确生成输出文件！")
             table_update()
 
         action.triggered.connect(handler)

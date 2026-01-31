@@ -81,7 +81,7 @@ def main(window):
     line.setLineWidth(1)  # 设置线宽
     layout.addWidget(line)
 
-    fk_v = QLabel("F HamLog 版本：1.5.0 Beta", central_widget)
+    fk_v = QLabel("F HamLog 版本：1.5.1", central_widget)
     layout.addWidget(fk_v)
 
     line = QFrame(central_widget)
