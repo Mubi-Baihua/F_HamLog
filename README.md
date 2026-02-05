@@ -56,7 +56,7 @@ with open(f"{abs_path}/output.fhl", "w", encoding="utf-8") as f:
     json.dump(file_list, f, ensure_ascii=False, indent=2)
 ```
 #### 插件打包
-将插件文件保存为 *.fhlpypack 文件。
+将插件文件保存为 *.fhlpypack 文件。编码使用utf-8。
 
 ### FHL文件格式
 FHL文件格式为json文件。编码使用utf-8。
