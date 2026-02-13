@@ -9,6 +9,8 @@ import time as time_
 import sys
 import socket
 import re
+import webbrowser
+import urllib.parse
 
 file = []
 socket_ = None
@@ -201,7 +203,7 @@ def main(window_ip):
         def project_others(index):
             global project_others_window,file
             project_others_window = QMainWindow()
-            project_others_window.resize(400, 650)
+            project_others_window.resize(400, 670)
             project_others_window.setWindowTitle('更多信息')
             table_others = QTableWidget(17, 2)
             table_others.setColumnWidth(0, 100)  # 设置第1列宽度为100
@@ -265,6 +267,17 @@ def main(window_ip):
                     file.pop(index)
                     project_others_window.close()
                     table_update()
+            def open_qrz():
+                call = file[index].get('o_call','').strip()
+                if call == '':
+                    QMessageBox.warning(project_others_window, 'QRZ', '对方呼号为空，无法打开 QRZ。')
+                    return
+                url = f"https://www.qrz.com/db/{urllib.parse.quote_plus(call)}"
+                webbrowser.open(url)
+
+            qrz_button = QPushButton("查看对方QRZ主页")
+            qrz_button.clicked.connect(open_qrz)
+            layout_others.addWidget(qrz_button)
             save_button = QPushButton("保存更改")
             save_button.clicked.connect(save_changes)
             layout_others.addWidget(save_button)
@@ -339,13 +352,14 @@ def main(window_ip):
         
         def output_adi(file):
             import output_adi
-            output_adi.main(file)
-            QMessageBox.information(window, "导出成功", "导出成功！")
-        
+
+            if output_adi.main(file):
+                QMessageBox.information(window, "导出成功", "导出成功！")
+
         def output_excel(file):
             import output_excel
-            output_excel.main(file)
-            QMessageBox.information(window, "导出成功", "导出成功！")
+            if output_excel.main(file):
+                QMessageBox.information(window, "导出成功", "导出成功！")
 
         window = QMainWindow()
         window.resize(1200, 700)
@@ -440,6 +454,103 @@ def main(window_ip):
             lay.addWidget(table_r)
             table_r.scrollToBottom()
             research_window.show()
+        def research_call(file_param=None):
+            global research_window
+            # 弹出高级搜索对话：选择字段 + 关键词 + 匹配方式
+            dlg = QDialog(window)
+            dlg.setWindowTitle('搜索')
+            dlg_layout = QVBoxLayout(dlg)
+
+            h1 = QHBoxLayout()
+            h1.addWidget(QLabel('字段：'))
+            combo = QComboBox()
+            choices = [
+                ('o_call', '对方呼号'),
+                ('m_call', '己方呼号'),
+                ('date', '日期'),
+                ('time', '时间'),
+                ('freq', '频率'),
+                ('mode', '调制模式'),
+                ('m_dig', '己方设备'),
+                ('o_dig', '对方设备'),
+                ('m_qth', '己方QTH'),
+                ('o_qth', '对方QTH'),
+                ('m_ant', '己方天线'),
+                ('o_ant', '对方天线'),
+                ('m_pow', '己方功率'),
+                ('o_pow', '对方功率'),
+                ('notes', '备注')
+            ]
+            for k, v in choices:
+                combo.addItem(v, k)
+            h1.addWidget(combo)
+            dlg_layout.addLayout(h1)
+
+            h2 = QHBoxLayout()
+            h2.addWidget(QLabel('关键词：'))
+            edit = QLineEdit()
+            h2.addWidget(edit)
+            dlg_layout.addLayout(h2)
+
+            h3 = QHBoxLayout()
+            h3.addWidget(QLabel('匹配方式：'))
+            match_combo = QComboBox()
+            match_combo.addItems(['包含', '完全匹配'])
+            h3.addWidget(match_combo)
+            dlg_layout.addLayout(h3)
+
+            btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+            btns.accepted.connect(dlg.accept)
+            btns.rejected.connect(dlg.reject)
+            dlg_layout.addWidget(btns)
+
+            if dlg.exec() != QDialog.Accepted:
+                return
+
+            field = combo.currentData()
+            q = edit.text().strip().lower()
+            if q == '':
+                QMessageBox.information(window, '搜索', '请输入关键词。')
+                return
+            exact = (match_combo.currentText() == '完全匹配')
+
+            matches = []
+            for i, rec in enumerate(file):
+                val = str(rec.get(field, '')).lower()
+                if (exact and val == q) or (not exact and q in val):
+                    matches.append((i, rec))
+
+            if not matches:
+                QMessageBox.information(window, "搜索结果", "未找到任何匹配记录。")
+                return
+
+            research_window = QMainWindow()
+            research_window.resize(1200, 500)
+            research_window.setWindowTitle(f"搜索结果：{edit.text().strip()}")
+            central = QWidget()
+            research_window.setCentralWidget(central)
+            lay = QVBoxLayout(central)
+            table_r = QTableWidget(len(matches), 11)
+            table_r.setHorizontalHeaderLabels(["日期","时间","己方呼号","对方呼号","频率","调制模式", "己方接收信号", "对方接收信号", "己方QTH", "对方QTH","更多"])
+            table_r.setEditTriggers(QAbstractItemView.NoEditTriggers)
+            for row, (orig_index, rec) in enumerate(matches):
+                table_r.setItem(row, 0, QTableWidgetItem(rec.get('date', '')))
+                table_r.setItem(row, 1, QTableWidgetItem(rec.get('time', '')))
+                table_r.setItem(row, 2, QTableWidgetItem(rec.get('m_call', '')))
+                table_r.setItem(row, 3, QTableWidgetItem(rec.get('o_call', '')))
+                table_r.setItem(row, 4, QTableWidgetItem(rec.get('freq', '')))
+                table_r.setItem(row, 5, QTableWidgetItem(rec.get('mode', '')))
+                table_r.setItem(row, 6, QTableWidgetItem(rec.get('m_rst', '')))
+                table_r.setItem(row, 7, QTableWidgetItem(rec.get('o_rst', '')))
+                table_r.setItem(row, 8, QTableWidgetItem(rec.get('m_qth', '')))
+                table_r.setItem(row, 9, QTableWidgetItem(rec.get('o_qth', '')))
+                more_btn = QPushButton("更多")
+                more_btn.clicked.connect(partial(project_others, orig_index))
+                table_r.setCellWidget(row, 10, more_btn)
+
+            lay.addWidget(table_r)
+            table_r.scrollToBottom()
+            research_window.show()
 
         tool_menu = menu_bar.addMenu('功能')
 
@@ -450,7 +561,7 @@ def main(window_ip):
 
         tool_menu.addSeparator()
 
-        research_call_action = QAction('按呼号搜索', window)
+        research_call_action = QAction('搜索', window)
         research_call_action.setShortcut('Ctrl+R')
         research_call_action.triggered.connect(lambda: research_call(file))
         tool_menu.addAction(research_call_action)

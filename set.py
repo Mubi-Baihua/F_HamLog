@@ -68,7 +68,7 @@ def main(window):
 
     fk_l = QLabel()
     fk_l.setText('<html><head/><style>a {text-decoration: none; color: #0066cc;}</style></head><body>'
-                '<p>问题反馈到：13577106233@163.com</p>'
+                '<p>问题反馈到：BI8SQL@outlook.com</p>'
                 '<p>版本更新请访问：<a href="https://mubi-baihua.github.io">https://mubi-baihua.github.io</a></p>'
                 '<p>Github项目：<a href="https://github.com/Mubi-Baihua/F_HamLog/">https://github.com/Mubi-Baihua/F_HamLog/</a></p>'
                 '</body></html>')
@@ -81,7 +81,7 @@ def main(window):
     line.setLineWidth(1)  # 设置线宽
     layout.addWidget(line)
 
-    fk_v = QLabel("F HamLog 版本：1.5.1", central_widget)
+    fk_v = QLabel("F HamLog 版本：1.6.0", central_widget)
     layout.addWidget(fk_v)
 
     line = QFrame(central_widget)
