@@ -13,10 +13,25 @@ import urllib.parse
 file = None
 
 
+def _ensure_log_keys(entry):
+    # 确保单条记录包含新加的字段
+    for k in ['freq_rx', 'prop_mode', 'sat_name']:
+        if k not in entry:
+            entry[k] = ''
+
+
+def _upgrade_file_records(file_list):
+    if not file_list:
+        return
+    for e in file_list:
+        _ensure_log_keys(e)
+
+
 def main(window, filee='', save_path=''):
     global file
     if isinstance(filee, list):
         file = filee
+        _upgrade_file_records(file)
     else:
         file = []
     table = None
@@ -34,11 +49,13 @@ def main(window, filee='', save_path=''):
             
 
         file_length = len(file)
-        # 创建表格部件
-        table = QTableWidget(file_length, 11) 
-        table.setHorizontalHeaderLabels(["日期","时间","己方呼号","对方呼号","频率","调制模式", "己方接收信号", "对方接收信号", "己方QTH", "对方QTH","更多"])
+        # 创建表格部件，增加到13列以容纳新字段
+        table = QTableWidget(file_length, 13) 
+        table.setHorizontalHeaderLabels(["日期","时间","己方呼号","对方呼号","频率","调制模式","传播模式","卫星名称", "己方接收信号", "对方接收信号", "己方QTH", "对方QTH","更多"])
         table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         print(file_length)
+        # 统一使用默认列宽，不设置任何固定宽度
+        
         # 添加一些示例数据
         for i in range(file_length):
             date = QTableWidgetItem(file[i]['date'])
@@ -53,16 +70,20 @@ def main(window, filee='', save_path=''):
             table.setItem(i, 4, freq)
             mode = QTableWidgetItem(file[i]['mode'])
             table.setItem(i, 5, mode)
+            prop_mode = QTableWidgetItem(file[i].get('prop_mode', ''))
+            table.setItem(i, 6, prop_mode)
+            sat_name = QTableWidgetItem(file[i].get('sat_name', ''))
+            table.setItem(i, 7, sat_name)
             m_rst = QTableWidgetItem(file[i]['m_rst'])
-            table.setItem(i, 6, m_rst)
+            table.setItem(i, 8, m_rst)
             o_rst = QTableWidgetItem(file[i]['o_rst'])
-            table.setItem(i, 7, o_rst)
+            table.setItem(i, 9, o_rst)
             m_qth = QTableWidgetItem(file[i]['m_qth'])
-            table.setItem(i, 8, m_qth)
+            table.setItem(i, 10, m_qth)
             o_qth = QTableWidgetItem(file[i]['o_qth'])
-            table.setItem(i, 9, o_qth)
+            table.setItem(i, 11, o_qth)
             other_button = QPushButton("更多")
-            table.setCellWidget(i, 10, other_button)
+            table.setCellWidget(i, 12, other_button)
             other_button.clicked.connect(partial(project_others, i))
 
             # 将表格添加到布局中
@@ -83,7 +104,10 @@ def main(window, filee='', save_path=''):
                 'm_call': xml_dict['m_call'],
                 'o_call': '',
                 'freq': '',
+                'freq_rx': '',
                 'mode': '',
+                'prop_mode': '',
+                'sat_name': '',
                 'm_rst': '59',
                 'o_rst': '59',
                 'm_qth': xml_dict['m_qth'],
@@ -100,17 +124,15 @@ def main(window, filee='', save_path=''):
             project_others_window = QMainWindow()
             project_others_window.resize(400, 650)
             project_others_window.setWindowTitle('新建日志')
-            table_others = QTableWidget(17, 2)
-            table_others.setColumnWidth(0, 100)  # 设置第1列宽度为100
-            table_others.setColumnWidth(1, 250)
-            
-            table_others.setHorizontalHeaderLabels(["项目", "内容"])
             translation_dict = {
                 'date': '日期',
                 'time': '时间',
                 'm_call': '己方呼号',
                 'o_call': '对方呼号',
                 'freq': '频率',
+                'freq_rx': '接收频率',
+                'prop_mode': '传播方式',
+                'sat_name': '卫星名称',
                 'mode': '调制模式',
                 'm_rst': '己方接收信号','o_rst': '对方接收信号',
                 'm_qth': '己方QTH','o_qth': '对方QTH',
@@ -119,6 +141,11 @@ def main(window, filee='', save_path=''):
                 'm_pow': '己方功率','o_pow': '对方功率',
                 'notes': '备注'
             }
+            rows = len(translation_dict)
+            table_others = QTableWidget(rows, 2)
+            table_others.setColumnWidth(0, 100)  # 设置第1列宽度为100
+            table_others.setColumnWidth(1, 250)
+            table_others.setHorizontalHeaderLabels(["项目", "内容"])
             row = 0
             for i in translation_dict.keys():
                 item = QTableWidgetItem(translation_dict[i])
@@ -170,17 +197,15 @@ def main(window, filee='', save_path=''):
         project_others_window = QMainWindow()
         project_others_window.resize(400, 670)
         project_others_window.setWindowTitle('更多信息')
-        table_others = QTableWidget(17, 2)
-        table_others.setColumnWidth(0, 100)  # 设置第1列宽度为100
-        table_others.setColumnWidth(1, 250)
-        
-        table_others.setHorizontalHeaderLabels(["项目", "内容"])
         translation_dict = {
             'date': '日期',
             'time': '时间',
             'm_call': '己方呼号',
             'o_call': '对方呼号',
             'freq': '频率',
+            'freq_rx': '接收频率',
+            'prop_mode': '传播方式',
+            'sat_name': '卫星名称',
             'mode': '调制模式',
             'm_rst': '己方接收信号','o_rst': '对方接收信号',
             'm_qth': '己方QTH','o_qth': '对方QTH',
@@ -189,6 +214,11 @@ def main(window, filee='', save_path=''):
             'm_pow': '己方功率','o_pow': '对方功率',
             'notes': '备注'
         }
+        rows = len(translation_dict)
+        table_others = QTableWidget(rows, 2)
+        table_others.setColumnWidth(0, 100)  # 设置第1列宽度为100
+        table_others.setColumnWidth(1, 250)
+        table_others.setHorizontalHeaderLabels(["项目", "内容"])
         row = 0
         for i in translation_dict.keys():
             item = QTableWidgetItem(translation_dict[i])
@@ -328,7 +358,7 @@ def main(window, filee='', save_path=''):
         if save_path == '':
             return
     print(save_path)
-    window.resize(1200, 700)
+    window.resize(1400, 700)
     window.setWindowTitle(f'F HamLog 1 - {os.path.basename(save_path)}')
     # window.showMaximized()
     # 创建菜单栏
@@ -455,13 +485,13 @@ def main(window, filee='', save_path=''):
             return
 
         research_window = QMainWindow()
-        research_window.resize(1200, 500)
+        research_window.resize(1400, 500)
         research_window.setWindowTitle(f"搜索结果：{edit.text().strip()}")
         central = QWidget()
         research_window.setCentralWidget(central)
         lay = QVBoxLayout(central)
-        table_r = QTableWidget(len(matches), 11)
-        table_r.setHorizontalHeaderLabels(["日期","时间","己方呼号","对方呼号","频率","调制模式", "己方接收信号", "对方接收信号", "己方QTH", "对方QTH","更多"])
+        table_r = QTableWidget(len(matches), 13)
+        table_r.setHorizontalHeaderLabels(["日期","时间","己方呼号","对方呼号","频率","调制模式","传播模式","卫星名称", "己方接收信号", "对方接收信号", "己方QTH", "对方QTH","更多"])
         table_r.setEditTriggers(QAbstractItemView.NoEditTriggers)
         for row, (orig_index, rec) in enumerate(matches):
             table_r.setItem(row, 0, QTableWidgetItem(rec.get('date', '')))
@@ -470,13 +500,15 @@ def main(window, filee='', save_path=''):
             table_r.setItem(row, 3, QTableWidgetItem(rec.get('o_call', '')))
             table_r.setItem(row, 4, QTableWidgetItem(rec.get('freq', '')))
             table_r.setItem(row, 5, QTableWidgetItem(rec.get('mode', '')))
-            table_r.setItem(row, 6, QTableWidgetItem(rec.get('m_rst', '')))
-            table_r.setItem(row, 7, QTableWidgetItem(rec.get('o_rst', '')))
-            table_r.setItem(row, 8, QTableWidgetItem(rec.get('m_qth', '')))
-            table_r.setItem(row, 9, QTableWidgetItem(rec.get('o_qth', '')))
+            table_r.setItem(row, 6, QTableWidgetItem(rec.get('prop_mode', '')))
+            table_r.setItem(row, 7, QTableWidgetItem(rec.get('sat_name', '')))
+            table_r.setItem(row, 8, QTableWidgetItem(rec.get('m_rst', '')))
+            table_r.setItem(row, 9, QTableWidgetItem(rec.get('o_rst', '')))
+            table_r.setItem(row, 10, QTableWidgetItem(rec.get('m_qth', '')))
+            table_r.setItem(row, 11, QTableWidgetItem(rec.get('o_qth', '')))
             more_btn = QPushButton("更多")
             more_btn.clicked.connect(partial(project_others, orig_index))
-            table_r.setCellWidget(row, 10, more_btn)
+            table_r.setCellWidget(row, 12, more_btn)
 
         lay.addWidget(table_r)
         table_r.scrollToBottom()

@@ -59,14 +59,55 @@ def main(file):
                     f.write(f"<QSO_DATE:8>{utc.strftime('%Y%m%d')}\n")
                     f.write(f"<TIME_ON:4>{utc.strftime('%H%M')}\n")
 
+                # 写入发送频率
                 if qso.get('freq'):
                     val = str(qso['freq']).strip()
                     f.write(f"<FREQ:{len(val)}>{val}\n")
+
+                # 若存在接收频率，则写入接收频率及推断接收波段
+                def _infer_band_from_mhz(freq_mhz):
+                    try:
+                        fmhz = float(str(freq_mhz).strip())
+                    except Exception:
+                        return ''
+                    # 常见波段范围（简化）：2M, 70CM, 15M, 20M, 40M, 80M, 160M, 10M
+                    if 144.0 <= fmhz < 148.0:
+                        return '2M'
+                    if 430.0 <= fmhz < 450.0:
+                        return '70CM'
+                    if 21.0 <= fmhz < 21.45:
+                        return '15M'
+                    if 14.0 <= fmhz < 14.35:
+                        return '20M'
+                    if 7.0 <= fmhz < 7.3:
+                        return '40M'
+                    if 3.5 <= fmhz < 4.0:
+                        return '80M'
+                    if 1.8 <= fmhz < 2.0:
+                        return '160M'
+                    if 28.0 <= fmhz < 29.7:
+                        return '10M'
+                    return ''
+
+                if qso.get('freq_rx'):
+                    val = str(qso['freq_rx']).strip()
+                    band = _infer_band_from_mhz(val)
+                    if band:
+                        f.write(f"<BAND_RX:{len(band)}>{band}\n")
+                    f.write(f"<FREQ_RX:{len(val)}>{val}\n")
 
                 if qso.get('mode'):
                     val = str(qso['mode']).strip()
                     f.write(f"<MODE:{len(val)}>{val}\n")
 
+                # 写入卫星/传播方式信息（若有）
+                if qso.get('prop_mode'):
+                    val = str(qso['prop_mode']).strip()
+                    f.write(f"<PROP_MODE:{len(val)}>{val}\n")
+
+                if qso.get('sat_name'):
+                    val = str(qso['sat_name']).strip()
+                    f.write(f"<SAT_NAME:{len(val)}>{val}\n")
                 if qso.get('m_rst'):
                     val = str(qso['m_rst']).strip()
                     f.write(f"<RST_SENT:{len(val)}>{val}\n")

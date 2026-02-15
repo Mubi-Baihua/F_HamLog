@@ -1,7 +1,43 @@
 from PySide6.QtWidgets import QFileDialog, QMessageBox
 import re
+import os
+import json
 from datetime import datetime, timezone
 
+
+def _read_my_call_from_config():
+    """从m_xml.txt文件中读取我的呼号"""
+    try:
+        # 获取项目根目录路径
+        project_root = os.path.dirname(os.path.abspath(__file__))
+        config_path = os.path.join(project_root, 'file', 'm_xml.txt')
+        
+        # 检查文件是否存在
+        if not os.path.exists(config_path):
+            return ''
+            
+        # 读取文件内容
+        with open(config_path, 'r', encoding='utf-8') as f:
+            content = f.read().strip()
+            
+        # 解析字典格式的内容
+        if content.startswith('{') and content.endswith('}'):
+            # 移除首尾的大括号并解析
+            dict_content = content[1:-1]
+            # 简单解析键值对
+            pairs = dict_content.split(',')
+            for pair in pairs:
+                if ':' in pair:
+                    key, value = pair.split(':', 1)
+                    key = key.strip().strip("'\"")
+                    value = value.strip().strip("'\"")
+                    if key == 'm_call':
+                        return value
+    except Exception:
+        # 发生任何错误都返回空字符串
+        pass
+    
+    return ''
 
 def _parse_adi_text(text):
     # 简单解析 ADI/ADIF：匹配格式 <TAG:len>value
@@ -76,13 +112,24 @@ def _map_record(rec):
     raw_time = rec.get('TIME_ON', '') or rec.get('TIME', '') or rec.get('TIME_OFF', '')
     local_date, local_time = _adi_utc_to_local(raw_date, raw_time)
 
+    # 获取默认的我的呼号
+    default_my_call = _read_my_call_from_config()
+    
+    # 获取记录中的呼号，如果没有则使用默认值
+    my_call = rec.get('MY_CALL', rec.get('STATION_CALLSIGN', ''))
+    if not my_call and default_my_call:
+        my_call = default_my_call
+
     mapped = {
         'date': local_date if local_date else fmt_date(raw_date),
         'time': local_time if local_time else fmt_time(raw_time),
-        'm_call': rec.get('MY_CALL', rec.get('STATION_CALLSIGN', '')),
+        'm_call': my_call,
         'o_call': rec.get('CALL', ''),
         'freq': rec.get('FREQ', rec.get('FREQ_MHz', '')),
+        'freq_rx': rec.get('FREQ_RX', ''),
         'mode': rec.get('MODE', ''),
+        'prop_mode': rec.get('PROP_MODE', ''),
+        'sat_name': rec.get('SAT_NAME', ''),
         'm_rst': rec.get('RST_SENT', rec.get('RSTS', '')),
         'o_rst': rec.get('RST_RCVD', rec.get('RSTR', '')),
         'm_qth': rec.get('MY_GRIDSQUARE', rec.get('MY_QTH', '')),
@@ -96,7 +143,7 @@ def _map_record(rec):
         'notes': rec.get('COMMENT', rec.get('NOTES', '')),
     }
     # Ensure keys exist
-    for k in ['date','time','m_call','o_call','freq','mode','m_rst','o_rst','m_qth','o_qth','m_dig','o_dig','m_ant','o_ant','m_pow','o_pow','notes']:
+    for k in ['date','time','m_call','o_call','freq','freq_rx','mode','prop_mode','sat_name','m_rst','o_rst','m_qth','o_qth','m_dig','o_dig','m_ant','o_ant','m_pow','o_pow','notes']:
         if k not in mapped:
             mapped[k] = ''
     return mapped
