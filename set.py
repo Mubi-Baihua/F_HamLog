@@ -24,8 +24,8 @@ def main(window):
         pack_set_window = QMainWindow()
         pack_set.main(pack_set_window)
         # pack_set.main 会在内部 show 窗口，但保留全局引用以防被回收
-    window.resize(600, 350)
-    window.setFixedSize(600, 350)
+    window.resize(650, 400)
+    window.setFixedSize(650, 375)
     window.setWindowTitle('设置')
     central_widget = QWidget()
     window.setCentralWidget(central_widget)
@@ -67,11 +67,15 @@ def main(window):
 
 
     fk_l = QLabel()
-    fk_l.setText('<html><head/><style>a {text-decoration: none; color: #0066cc;}</style></head><body>'
-                '<p>问题反馈到：BI8SQL@outlook.com</p>'
-                '<p>版本更新请访问：<a href="https://mubi-baihua.github.io">https://mubi-baihua.github.io</a></p>'
-                '<p>Github项目：<a href="https://github.com/Mubi-Baihua/F_HamLog/">https://github.com/Mubi-Baihua/F_HamLog/</a></p>'
-                '</body></html>')
+    fk_l.setText('''<html><head/>
+                <style>a {text-decoration: none; 
+                        color: #0066cc;}
+                .t {margin-top: 5px;}</style>
+                </head><body>
+                <div class="t">问题反馈到：BI8SQL@outlook.com</div>
+                <div class="t">版本更新请访问：<a href="https://mubi-baihua.github.io">https://mubi-baihua.github.io</a></div>
+                <div class="t">Github项目：<a href="https://github.com/Mubi-Baihua/F_HamLog/">https://github.com/Mubi-Baihua/F_HamLog/</a></div>
+                </body></html>''')
     fk_l.setOpenExternalLinks(True)
     layout.addWidget(fk_l)
 
@@ -81,7 +85,7 @@ def main(window):
     line.setLineWidth(1)  # 设置线宽
     layout.addWidget(line)
 
-    fk_v = QLabel("F HamLog 版本：1.7.0", central_widget)
+    fk_v = QLabel("F HamLog 版本：1.8.0", central_widget)
     layout.addWidget(fk_v)
 
     line = QFrame(central_widget)

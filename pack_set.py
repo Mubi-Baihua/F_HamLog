@@ -275,8 +275,8 @@ def main(window):
             # 如果包含版本字段，检查兼容性（可选）
             try:
                 avail = xml_data.get('available fhl version')
-                if avail and str(avail) != '1.7.0':
-                    QMessageBox.warning(window, '版本不匹配', f"当前F HamLog版本：1.7.0\n插件适配版本：{avail}")
+                if avail and str(avail) != '1.8.0':
+                    QMessageBox.warning(window, '版本不匹配', f"当前F HamLog版本：1.8.0\n插件适配版本：{avail}")
                     return
             except Exception:
                 pass
