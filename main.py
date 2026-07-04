@@ -33,13 +33,15 @@ def main():
             with open(save_path, 'r', encoding='utf-8') as f:
                 data = eval(f.read())
         project.main(project_window, data, save_path)
-        
+
+    '''    
     def remote_project():
         print("远程项目")
         import remote_project
         global project_window  # 保持引用，防止被回收
         project_window = QMainWindow()
-        remote_project.main(project_window)
+        remote_project.main(project_window)'''
+    
     def set():
         print("设置")
         import set
@@ -52,8 +54,8 @@ def main():
 
     global window
     window = QMainWindow()
-    window.resize(500, 300)
-    window.setFixedSize(500, 300)
+    window.resize(500, 280)
+    window.setFixedSize(500, 280)
     window.setWindowTitle('F HamLog 1')
 
     text_label = QLabel("F HamLog 1", window)
@@ -81,15 +83,17 @@ def main():
     button_open.resize(100, 50)
     button_open.clicked.connect(open_project)
 
+    '''
     button_open = QPushButton("远程日志", window)
     button_open.setGeometry(200, 200, 100, 30)
     button_open.resize(100, 40)
-    button_open.clicked.connect(remote_project)
+    button_open.clicked.connect(remote_project)'''
 
     button_set = QPushButton("设置", window)
-    button_set.setGeometry(200, 240, 100, 30)
+    button_set.setGeometry(200, 200, 100, 30)
     button_set.resize(100, 40)
     button_set.clicked.connect(set)
+    
 
     window.show()
     app.exec()

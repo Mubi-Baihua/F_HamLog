@@ -1,0 +1,1 @@
+{'describe': '删除Unknown、Antenna等文本', 'pack version': '1.0', 'available fhl version': '1.8.0', 'producer': '木比白桦', 'name': 'F 格式优化'}

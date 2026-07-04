@@ -1,1 +1,1 @@
-nuitka --standalone --output-filename="F HamLog 1.7" --main=main.py --windows-icon-from-ico=file\F_HamLog.ico --msvc=latest --windows-console-mode=attach --enable-plugin=pyside6 --windows-uac-admin --include-data-dir=file=file
+nuitka --standalone --output-filename="F HamLog 1.8" --main=main.py --windows-icon-from-ico=file\F_HamLog.ico --msvc=latest --windows-console-mode=attach --enable-plugin=pyside6 --windows-uac-admin --include-data-dir=file=file

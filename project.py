@@ -514,12 +514,103 @@ def main(window, filee='', save_path=''):
         table_r.scrollToBottom()
         research_window.show()
 
+    def show_statistics():
+        global file
+        dlg = QDialog(window)
+        dlg.setWindowTitle('统计图表')  # 窗口标题
+        dlg_layout = QVBoxLayout(dlg)
+
+        h1 = QHBoxLayout()
+        h1.addWidget(QLabel('字段：'))
+        combo_stat = QComboBox()
+        stat_choices = [
+            ('o_call', '对方呼号'),  # 添加对方呼号统计
+            ('mode', '调制模式'),
+            ('freq', '频率'),
+            ('prop_mode', '传播方式'),
+            ('sat_name', '卫星名称'),
+            ('m_qth', '己方QTH'),
+            ('o_qth', '对方QTH'),
+            ('m_dig', '己方设备'),
+            ('o_dig', '对方设备'),
+            ('notes', '备注')
+        ]
+        for k, v in stat_choices:
+            combo_stat.addItem(v, k)
+        h1.addWidget(combo_stat)
+        dlg_layout.addLayout(h1)
+
+        h2 = QHBoxLayout()
+        h2.addWidget(QLabel('图表类型：'))
+        chart_combo = QComboBox()
+        chart_combo.addItems(['条形图', '扇形图'])
+        h2.addWidget(chart_combo)
+        dlg_layout.addLayout(h2)
+
+        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        btns.accepted.connect(dlg.accept)
+        btns.rejected.connect(dlg.reject)
+        dlg_layout.addWidget(btns)
+
+        if dlg.exec() != QDialog.Accepted:
+            return
+
+        field = combo_stat.currentData()
+        chart_type = chart_combo.currentText()
+
+        # 统计各项出现次数
+        counts = {}
+        for rec in file:
+            val = str(rec.get(field, '')).strip()
+            if val == '':
+                val = '<空>'
+            counts[val] = counts.get(val, 0) + 1
+
+        if not counts:
+            QMessageBox.information(window, '统计', '没有可统计的数据。')
+            return
+
+        # 绘图
+        try:
+            import matplotlib.pyplot as plt
+            import matplotlib
+            # 设置中文字体
+            matplotlib.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'DejaVu Sans']
+            matplotlib.rcParams['axes.unicode_minus'] = False  # 正常显示负号
+        except Exception:
+            QMessageBox.warning(window, '缺少依赖', '未安装 matplotlib，请运行: pip install matplotlib')
+            return
+
+        labels = list(counts.keys())
+        values = list(counts.values())
+
+        plt.figure(figsize=(8, 6))
+        if chart_type == '条形图':
+            plt.bar(labels, values)
+            plt.xticks(rotation=45, ha='right')
+            plt.ylabel('次数')
+        else:
+            plt.pie(values, labels=labels, autopct='%1.1f%%')
+
+        # 使用自定义标题或默认标题
+        display_map = {k: v for k, v in stat_choices}
+        plt.title(f"{display_map.get(field, field)} 统计")
+        plt.tight_layout()
+        plt.show()
+
     tool_menu = menu_bar.addMenu('功能')
 
     list_action = QAction('按时间排序', window)
     list_action.setShortcut('Ctrl+L')
     list_action.triggered.connect(lambda: list_time())
     tool_menu.addAction(list_action)
+
+    tool_menu.addSeparator()
+
+    stats_action = QAction('统计图表', window)
+    stats_action.setShortcut('Ctrl+Shift+P')
+    stats_action.triggered.connect(lambda: show_statistics())
+    tool_menu.addAction(stats_action)
 
     tool_menu.addSeparator()
 
