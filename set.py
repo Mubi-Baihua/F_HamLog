@@ -5,16 +5,23 @@ def main(window):
     m_call = xml_dict['m_call']
     m_qth = xml_dict['m_qth']
     m_dig = xml_dict['m_dig']
+    aouto_save_b = xml_dict['aouto_save']
+    aouto_list_b = xml_dict['aouto_list']
+
     def set():
         m_call = m_call_input.text()
         m_qth = m_qth_input.text()
         m_dig = m_dig_input.text()
-        print(f"保存设置: 我的呼号={m_call}, 我的QTH={m_qth}, 我的设备={m_dig}")
+        aouto_save_b = aouto_save.isChecked()
+        aouto_list_b = aouto_list_.isChecked()
+        print(f"保存设置: 我的呼号={m_call}, 我的QTH={m_qth}, 我的设备={m_dig}, 自动保存={aouto_save_b}, 自动按时间排序={aouto_list_b}")
         with open('file/m_xml.txt', 'w', encoding='utf-8') as f:
             f.write(str({
                 'm_call': m_call,
                 'm_qth': m_qth,
-                'm_dig': m_dig
+                'm_dig': m_dig,
+                'aouto_save': aouto_save_b,
+                'aouto_list': aouto_list_b
             }))
         window.close()
     def pack_set():
@@ -25,7 +32,7 @@ def main(window):
         pack_set.main(pack_set_window)
         # pack_set.main 会在内部 show 窗口，但保留全局引用以防被回收
     window.resize(650, 400)
-    window.setFixedSize(650, 375)
+    window.setFixedSize(650, 400)
     window.setWindowTitle('设置')
     central_widget = QWidget()
     window.setCentralWidget(central_widget)
@@ -39,7 +46,14 @@ def main(window):
     m_dig_label = QLabel("我的设备:", central_widget)
     m_dig_input = QLineEdit(central_widget)
     m_dig_input.setText(m_dig)
-    sett_button = QPushButton("保存", central_widget)
+    aouto_save = QCheckBox("自动保存", central_widget)
+    aouto_save.setChecked(aouto_save_b)
+    aouto_list_ = QCheckBox("自动按时间排序", central_widget)
+    aouto_list_.setChecked(aouto_list_b)
+    h_layout = QHBoxLayout()
+    h_layout.addWidget(aouto_save)
+    h_layout.addWidget(aouto_list_)
+    sett_button = QPushButton("保存更改", central_widget)
     sett_button.clicked.connect(lambda: set())
     layout.addWidget(m_call_label)
     layout.addWidget(m_call_input)
@@ -47,8 +61,9 @@ def main(window):
     layout.addWidget(m_qth_input)
     layout.addWidget(m_dig_label)
     layout.addWidget(m_dig_input)
+    layout.addLayout(h_layout)
     layout.addWidget(sett_button)
-
+    
     line = QFrame(central_widget)
     line.setFrameShape(QFrame.HLine)
     line.setFrameShadow(QFrame.Sunken)

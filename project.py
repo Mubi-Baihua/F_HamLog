@@ -45,7 +45,8 @@ def main(window, filee='', save_path=''):
             layout.removeWidget(table)
             table.deleteLater()
             table = None
-            save(masage=False)
+            list_time(message=False)
+            save(message=False)
             
 
         file_length = len(file)
@@ -283,12 +284,18 @@ def main(window, filee='', save_path=''):
         
         project_others_window.show()
 
-    def save(masage=True):
-        import json
-        with open(save_path, 'w', encoding='utf-8') as f:
-            json.dump(file, f, ensure_ascii=False, indent=2)
-            if masage:
-                QMessageBox.information(window, "保存成功", "保存成功！")
+    def save(message=True):
+        with open('file/m_xml.txt', 'r', encoding='utf-8') as f:
+            xml_dict = eval(f.read())
+
+        aouto_save_b = xml_dict['aouto_save']
+
+        if (not(message) and aouto_save_b) or message:
+            import json
+            with open(save_path, 'w', encoding='utf-8') as f:
+                json.dump(file, f, ensure_ascii=False, indent=2)
+                if message:
+                    QMessageBox.information(window, "保存成功", "保存成功！")
 
     def osave():
         import json
@@ -406,13 +413,20 @@ def main(window, filee='', save_path=''):
     export_excel_action = QAction('导出为表格', window)
     export_excel_action.triggered.connect(lambda: output_excel(file))
     import_menu.addAction(export_excel_action)
-    def list_time():
-        try:
-            file.sort(key=lambda x: (x.get('date', ''), x.get('time', '')))
-            table_update()
-            QMessageBox.information(window, "排序完成", "按时间排序完成。")
-        except Exception as e:
-            QMessageBox.warning(window, "排序失败", str(e))
+    def list_time(message=True):
+        with open('file/m_xml.txt', 'r', encoding='utf-8') as f:
+            xml_dict = eval(f.read())
+        
+        aouto_list_b = xml_dict['aouto_list']
+        if (not(message) and aouto_list_b) or message:
+            try:
+                file.sort(key=lambda x: (x.get('date', ''), x.get('time', '')))
+                
+                if message:
+                    table_update()
+                    QMessageBox.information(window, "排序完成", "按时间排序完成。")
+            except Exception as e:
+                QMessageBox.warning(window, "排序失败", str(e))
 
     def research_call(file_param=None):
         global research_window
