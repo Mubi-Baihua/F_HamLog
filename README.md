@@ -8,13 +8,15 @@
 支持从HAM个人工具导入。
 支持导出为表格。
 
-### 远程日志
-支持编辑远程服务器上的日志。
-
-远程日志服务端请下载 [F HamLog Remote Log Server 1.1.0.exe](https://github.com/Mubi-Baihua/F_HamLog/blob/main/F_HamLog_Remote_Log_Server_1.1.0/F%20HamLog%20Remote%20Log%20Server%201.1.0.exe)。
 
 ### 支持安装插件
 可以自行编写插件，并安装。
+
+### 远程日志
+**1.8.0及以上版本不支持。如需继续使用，请自行构建[#remote_project.py](https://github.com/Mubi-Baihua/F_HamLog/blob/main/%23remote_project.py)。**   
+支持编辑远程服务器上的日志。
+
+远程日志服务端请下载 [F HamLog Remote Log Server 1.1.0.exe](https://github.com/Mubi-Baihua/F_HamLog/blob/main/F_HamLog_Remote_Log_Server_1.1.0/F%20HamLog%20Remote%20Log%20Server%201.1.0.exe)。
 
 ## 相关技术文档
 
