@@ -104,14 +104,15 @@ def main(window):
         print("Python 已安装")
 
     else:
-        if QMessageBox.question(window, "F HamLog 1", 
+        if QMessageBox.question(window, "未安装Python", 
                                     "Python 未安装，\n为正常使用插件需安装 Python3.13.11\n是否安装？", 
                                     QMessageBox.Yes | QMessageBox.No) == QMessageBox.Yes:
                 bool_,e = install_python()
                 if bool_:
-                    QMessageBox.information(window, "安装成功", "安装成功！")
+                    QMessageBox.information(window, "运行成功", "安装程序运行成功！\n安装完成后，请重新打开插件设置。")
                 else:
                     QMessageBox.warning(window, "安装失败", "安装失败！\n错误信息："+str(e))
+                return
         else:
                 return
 
@@ -218,7 +219,7 @@ def main(window):
             table_others.setColumnWidth(i, max(current_width, min_width))
         
     def on_delete(folder_path):
-        reply = QMessageBox.question(window, '删除确认', f"确定删除插件：{os.path.basename(folder_path)} ?",
+        reply = QMessageBox.question(window, '确认删除', f"确定删除插件：{os.path.basename(folder_path)} ?",
                                      QMessageBox.Yes | QMessageBox.No)
         if reply != QMessageBox.Yes:
             return
@@ -274,9 +275,10 @@ def main(window):
 
             # 如果包含版本字段，检查兼容性（可选）
             try:
-                avail = xml_data.get('available fhl version')
-                if avail and str(avail) != '1.8.0':
-                    QMessageBox.warning(window, '版本不匹配', f"当前F HamLog版本：1.8.0\n插件适配版本：{avail}")
+                avail = list(xml_data.get('available fhl version')) 
+                if not ('1.9.0' in avail):
+                    QMessageBox.warning(window, '版本不匹配', f"该插件与当前F HamLog版本不兼容\n当前F HamLog版本：1.9.0\n插件适配版本：{avail}")
+                    shutil.rmtree(target)
                     return
             except Exception:
                 pass
