@@ -27,7 +27,7 @@ def _upgrade_file_records(file_list):
         _ensure_log_keys(e)
 
 
-def main(window, filee='', save_path=''):
+def main(window, filee='', save_path='',quick_poject=False):
     global file
     if isinstance(filee, list):
         file = filee
@@ -35,9 +35,6 @@ def main(window, filee='', save_path=''):
     else:
         file = []
     table = None
-
-    
-
 
     def table_update(delete=True):
         global window, table
@@ -342,6 +339,16 @@ def main(window, filee='', save_path=''):
             file = old_file
             table_update()
     
+    def import_from_fhl():
+        global file
+        old_file = file.copy()  # 使用copy()确保是深拷贝
+        import import_from_fhl
+        file = import_from_fhl.main(file)
+        table_update()
+        if QMessageBox.question(window, "导入日志", "应用导入吗？") == QMessageBox.No:
+            file = old_file
+            table_update()
+    
     def output_adi(file):
         import output_adi
 
@@ -366,7 +373,10 @@ def main(window, filee='', save_path=''):
             return
     print(save_path)
     window.resize(1400, 700)
-    window.setWindowTitle(f'F HamLog 1 - {os.path.basename(save_path)}')
+    if quick_poject:
+        window.setWindowTitle(f'F HamLog 1 - 快速日志')
+    else:
+        window.setWindowTitle(f'F HamLog 1 - {os.path.basename(save_path)}')
     # window.showMaximized()
     # 创建菜单栏
     menu_bar = window.menuBar()
@@ -400,7 +410,11 @@ def main(window, filee='', save_path=''):
     import_from_ADI_action.triggered.connect(lambda: import_from_ADI())
     import_menu.addAction(import_from_ADI_action)
 
-    import_from_HAM_tolls_action = QAction('从 HAM个人工具 导入日志', window)
+    import_from_fhl_action = QAction('从 F HamLog 导入日志', window)
+    import_from_fhl_action.triggered.connect(lambda: import_from_fhl())
+    import_menu.addAction(import_from_fhl_action)
+
+    import_from_HAM_tolls_action = QAction('从 旧版 HAM个人工具 导入日志', window)
     import_from_HAM_tolls_action.triggered.connect(lambda: import_from_HAM_tolls_())
     import_menu.addAction(import_from_HAM_tolls_action)
 

@@ -27,7 +27,7 @@
 
 #### 插件主体结构
 ```
-XML:{"describe":"<插件的描述>","pack version":"<插件的版本>","available fhl version":"<插件适配的F HamLog版本>","producer":"<开发者>"}
+XML:{"describe":"<插件的描述>","pack version":"<插件的版本>","available fhl version":["<插件适配的F HamLog版本>","<插件适配的F HamLog版本 2>"],"producer":"<开发者>"}
 python:
 #你的python代码
 ```
