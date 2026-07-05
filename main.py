@@ -17,7 +17,7 @@ def main():
         except json.JSONDecodeError:
             with open(save_path, 'r', encoding='utf-8') as f:
                 data = eval(f.read())
-        project.main(project_window, data, save_path)
+        project.main(project_window, data, save_path,quick_poject=True)
     def new_project():
         print("新建项目")
         import project

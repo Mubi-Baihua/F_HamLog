@@ -27,7 +27,7 @@ def _upgrade_file_records(file_list):
         _ensure_log_keys(e)
 
 
-def main(window, filee='', save_path=''):
+def main(window, filee='', save_path='',quick_poject=False):
     global file
     if isinstance(filee, list):
         file = filee
@@ -35,9 +35,6 @@ def main(window, filee='', save_path=''):
     else:
         file = []
     table = None
-
-    
-
 
     def table_update(delete=True):
         global window, table
@@ -376,7 +373,10 @@ def main(window, filee='', save_path=''):
             return
     print(save_path)
     window.resize(1400, 700)
-    window.setWindowTitle(f'F HamLog 1 - {os.path.basename(save_path)}')
+    if quick_poject:
+        window.setWindowTitle(f'F HamLog 1 - 快速日志')
+    else:
+        window.setWindowTitle(f'F HamLog 1 - {os.path.basename(save_path)}')
     # window.showMaximized()
     # 创建菜单栏
     menu_bar = window.menuBar()

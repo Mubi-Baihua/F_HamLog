@@ -123,7 +123,7 @@ def main(window):
                 .t {margin-top: 5px;}</style>
                 </head><body>
                 <div class="t">问题反馈到：BI8SQL@outlook.com</div>
-                <div class="t">版本更新请访问：<a href="https://mubi-baihua.github.io">https://mubi-baihua.github.io</a></div>
+                <div class="t">版本更新请访问：<a href="https://mubi-baihua.github.io/f_hamlog.html">https://mubi-baihua.github.io/f_hamlog.html</a></div>
                 <div class="t">Github项目：<a href="https://github.com/Mubi-Baihua/F_HamLog/">https://github.com/Mubi-Baihua/F_HamLog/</a></div>
                 </body></html>''')
     fk_l.setOpenExternalLinks(True)
