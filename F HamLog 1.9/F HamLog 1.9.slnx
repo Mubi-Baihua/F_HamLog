@@ -1,0 +1,8 @@
+<Solution>
+  <Configurations>
+    <Platform Name="Default" />
+  </Configurations>
+  <Project Path="F HamLog 1.9/F HamLog 1.9.vdproj" Type="Installer">
+    <Build />
+  </Project>
+</Solution>
