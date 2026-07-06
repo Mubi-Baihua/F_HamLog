@@ -37,7 +37,7 @@ def main(window, filee='', save_path='',quick_poject=False):
     table = None
 
     def table_update(delete=True):
-        global window, table
+        nonlocal table
         if delete:
             layout.removeWidget(table)
             table.deleteLater()
@@ -47,44 +47,71 @@ def main(window, filee='', save_path='',quick_poject=False):
             
 
         file_length = len(file)
-        # 创建表格部件，增加到13列以容纳新字段
-        table = QTableWidget(file_length, 13) 
-        table.setHorizontalHeaderLabels(["日期","时间","己方呼号","对方呼号","频率","调制模式","传播模式","卫星名称", "己方接收信号", "对方接收信号", "己方QTH", "对方QTH","更多"])
+        # 创建表格部件，增加到14列以容纳“选择”复选框
+        table = QTableWidget(file_length, 14)
+        table.setHorizontalHeaderLabels(["选择","日期","时间","己方呼号","对方呼号","频率","调制模式","传播模式","卫星名称", "己方接收信号", "对方接收信号", "己方QTH", "对方QTH","更多"])
         table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        table.setSelectionMode(QAbstractItemView.ExtendedSelection)
         print(file_length)
         # 统一使用默认列宽，不设置任何固定宽度
         
         # 添加一些示例数据
         for i in range(file_length):
+            checkbox = QCheckBox()
+            checkbox.setChecked(False)
+            checkbox.setFixedSize(25, 20)
+            checkbox_widget = QWidget()
+            checkbox_layout = QHBoxLayout(checkbox_widget)
+            checkbox_layout.setContentsMargins(0, 0, 0, 0)
+            checkbox_layout.setAlignment(Qt.AlignCenter)
+            checkbox_layout.addWidget(checkbox)
+            table.setCellWidget(i, 0, checkbox_widget)
+
             date = QTableWidgetItem(file[i]['date'])
-            table.setItem(i, 0, date)
+            table.setItem(i, 1, date)
             time = QTableWidgetItem(file[i]['time'])
-            table.setItem(i, 1, time)
+            table.setItem(i, 2, time)
             m_call = QTableWidgetItem(file[i]['m_call'])
-            table.setItem(i, 2, m_call)
+            table.setItem(i, 3, m_call)
             o_call = QTableWidgetItem(file[i]['o_call'])
-            table.setItem(i, 3, o_call)
+            table.setItem(i, 4, o_call)
             freq = QTableWidgetItem(file[i]['freq'])
-            table.setItem(i, 4, freq)
+            table.setItem(i, 5, freq)
             mode = QTableWidgetItem(file[i]['mode'])
-            table.setItem(i, 5, mode)
+            table.setItem(i, 6, mode)
             prop_mode = QTableWidgetItem(file[i].get('prop_mode', ''))
-            table.setItem(i, 6, prop_mode)
+            table.setItem(i, 7, prop_mode)
             sat_name = QTableWidgetItem(file[i].get('sat_name', ''))
-            table.setItem(i, 7, sat_name)
+            table.setItem(i, 8, sat_name)
             m_rst = QTableWidgetItem(file[i]['m_rst'])
-            table.setItem(i, 8, m_rst)
+            table.setItem(i, 9, m_rst)
             o_rst = QTableWidgetItem(file[i]['o_rst'])
-            table.setItem(i, 9, o_rst)
+            table.setItem(i, 10, o_rst)
             m_qth = QTableWidgetItem(file[i]['m_qth'])
-            table.setItem(i, 10, m_qth)
+            table.setItem(i, 11, m_qth)
             o_qth = QTableWidgetItem(file[i]['o_qth'])
-            table.setItem(i, 11, o_qth)
+            table.setItem(i, 12, o_qth)
             other_button = QPushButton("更多")
-            table.setCellWidget(i, 12, other_button)
+            table.setCellWidget(i, 13, other_button)
             other_button.clicked.connect(partial(project_others, i))
 
-            # 将表格添加到布局中
+        table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+        table.setColumnWidth(0, 45)
+        table.setColumnWidth(1, 80)
+        table.setColumnWidth(2, 70)
+        table.setColumnWidth(3, 90)
+        table.setColumnWidth(4, 90)
+        table.setColumnWidth(5, 70)
+        table.setColumnWidth(6, 80)
+        table.setColumnWidth(7, 90)
+        table.setColumnWidth(8, 90)
+        table.setColumnWidth(9, 80)
+        table.setColumnWidth(10, 80)
+        table.setColumnWidth(11, 120)
+        table.setColumnWidth(12, 120)
+        table.setColumnWidth(13, 80)
+        #table.verticalHeader().setDefaultSectionSize(24)
         layout.addWidget(table)
 
         table.scrollToBottom()  # 自动跳到底部
@@ -359,8 +386,63 @@ def main(window, filee='', save_path='',quick_poject=False):
         import output_excel
         if output_excel.main(file):
             QMessageBox.information(window, "导出成功", "导出成功！")
-    
-    
+
+    def get_selected_records():
+        if table is None:
+            QMessageBox.warning(window, "导出失败", "当前未加载日志表。")
+            return None
+        selected_records = []
+        for row in range(table.rowCount()):
+            # 优先检查嵌入的 QCheckBox 控件
+            cell_w = table.cellWidget(row, 0)
+            if cell_w is not None:
+                cb = cell_w.findChild(QCheckBox)
+                if cb is not None and cb.isChecked():
+                    selected_records.append(file[row])
+                continue
+
+            # 退回到 QTableWidgetItem（如果存在的话）
+            checkbox_item = table.item(row, 0)
+            if checkbox_item is not None and checkbox_item.checkState() == Qt.Checked:
+                selected_records.append(file[row])
+
+        if not selected_records:
+            QMessageBox.warning(window, "导出失败", "请先勾选要导出的日志行。")
+            return None
+        return selected_records
+
+    def output_selected_fhl():
+        selected_records = get_selected_records()
+        if not selected_records:
+            return
+        save_path, _ = QFileDialog.getSaveFileName(
+            window,
+            "导出选中日志为FHL文件",
+            "",
+            "F HamLog项目 (*.fhl)"
+        )
+        if not save_path:
+            return
+        import json
+        with open(save_path, 'w', encoding='utf-8') as f:
+            json.dump(selected_records, f, ensure_ascii=False, indent=2)
+        QMessageBox.information(window, "导出成功", "导出成功！")
+
+    def output_selected_adi():
+        selected_records = get_selected_records()
+        if not selected_records:
+            return
+        import output_adi
+        if output_adi.main(selected_records):
+            QMessageBox.information(window, "导出成功", "导出成功！")
+
+    def output_selected_excel():
+        selected_records = get_selected_records()
+        if not selected_records:
+            return
+        import output_excel
+        if output_excel.main(selected_records):
+            QMessageBox.information(window, "导出成功", "导出成功！")
 
     if save_path == '':
         save_path, _ = QFileDialog.getSaveFileName(
@@ -427,6 +509,21 @@ def main(window, filee='', save_path='',quick_poject=False):
     export_excel_action = QAction('导出为表格', window)
     export_excel_action.triggered.connect(lambda: output_excel(file))
     import_menu.addAction(export_excel_action)
+
+    import_menu.addSeparator()
+    export_selected_menu = import_menu.addMenu('导出选中的日志')
+
+    export_selected_adi_action = QAction('导出选中的日志为ADI', window)
+    export_selected_adi_action.triggered.connect(output_selected_adi)
+    export_selected_menu.addAction(export_selected_adi_action)
+
+    export_selected_excel_action = QAction('导出选中的日志为表格', window)
+    export_selected_excel_action.triggered.connect(output_selected_excel)
+    export_selected_menu.addAction(export_selected_excel_action)
+
+    export_selected_fhl_action = QAction('导出选中的日志为 F HamLog 项目文件', window)
+    export_selected_fhl_action.triggered.connect(output_selected_fhl)
+    export_selected_menu.addAction(export_selected_fhl_action)
     def list_time(message=True):
         with open('file/m_xml.txt', 'r', encoding='utf-8') as f:
             xml_dict = eval(f.read())
