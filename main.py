@@ -83,7 +83,7 @@ def main():
     text_label = QLabel("F HamLog 2")
     text_label.setAlignment(Qt.AlignCenter)
     font_t = text_label.font()
-    font_t.setPointSize(14)
+    font_t.setPointSize(15)
     font_t.setBold(True)
     text_label.setFont(font_t)
     main_layout.addWidget(text_label)
@@ -125,25 +125,29 @@ def main():
 
     main_layout.addWidget(row_widget, alignment=Qt.AlignHCenter)
 
+    row_widget2 = QWidget()
+    row_widget2.setFixedSize(200, 40)
+    h_layout2 = QHBoxLayout(row_widget2)
+    h_layout2.setContentsMargins(0, 0, 0, 0)
+    h_layout2.setSpacing(0)
+
     line = QFrame(central_widget)
     line.setFrameShape(QFrame.HLine)
     line.setFrameShadow(QFrame.Sunken)
     line.setLineWidth(1)  # 设置线宽
     main_layout.addWidget(line)
 
-    h_layout = QHBoxLayout()
-
     button_start = QPushButton("新建项目")
-    button_start.setFixedSize(150, 40)
+    button_start.setFixedSize(100, 40)
     button_start.clicked.connect(new_project)
-    h_layout.addWidget(button_start)
+    h_layout2.addWidget(button_start)
 
     button_open = QPushButton("打开项目")
-    button_open.setFixedSize(150, 40)
+    button_open.setFixedSize(100, 40)
     button_open.clicked.connect(open_project)
-    h_layout.addWidget(button_open)
+    h_layout2.addWidget(button_open)
 
-    main_layout.addLayout(h_layout)
+    main_layout.addWidget(row_widget2, alignment=Qt.AlignHCenter)
 
     '''
     button_open = QPushButton("远程日志")
