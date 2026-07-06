@@ -342,12 +342,14 @@ def main(window, filee='', save_path='',quick_poject=False):
             QMessageBox.information(window, "保存成功", "保存成功！")
         sys.exit()
 
-    def import_from_HAM_tolls_():
+    def input_HAM_tolls_():
         global file
         old_file = file.copy()  # 使用copy()确保是深拷贝
-        import import_from_HAM_tolls
-        file = import_from_HAM_tolls.main(file)
+        import input_HAM_tolls
+        file = input_HAM_tolls.main(file)
         table_update()
+        if file == old_file:  # 如果没有导入任何内容，则不保存
+            return
         if QMessageBox.question(window, "导入日志", "应用导入吗？") == QMessageBox.No:
             file = old_file
             table_update()  # 确保界面更新
@@ -361,17 +363,21 @@ def main(window, filee='', save_path='',quick_poject=False):
         except Exception as e:
             QMessageBox.warning(window, "导入失败", f"导入 ADI 失败：{e}")
             return
+        if file == old_file:  # 如果没有导入任何内容，则不保存
+            return
         table_update()
         if QMessageBox.question(window, "导入日志", "应用导入吗？") == QMessageBox.No:
             file = old_file
             table_update()
     
-    def import_from_fhl():
+    def input_fhl():
         global file
         old_file = file.copy()  # 使用copy()确保是深拷贝
-        import import_from_fhl
-        file = import_from_fhl.main(file)
+        import input_fhl
+        file = input_fhl.main(file)
         table_update()
+        if file == old_file:  # 如果没有导入任何内容，则不保存
+            return
         if QMessageBox.question(window, "导入日志", "应用导入吗？") == QMessageBox.No:
             file = old_file
             table_update()
@@ -492,13 +498,13 @@ def main(window, filee='', save_path='',quick_poject=False):
     import_from_ADI_action.triggered.connect(lambda: import_from_ADI())
     import_menu.addAction(import_from_ADI_action)
 
-    import_from_fhl_action = QAction('从 F HamLog 导入日志', window)
-    import_from_fhl_action.triggered.connect(lambda: import_from_fhl())
-    import_menu.addAction(import_from_fhl_action)
+    input_fhl_action = QAction('从 F HamLog 导入日志', window)
+    input_fhl_action.triggered.connect(lambda: input_fhl())
+    import_menu.addAction(input_fhl_action)
 
-    import_from_HAM_tolls_action = QAction('从 旧版 HAM个人工具 导入日志', window)
-    import_from_HAM_tolls_action.triggered.connect(lambda: import_from_HAM_tolls_())
-    import_menu.addAction(import_from_HAM_tolls_action)
+    input_HAM_tolls_action = QAction('从 旧版 HAM个人工具 导入日志', window)
+    input_HAM_tolls_action.triggered.connect(lambda: input_HAM_tolls_())
+    import_menu.addAction(input_HAM_tolls_action)
 
     import_menu.addSeparator()
 
