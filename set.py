@@ -53,7 +53,7 @@ def main(window):
                 if os.path.exists(os.path.join(file_path, 'main.fhl')):
                     os.remove('file/main.fhl')  # 删除旧的 main.fhl 文件
                     shutil.copyfile(os.path.join(file_path, 'main.fhl'), 'file/main.fhl')
-                    back_item += '、快速日志文件'
+                    back_item += '、通联日志文件'
 
                 QMessageBox.information(window, "从之前版本导入数据", f"成功导入{back_item}\n（目前不支持从之前版本中导入插件）")
                 window.close()

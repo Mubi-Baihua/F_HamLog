@@ -5,7 +5,7 @@ import sys
 import json
 def main():
     def quick_project():
-        print("快速日志")
+        print("通联日志")
         import project
         global project_window  # 保持引用，防止被回收
         project_window = QMainWindow()
@@ -70,49 +70,98 @@ def main():
     window = QMainWindow()
     window.resize(500, 300)
     window.setFixedSize(500, 300)
-    window.setWindowTitle('F HamLog 1')
+    window.setWindowTitle('F HamLog 2')
 
-    text_label = QLabel("F HamLog 1", window)
-    text_label.setGeometry(0, 25, 500, 30)
+    central_widget = QWidget()
+    window.setCentralWidget(central_widget)
+
+    main_layout = QVBoxLayout(central_widget)
+    main_layout.setContentsMargins(20, 20, 20, 5)
+    #main_layout.setSpacing(10)
+    #main_layout.setAlignment(Qt.AlignTop | Qt.AlignHCenter)
+
+    text_label = QLabel("F HamLog 2")
     text_label.setAlignment(Qt.AlignCenter)
     font_t = text_label.font()
     font_t.setPointSize(14)
     font_t.setBold(True)
     text_label.setFont(font_t)
+    main_layout.addWidget(text_label)
 
-    text_label2 = QLabel("通联日志！", window)
-    text_label2.setGeometry(0, 50, 500, 30)
+    text_label2 = QLabel("通联日志！")
     text_label2.setAlignment(Qt.AlignCenter)
     font_i = text_label2.font()
     font_i.setPointSize(10)
     text_label2.setFont(font_i)
+    main_layout.addWidget(text_label2)
 
-    button_quick = QPushButton("快速日志", window)
-    button_quick.setGeometry(200, 100, 100, 30)
-    button_quick.resize(100, 50)
+    text_endl = QLabel(" ")
+    text_endl.setAlignment(Qt.AlignCenter)
+    font_i = text_endl.font()
+    font_i.setPointSize(8)
+    text_endl.setFont(font_i)
+    main_layout.addWidget(text_endl)
+
+
+    button_quick = QPushButton("通联日志")
+    button_quick.setFixedSize(200, 50)
     button_quick.clicked.connect(quick_project)
+    main_layout.addWidget(button_quick, alignment=Qt.AlignHCenter)
 
-    button_start = QPushButton("新建日志", window)
-    button_start.setGeometry(200, 150, 100, 30)
-    button_start.resize(100, 40)
+    row_widget = QWidget()
+    row_widget.setFixedSize(200, 40)
+
+    h_layout = QHBoxLayout(row_widget)
+    h_layout.setContentsMargins(0, 0, 0, 0)
+    h_layout.setSpacing(0)
+
+    button_sat = QPushButton("卫星通联")
+    button_sat.setFixedSize(100, 40)
+    h_layout.addWidget(button_sat)
+
+    button_qrz = QPushButton("QRZ主页")
+    button_qrz.setFixedSize(100, 40)
+    h_layout.addWidget(button_qrz)
+
+    main_layout.addWidget(row_widget, alignment=Qt.AlignHCenter)
+
+    line = QFrame(central_widget)
+    line.setFrameShape(QFrame.HLine)
+    line.setFrameShadow(QFrame.Sunken)
+    line.setLineWidth(1)  # 设置线宽
+    main_layout.addWidget(line)
+
+    h_layout = QHBoxLayout()
+
+    button_start = QPushButton("新建项目")
+    button_start.setFixedSize(150, 40)
     button_start.clicked.connect(new_project)
+    h_layout.addWidget(button_start)
 
-    button_open = QPushButton("打开日志", window)
-    button_open.setGeometry(200, 190, 100, 30)
-    button_open.resize(100, 40)
+    button_open = QPushButton("打开项目")
+    button_open.setFixedSize(150, 40)
     button_open.clicked.connect(open_project)
+    h_layout.addWidget(button_open)
+
+    main_layout.addLayout(h_layout)
 
     '''
-    button_open = QPushButton("远程日志", window)
-    button_open.setGeometry(200, 200, 100, 30)
-    button_open.resize(100, 40)
+    button_open = QPushButton("远程日志")
+    button_open.setFixedSize(100, 40)
     button_open.clicked.connect(remote_project)'''
 
-    button_set = QPushButton("设置", window)
-    button_set.setGeometry(200, 240, 100, 30)
-    button_set.resize(100, 40)
+    line = QFrame(central_widget)
+    line.setFrameShape(QFrame.HLine)
+    line.setFrameShadow(QFrame.Sunken)
+    line.setLineWidth(1)  # 设置线宽
+    main_layout.addWidget(line)
+
+    button_set = QPushButton("设置")
+    button_set.setFixedSize(100, 40)
     button_set.clicked.connect(set)
-    
+    main_layout.addWidget(button_set, alignment=Qt.AlignHCenter)
+
+    main_layout.addStretch(1)
 
     window.show()
     app.exec()

@@ -1,1 +1,0 @@
-{'m_call': '', 'm_qth': '', 'm_dig': '', 'aouto_save': True, 'aouto_list': True}
