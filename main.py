@@ -76,7 +76,7 @@ def main():
     window.setCentralWidget(central_widget)
 
     main_layout = QVBoxLayout(central_widget)
-    main_layout.setContentsMargins(20, 20, 20, 5)
+    main_layout.setContentsMargins(20, 20, 20, 7)
     #main_layout.setSpacing(10)
     #main_layout.setAlignment(Qt.AlignTop | Qt.AlignHCenter)
 
@@ -130,12 +130,6 @@ def main():
     h_layout2 = QHBoxLayout(row_widget2)
     h_layout2.setContentsMargins(0, 0, 0, 0)
     h_layout2.setSpacing(0)
-
-    line = QFrame(central_widget)
-    line.setFrameShape(QFrame.HLine)
-    line.setFrameShadow(QFrame.Sunken)
-    line.setLineWidth(1)  # 设置线宽
-    main_layout.addWidget(line)
 
     button_start = QPushButton("新建项目")
     button_start.setFixedSize(100, 40)
