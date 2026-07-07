@@ -3,6 +3,8 @@ from PySide6.QtGui import QIcon
 from PySide6.QtCore import Qt
 import sys
 import json
+import webbrowser
+import urllib.parse
 def main():
     def quick_project():
         print("通联日志")
@@ -63,6 +65,17 @@ def main():
         set_window = QMainWindow()
         set.main(set_window)
 
+    def qrz_page():
+        print('qrz主页')
+        with open('file/m_xml.txt', 'r', encoding='utf-8') as f:
+            xml_dict = eval(f.read())
+        callsign = xml_dict['m_call']
+        if callsign == '':
+            url = 'https://www.qrz.com'
+        else:
+            url = f"https://www.qrz.com/db/{urllib.parse.quote_plus(callsign)}"
+        webbrowser.open(url)
+    
     app = QApplication(sys.argv)
     app.setWindowIcon(QIcon("file/F_HamLog.ico"))
 
@@ -122,6 +135,7 @@ def main():
     button_qrz = QPushButton("QRZ主页")
     button_qrz.setFixedSize(100, 40)
     h_layout.addWidget(button_qrz)
+    button_qrz.clicked.connect(qrz_page)
 
     main_layout.addWidget(row_widget, alignment=Qt.AlignHCenter)
 
