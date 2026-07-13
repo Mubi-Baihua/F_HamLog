@@ -128,7 +128,7 @@ def main():
     h_layout.setContentsMargins(0, 0, 0, 0)
     h_layout.setSpacing(0)
 
-    button_sat = QPushButton("卫星通联")
+    button_sat = QPushButton("批量记录")
     button_sat.setFixedSize(100, 40)
     h_layout.addWidget(button_sat)
 
