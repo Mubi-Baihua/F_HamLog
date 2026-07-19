@@ -155,7 +155,7 @@ def main(window_ip):
             }
             
             project_others_window = QMainWindow()
-            project_others_window.resize(400, 600)
+            project_others_window.resize(410, 600)
             project_others_window.setWindowTitle('新建日志')
             translation_dict = {
                 'date': '日期',
@@ -228,7 +228,7 @@ def main(window_ip):
         def project_others(index):
             global project_others_window,file
             project_others_window = QMainWindow()
-            project_others_window.resize(400, 670)
+            project_others_window.resize(410, 670)
             project_others_window.setWindowTitle('更多信息')
             translation_dict = {
                 'date': '日期',
