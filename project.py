@@ -220,7 +220,7 @@ def main(window, filee='', save_path='',quick_poject=False):
     def project_others(index):
         global project_others_window,file
         project_others_window = QMainWindow()
-        project_others_window.resize(410, 670)
+        project_others_window.resize(410, 660)
         project_others_window.setWindowTitle('更多信息')
         translation_dict = {
             'date': '日期',
@@ -466,7 +466,7 @@ def main(window, filee='', save_path='',quick_poject=False):
         if save_path == '':
             return
     print(save_path)
-    window.resize(1400, 700)
+    window.resize(1250, 700)
     if quick_poject:
         window.setWindowTitle(f'F HamLog 2 - 通联日志')
     else:
@@ -622,7 +622,7 @@ def main(window, filee='', save_path='',quick_poject=False):
             return
 
         research_window = QMainWindow()
-        research_window.resize(1400, 500)
+        research_window.resize(1250, 600)
         research_window.setWindowTitle(f"搜索结果：{edit.text().strip()}")
         central = QWidget()
         research_window.setCentralWidget(central)
