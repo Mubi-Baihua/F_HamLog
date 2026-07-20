@@ -296,14 +296,20 @@ def main(window, filee='', save_path='',quick_poject=False):
             url = f"https://www.qrz.com/db/{urllib.parse.quote_plus(call)}"
             webbrowser.open(url)
         qrz_button.clicked.connect(open_qrz)
-        layout_others.addWidget(qrz_button)
-        save_button = QPushButton("保存更改")
-        save_button.clicked.connect(save_changes)
-        layout_others.addWidget(save_button)
 
         del_button = QPushButton("删除日志")
         del_button.clicked.connect(lambda:del_log(index))
-        layout_others.addWidget(del_button)
+
+        button_row_layout = QHBoxLayout()
+        button_row_layout.setSpacing(10)
+        button_row_layout.addWidget(qrz_button)
+        button_row_layout.addWidget(del_button)
+
+        layout_others.addLayout(button_row_layout)
+
+        save_button = QPushButton("保存更改")
+        save_button.clicked.connect(save_changes)
+        layout_others.addWidget(save_button)
         
         
         project_others_window.show()
