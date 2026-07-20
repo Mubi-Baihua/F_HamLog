@@ -76,6 +76,13 @@ def main():
             url = f"https://www.qrz.com/db/{urllib.parse.quote_plus(callsign)}"
         webbrowser.open(url)
     
+    def batch_project():
+        print("批量记录")
+        import batch_project
+        global batch_window  # 保持引用，防止被回收
+        batch_window = QMainWindow()
+        batch_project.main(batch_window)
+    
     app = QApplication(sys.argv)
     app.setWindowIcon(QIcon("file/F_HamLog.ico"))
 
@@ -128,9 +135,10 @@ def main():
     h_layout.setContentsMargins(0, 0, 0, 0)
     h_layout.setSpacing(0)
 
-    button_sat = QPushButton("批量记录")
-    button_sat.setFixedSize(100, 40)
-    h_layout.addWidget(button_sat)
+    button_batch = QPushButton("批量记录")
+    button_batch.setFixedSize(100, 40)
+    button_batch.clicked.connect(batch_project)
+    h_layout.addWidget(button_batch)
 
     button_qrz = QPushButton("QRZ主页")
     button_qrz.setFixedSize(100, 40)
