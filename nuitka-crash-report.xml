@@ -3092,7 +3092,7 @@
       <module_usage name="hmac" finding="absolute" line="635" />
     </module_usages>
   </module>
-  <module name="import_from_HAM_tolls" kind="CompiledPythonModule" usage="import" reason="Instructed by user to follow to all modules." source_path="${cwd}\import_from_HAM_tolls.py">
+  <module name="input_HAM_tolls" kind="CompiledPythonModule" usage="import" reason="Instructed by user to follow to all modules." source_path="${cwd}\input_HAM_tolls.py">
     <optimization-time pass="1" time="1.95" micro_passes="5" max_branch_merge="67" merged_total="1971" />
     <optimization-time pass="2" time="0.02" micro_passes="1" max_branch_merge="66" merged_total="389" />
     <distribution-usages>
@@ -16646,7 +16646,7 @@
       <module_usage name="json" finding="absolute" line="243" />
       <module_usage name="json" finding="absolute" line="250" />
       <module_usage name="json" finding="absolute" line="264" />
-      <module_usage name="import_from_HAM_tolls" finding="absolute" line="273" />
+      <module_usage name="input_HAM_tolls" finding="absolute" line="273" />
       <module_usage name="input_adi" finding="absolute" line="283" />
       <module_usage name="output_adi" finding="absolute" line="295" />
       <module_usage name="output_excel" finding="absolute" line="300" />
@@ -16879,7 +16879,7 @@
       <module_usage name="json" finding="absolute" line="279" />
       <module_usage name="json" finding="absolute" line="285" />
       <module_usage name="json" finding="absolute" line="299" />
-      <module_usage name="import_from_HAM_tolls" finding="absolute" line="319" />
+      <module_usage name="input_HAM_tolls" finding="absolute" line="319" />
       <module_usage name="input_adi" finding="absolute" line="329" />
       <module_usage name="output_adi" finding="absolute" line="341" />
       <module_usage name="output_excel" finding="absolute" line="346" />
@@ -18814,7 +18814,7 @@
     <module_data filename="module.et_xmlfile.const" blob_name="et_xmlfile" blob_size="419" input_size="782" />
     <module_data filename="module.et_xmlfile.incremental_tree.const" blob_name="et_xmlfile.incremental_tree" blob_size="10728" input_size="11515" />
     <module_data filename="module.et_xmlfile.xmlfile.const" blob_name="et_xmlfile.xmlfile" blob_size="1885" input_size="2722" />
-    <module_data filename="module.import_from_HAM_tolls.const" blob_name="import_from_HAM_tolls" blob_size="1662" input_size="3294" />
+    <module_data filename="module.input_HAM_tolls.const" blob_name="input_HAM_tolls" blob_size="1662" input_size="3294" />
     <module_data filename="module.input_adi.const" blob_name="input_adi" blob_size="2043" input_size="3887" />
     <module_data filename="module.numpy.__config__.const" blob_name="numpy.__config__" blob_size="3297" input_size="4227" />
     <module_data filename="module.numpy._array_api_info.const" blob_name="numpy._array_api_info" blob_size="7475" input_size="8325" />

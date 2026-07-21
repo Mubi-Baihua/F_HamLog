@@ -155,7 +155,7 @@ def main(window_ip):
             }
             
             project_others_window = QMainWindow()
-            project_others_window.resize(400, 600)
+            project_others_window.resize(410, 600)
             project_others_window.setWindowTitle('新建日志')
             translation_dict = {
                 'date': '日期',
@@ -228,7 +228,7 @@ def main(window_ip):
         def project_others(index):
             global project_others_window,file
             project_others_window = QMainWindow()
-            project_others_window.resize(400, 670)
+            project_others_window.resize(410, 670)
             project_others_window.setWindowTitle('更多信息')
             translation_dict = {
                 'date': '日期',
@@ -354,11 +354,11 @@ def main(window_ip):
             socket_.send('exit'.encode('utf-8'))
             window.close()
 
-        def import_from_HAM_tolls_():
+        def input_HAM_tolls_():
             global file
             old_file = file.copy()  # 使用copy()确保是深拷贝
-            import import_from_HAM_tolls
-            file = import_from_HAM_tolls.main(file)
+            import input_HAM_tolls
+            file = input_HAM_tolls.main(file)
             table_update()
             if QMessageBox.question(window, "导入日志", "应用导入吗？") == QMessageBox.No:
                 file = old_file
@@ -424,9 +424,9 @@ def main(window_ip):
         import_from_ADI_action.triggered.connect(lambda: import_from_ADI())
         import_menu.addAction(import_from_ADI_action)
 
-        import_from_HAM_tolls_action = QAction('从 HAM个人工具 导入日志', window)
-        import_from_HAM_tolls_action.triggered.connect(lambda: import_from_HAM_tolls_())
-        import_menu.addAction(import_from_HAM_tolls_action)
+        input_HAM_tolls_action = QAction('从 HAM个人工具 导入日志', window)
+        input_HAM_tolls_action.triggered.connect(lambda: input_HAM_tolls_())
+        import_menu.addAction(input_HAM_tolls_action)
 
         import_menu.addSeparator()
 
