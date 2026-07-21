@@ -6,6 +6,7 @@ import sys
 import re
 import json
 import os
+import fhl_rw
 
 translation_dict = {
                 'date': '日期',
@@ -33,7 +34,7 @@ def main(window):
     window.setWindowTitle('批量记录')
     
     with open('file/m_xml.txt', 'r', encoding='utf-8') as f:
-                xml_dict = eval(f.read())
+        xml_dict = eval(f.read())
 
     date = time_.strftime("%Y-%m-%d", time_.localtime())
     time = time_.strftime("%H:%M", time_.localtime())
@@ -227,19 +228,14 @@ def main(window):
                 QMessageBox.warning(window, "提示", "没有可保存的记录。")
                 return
 
-            def save_records_to_path(records, save_path):
-                with open(save_path, 'w', encoding='utf-8') as f:
-                    json.dump(records, f, ensure_ascii=False, indent=2)
+            def save_records_to_path(records, save_path,key = None):
+                fhl_rw.write_fhl_file(save_path, records,key)
 
             def load_records_from_path(load_path):
                 if not os.path.exists(load_path):
                     return []
-                with open(load_path, 'r', encoding='utf-8') as f:
-                    try:
-                        data = json.load(f)
-                    except json.JSONDecodeError:
-                        data = eval(f.read())
-                return data if isinstance(data, list) else []
+                data,key = fhl_rw.read_fhl_file(load_path)
+                return data,key
 
             finish_dialog = QDialog(window)
             finish_dialog.setWindowTitle('批量记录完成')
@@ -268,9 +264,9 @@ def main(window):
                 )
                 if project_path == '':
                     return
-                records = load_records_from_path(project_path)
+                records,key = load_records_from_path(project_path)
                 records.extend(fhl_list)
-                save_records_to_path(records, project_path)
+                save_records_to_path(records, project_path,key)
                 QMessageBox.information(finish_dialog, '完成', f'已添加 {len(fhl_list)} 条记录到项目。')
                 finish_dialog.accept()
 
@@ -289,9 +285,9 @@ def main(window):
 
             def add_to_default_log():
                 default_path = os.path.join('file', 'main.fhl')
-                records = load_records_from_path(default_path)
+                records,key = load_records_from_path(default_path)
                 records.extend(fhl_list)
-                save_records_to_path(records, default_path)
+                save_records_to_path(records, default_path,key)
                 QMessageBox.information(finish_dialog, '完成', f'已添加到 {len(fhl_list)} 条记录到默认通联日志')
                 finish_dialog.accept()
 

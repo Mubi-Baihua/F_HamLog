@@ -9,9 +9,10 @@ import re
 import subprocess
 import webbrowser
 import urllib.parse
+import fhl_rw
 
 file = None
-
+key = None
 
 def _ensure_log_keys(entry):
     # 确保单条记录包含新加的字段
@@ -26,9 +27,9 @@ def _upgrade_file_records(file_list):
     for e in file_list:
         _ensure_log_keys(e)
 
-
-def main(window, filee='', save_path='',quick_poject=False):
-    global file
+def main(window, filee='', save_path='',key_ = None,quick_poject=False):
+    global file,key
+    key = key_
     if isinstance(filee, list):
         file = filee
         _upgrade_file_records(file)
@@ -321,11 +322,10 @@ def main(window, filee='', save_path='',quick_poject=False):
         aouto_save_b = xml_dict['aouto_save']
 
         if (not(message) and aouto_save_b) or message:
-            import json
-            with open(save_path, 'w', encoding='utf-8') as f:
-                json.dump(file, f, ensure_ascii=False, indent=2)
-                if message:
-                    QMessageBox.information(window, "保存成功", "保存成功！")
+            global key
+            fhl_rw.write_fhl_file(save_path,file,key)
+            if message:
+                QMessageBox.information(window, "保存成功", "保存成功！")
 
     def osave():
         import json
@@ -337,15 +337,15 @@ def main(window, filee='', save_path='',quick_poject=False):
         )
         if save_path == '':
             return
-        with open(save_path, 'w', encoding='utf-8') as f:
-            json.dump(file, f, ensure_ascii=False, indent=2)
-            QMessageBox.information(window, "另存成功", "另存成功！")
+        global key
+        fhl_rw.write_fhl_file(save_path,file,key)
+        QMessageBox.information(window, "另存成功", "另存成功！")
 
     def esave():
         import json
-        with open(save_path, 'w', encoding='utf-8') as f:
-            json.dump(file, f, ensure_ascii=False, indent=2)
-            QMessageBox.information(window, "保存成功", "保存成功！")
+        global key
+        fhl_rw.write_fhl_file(save_path,file,key)
+        QMessageBox.information(window, "保存成功", "保存成功！")
         sys.exit()
 
     def input_HAM_tolls_():
@@ -435,9 +435,10 @@ def main(window, filee='', save_path='',quick_poject=False):
         )
         if not save_path:
             return
-        import json
-        with open(save_path, 'w', encoding='utf-8') as f:
-            json.dump(selected_records, f, ensure_ascii=False, indent=2)
+        global key
+        fhl_rw.write_fhl_file(save_path,selected_records,key)
+
+            
         QMessageBox.information(window, "导出成功", "导出成功！")
 
     def output_selected_adi():
@@ -487,6 +488,39 @@ def main(window, filee='', save_path='',quick_poject=False):
     osave_action.setShortcut('Ctrl+Shift+S')
     osave_action.triggered.connect(lambda: osave())
     file_menu.addAction(osave_action)
+
+    file_menu.addSeparator()
+
+    def aes_open_():
+        global key
+        QMessageBox.information(window,'加密项目','F HamLog 将使用AES加密项目，\n请牢记你的密钥！若密钥丢失则无法恢复日志数据。')
+        key = fhl_rw.get_user_key_dialog()
+        list_time(message=False)
+        save(message=False)
+        QMessageBox.information(window,'加密项目','加密成功！\n请重新打开此项目。')
+        window.close()
+    def aes_close_():
+        global key
+        input_key = fhl_rw.get_user_key_dialog()
+        if input_key == key:
+            key = None
+            list_time(message=False)
+            save(message=False)
+            QMessageBox.information(window,'解密项目','解密成功！\n请重新打开此项目。')
+            window.close()
+        else:
+            QMessageBox.warning(window,'解密项目','密钥错误！')
+
+    if key == None:
+        aes_open = QAction('加密此项目', window)
+        aes_open.setShortcut('Ctrl+Alt+E')
+        aes_open.triggered.connect(aes_open_)
+        file_menu.addAction(aes_open)
+    else:
+        aes_close = QAction('不再加密此项目', window)
+        aes_close.setShortcut('Ctrl+Alt+E')
+        aes_close.triggered.connect(aes_close_)
+        file_menu.addAction(aes_close)
 
     file_menu.addSeparator()
 
@@ -764,12 +798,11 @@ def main(window, filee='', save_path='',quick_poject=False):
     stats_action.triggered.connect(lambda: show_statistics())
     tool_menu.addAction(stats_action)
 
-    tool_menu.addSeparator()
-
     research_call_action = QAction('搜索', window)
     research_call_action.setShortcut('Ctrl+R')
     research_call_action.triggered.connect(lambda: research_call(file))
     tool_menu.addAction(research_call_action)
+    
 
     central_widget = QWidget()
     window.setCentralWidget(central_widget)
@@ -800,7 +833,9 @@ def main(window, filee='', save_path='',quick_poject=False):
         action = QAction(pack_name, window)
 
         def handler():
-            global file
+            global file,key
+            if key != None:
+                QMessageBox.information(window,'加密项目','F HamLog 会将项目解密后提供给插件，\n请确保插件来自可信的开发者。')
             import json
             with open(f'file/pypack/{pack_name}/input.fhl','w',encoding='utf-8') as f:
                 json.dump(file, f, ensure_ascii=False, indent=2)
@@ -811,6 +846,8 @@ def main(window, filee='', save_path='',quick_poject=False):
             except FileNotFoundError:
                 QMessageBox.warning(window, "插件错误", f"插件 {pack_name} 未正确生成输出文件！")
             table_update()
+            os.remove(f'file/pypack/{pack_name}/input.fhl')
+            os.remove(f'file/pypack/{pack_name}/output.fhl')
 
         action.triggered.connect(handler)
         return action

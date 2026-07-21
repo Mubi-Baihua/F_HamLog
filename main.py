@@ -5,6 +5,8 @@ import sys
 import json
 import webbrowser
 import urllib.parse
+import fhl_rw
+
 def main():
     def quick_project():
         print("通联日志")
@@ -13,13 +15,10 @@ def main():
         project_window = QMainWindow()
         save_path = 'file/main.fhl'
         print(save_path)
-        try:
-            with open(save_path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-        except json.JSONDecodeError:
-            with open(save_path, 'r', encoding='utf-8') as f:
-                data = eval(f.read())
-        project.main(project_window, data, save_path,quick_poject=True)
+        data,key = fhl_rw.read_fhl_file(save_path)
+        if data == None:
+            return
+        project.main(project_window, data, save_path,key_=key,quick_poject=True)
     def new_project():
         print("新建项目")
         import project
@@ -42,13 +41,10 @@ def main():
         if save_path == '':
             return
         print(save_path)
-        try:
-            with open(save_path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-        except json.JSONDecodeError:
-            with open(save_path, 'r', encoding='utf-8') as f:
-                data = eval(f.read())
-        project.main(project_window, data, save_path)
+        data,key = fhl_rw.read_fhl_file(save_path)
+        if data == None:
+            return
+        project.main(project_window, data, save_path,key_=key)
 
     '''    
     def remote_project():

@@ -1,6 +1,7 @@
 import json
 from PySide6.QtWidgets import *
 from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
+import fhl_rw
 
 
 def _ensure_log_keys(entry):
@@ -71,16 +72,7 @@ def main(file_list):
     if not file_path:
         return list(file_list or [])
 
-    try:
-        with open(file_path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-    except Exception:
-        try:
-            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                data = eval(f.read())
-        except Exception:
-            QMessageBox.warning(None, "导入失败", "无法读取所选的 F HamLog 项目文件。")
-            return list(file_list or [])
+    data,key = fhl_rw.read_fhl_file(file_path)
 
     records = _normalize_records(data if isinstance(data, list) else [])
     if not records:
