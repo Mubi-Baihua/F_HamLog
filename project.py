@@ -423,6 +423,23 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
             return None
         return selected_records
 
+    def _get_main_checkbox(orig_index):
+        # 获取主页面表格指定行第0列内嵌的复选框控件
+        if table is None:
+            return None
+        if orig_index < 0 or orig_index >= table.rowCount():
+            return None
+        cell_w = table.cellWidget(orig_index, 0)
+        if cell_w is not None:
+            return cell_w.findChild(QCheckBox)
+        return None
+
+    def set_main_checkbox(orig_index, checked):
+        # 将搜索结果的勾选状态同步到主页面对应行的复选框
+        cb = _get_main_checkbox(orig_index)
+        if cb is not None:
+            cb.setChecked(bool(checked))
+
     def output_selected_fhl():
         selected_records = get_selected_records()
         if not selected_records:
@@ -656,45 +673,87 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
             return
 
         research_window = QMainWindow()
-        research_window.resize(1250, 600)
+        research_window.resize(1300, 600)
         research_window.setWindowTitle(f"搜索结果：{edit.text().strip()}")
         central = QWidget()
         research_window.setCentralWidget(central)
         lay = QVBoxLayout(central)
-        table_r = QTableWidget(len(matches), 13)
-        table_r.setHorizontalHeaderLabels(["日期","时间","己方呼号","对方呼号","频率","调制模式","传播模式","卫星名称", "己方接收信号", "对方接收信号", "己方QTH", "对方QTH","更多"])
+
+        # 顶部工具栏：提示 + 全选/取消全选
+        search_checkboxes = []  # [(checkbox, orig_index), ...]
+        top_row = QHBoxLayout()
+        hint = QLabel('勾选下方记录，选择结果会自动同步到主页面的选择框')
+        hint.setStyleSheet('color: gray;')
+        top_row.addWidget(hint)
+        top_row.addStretch(1)
+        select_all_btn = QPushButton('全选')
+        clear_all_btn = QPushButton('取消全选')
+
+        def _select_all():
+            for cb, _ in search_checkboxes:
+                cb.setChecked(True)
+
+        def _clear_all():
+            for cb, _ in search_checkboxes:
+                cb.setChecked(False)
+
+        select_all_btn.clicked.connect(_select_all)
+        clear_all_btn.clicked.connect(_clear_all)
+        top_row.addWidget(select_all_btn)
+        top_row.addWidget(clear_all_btn)
+        lay.addLayout(top_row)
+
+        # 新增"选择"列（列0），其余列整体右移一列
+        table_r = QTableWidget(len(matches), 14)
+        table_r.setHorizontalHeaderLabels(["选择","日期","时间","己方呼号","对方呼号","频率","调制模式","传播模式","卫星名称", "己方接收信号", "对方接收信号", "己方QTH", "对方QTH","更多"])
         table_r.setEditTriggers(QAbstractItemView.NoEditTriggers)
         for row, (orig_index, rec) in enumerate(matches):
-            table_r.setItem(row, 0, QTableWidgetItem(rec.get('date', '')))
-            table_r.setItem(row, 1, QTableWidgetItem(rec.get('time', '')))
-            table_r.setItem(row, 2, QTableWidgetItem(rec.get('m_call', '')))
-            table_r.setItem(row, 3, QTableWidgetItem(rec.get('o_call', '')))
-            table_r.setItem(row, 4, QTableWidgetItem(rec.get('freq', '')))
-            table_r.setItem(row, 5, QTableWidgetItem(rec.get('mode', '')))
-            table_r.setItem(row, 6, QTableWidgetItem(rec.get('prop_mode', '')))
-            table_r.setItem(row, 7, QTableWidgetItem(rec.get('sat_name', '')))
-            table_r.setItem(row, 8, QTableWidgetItem(rec.get('m_rst', '')))
-            table_r.setItem(row, 9, QTableWidgetItem(rec.get('o_rst', '')))
-            table_r.setItem(row, 10, QTableWidgetItem(rec.get('m_qth', '')))
-            table_r.setItem(row, 11, QTableWidgetItem(rec.get('o_qth', '')))
+            # 选择复选框：初始状态与主页面当前勾选保持一致
+            checkbox = QCheckBox()
+            main_cb = _get_main_checkbox(orig_index)
+            checkbox.setChecked(main_cb.isChecked() if main_cb is not None else False)
+            checkbox.setFixedSize(25, 20)
+            checkbox_widget = QWidget()
+            checkbox_layout = QHBoxLayout(checkbox_widget)
+            checkbox_layout.setContentsMargins(0, 0, 0, 0)
+            checkbox_layout.setAlignment(Qt.AlignCenter)
+            checkbox_layout.addWidget(checkbox)
+            table_r.setCellWidget(row, 0, checkbox_widget)
+            # 勾选变化时实时同步到主页面对应行
+            checkbox.toggled.connect(partial(set_main_checkbox, orig_index))
+            search_checkboxes.append((checkbox, orig_index))
+
+            table_r.setItem(row, 1, QTableWidgetItem(rec.get('date', '')))
+            table_r.setItem(row, 2, QTableWidgetItem(rec.get('time', '')))
+            table_r.setItem(row, 3, QTableWidgetItem(rec.get('m_call', '')))
+            table_r.setItem(row, 4, QTableWidgetItem(rec.get('o_call', '')))
+            table_r.setItem(row, 5, QTableWidgetItem(rec.get('freq', '')))
+            table_r.setItem(row, 6, QTableWidgetItem(rec.get('mode', '')))
+            table_r.setItem(row, 7, QTableWidgetItem(rec.get('prop_mode', '')))
+            table_r.setItem(row, 8, QTableWidgetItem(rec.get('sat_name', '')))
+            table_r.setItem(row, 9, QTableWidgetItem(rec.get('m_rst', '')))
+            table_r.setItem(row, 10, QTableWidgetItem(rec.get('o_rst', '')))
+            table_r.setItem(row, 11, QTableWidgetItem(rec.get('m_qth', '')))
+            table_r.setItem(row, 12, QTableWidgetItem(rec.get('o_qth', '')))
             more_btn = QPushButton("更多")
             more_btn.clicked.connect(partial(project_others, orig_index))
-            table_r.setCellWidget(row, 12, more_btn)
+            table_r.setCellWidget(row, 13, more_btn)
 
         table_r.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
-        table_r.setColumnWidth(0, 80)
-        table_r.setColumnWidth(1, 70)
-        table_r.setColumnWidth(2, 90)
+        table_r.setColumnWidth(0, 45)
+        table_r.setColumnWidth(1, 80)
+        table_r.setColumnWidth(2, 70)
         table_r.setColumnWidth(3, 90)
-        table_r.setColumnWidth(4, 70)
-        table_r.setColumnWidth(5, 80)
-        table_r.setColumnWidth(6, 90)
+        table_r.setColumnWidth(4, 90)
+        table_r.setColumnWidth(5, 70)
+        table_r.setColumnWidth(6, 80)
         table_r.setColumnWidth(7, 90)
-        table_r.setColumnWidth(8, 80)
+        table_r.setColumnWidth(8, 90)
         table_r.setColumnWidth(9, 80)
-        table_r.setColumnWidth(10, 120)
+        table_r.setColumnWidth(10, 80)
         table_r.setColumnWidth(11, 120)
-        table_r.setColumnWidth(12, 80)
+        table_r.setColumnWidth(12, 120)
+        table_r.setColumnWidth(13, 80)
 
         lay.addWidget(table_r)
         table_r.scrollToBottom()
