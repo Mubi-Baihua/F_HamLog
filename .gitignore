@@ -1,5 +1,14 @@
+# 日志数据示例文件
 /1 copy.fhl
 /1.fhl
 /2.fhl
 /3.fhl
+
+# IDE
 .vs/
+
+# 构建产物（体积大，不入库）
+main.dist/
+F HamLog 2.1/F HamLog 2.1 setup.exe
+__pycache__/
+*.pyc

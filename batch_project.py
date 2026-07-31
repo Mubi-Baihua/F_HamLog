@@ -29,7 +29,7 @@ translation_dict = {
 page_index = 0
 fhl_list= []
 
-def main(window):
+def main(window, preset=None, on_saved=None):
     window.resize(410, 660)
     window.setWindowTitle('批量记录')
     
@@ -61,6 +61,19 @@ def main(window):
                 'o_pow': '',
                 'notes': ''
             }
+
+    # 重置模块级全局，避免上次批量记录的残留数据
+    global fhl_list, page_index
+    fhl_list = []
+    page_index = 0
+
+    # 若由卫星窗口等外部调用并传入预填数据，则用其覆盖对应字段
+    # （其余字段如 m_call/o_call/m_qth 仍取自设置，保持默认）
+    if preset:
+        for k in ('date', 'time', 'freq', 'freq_rx', 'mode', 'prop_mode', 'sat_name'):
+            v = preset.get(k)
+            if v not in (None, ''):
+                app_list[k] = v
 
     rows = len(translation_dict)
     table_others = QTableWidget(rows, 2)
@@ -223,6 +236,18 @@ def main(window):
                 fhl_list.append(app_dict_now)
             else:
                 fhl_list[page_index] = app_dict_now
+
+            # 若由卫星窗口（项目界面）传入 on_saved，则直接追加到项目文件，不弹保存方式选择
+            if on_saved is not None:
+                try:
+                    on_saved(fhl_list)
+                    QMessageBox.information(window, '完成',
+                                            f'已添加 {len(fhl_list)} 条记录到当前项目。')
+                except Exception as e:
+                    QMessageBox.warning(window, '保存失败',
+                                        f'添加到项目失败：\n{e}')
+                window_page.close()
+                return
 
             if not fhl_list:
                 QMessageBox.warning(window, "提示", "没有可保存的记录。")
