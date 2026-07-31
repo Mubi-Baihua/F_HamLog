@@ -10,9 +10,25 @@ import subprocess
 import webbrowser
 import urllib.parse
 import fhl_rw
+import copy
+
+# 复制/粘贴使用的字段顺序（与表格列对应，英文键名作为剪贴板表头，便于跨窗口/跨软件解析）
+COPY_FIELDS = ['date', 'time', 'm_call', 'o_call', 'freq', 'freq_rx', 'mode',
+               'prop_mode', 'sat_name', 'm_rst', 'o_rst', 'm_qth', 'o_qth',
+               'm_dig', 'o_dig', 'm_ant', 'o_ant', 'm_pow', 'o_pow', 'notes']
+# 字段 -> 中文表头（粘贴时兼容中文表头）
+FIELD_LABELS = {
+    'date': '日期', 'time': '时间', 'm_call': '己方呼号', 'o_call': '对方呼号',
+    'freq': '频率', 'freq_rx': '接收频率', 'mode': '调制模式', 'prop_mode': '传播方式',
+    'sat_name': '卫星名称', 'm_rst': '己方接收信号', 'o_rst': '对方接收信号',
+    'm_qth': '己方QTH', 'o_qth': '对方QTH', 'm_dig': '己方设备', 'o_dig': '对方设备',
+    'm_ant': '己方天线', 'o_ant': '对方天线', 'm_pow': '己方功率', 'o_pow': '对方功率',
+    'notes': '备注'
+}
 
 file = None
 key = None
+_open_windows = []  # 保持由本模块打开的卫星批量记录窗口引用，防止被回收
 
 def _ensure_log_keys(entry):
     # 确保单条记录包含新加的字段
@@ -36,6 +52,116 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
     else:
         file = []
     table = None
+    undo_stack = []   # 撤销栈：保存 file 的完整深拷贝快照
+    redo_stack = []   # 重做栈
+
+    # ---------- 撤销 / 重做 / 复制 / 粘贴 ----------
+    def snapshot_before():
+        # 在修改 file 之前调用，记录当前完整状态到撤销栈（深拷贝，避免后续修改污染快照）
+        undo_stack.append(copy.deepcopy(file))
+        if len(undo_stack) > 300:
+            undo_stack.pop(0)
+        redo_stack.clear()
+
+    def undo():
+        global file
+        if not undo_stack:
+            QMessageBox.information(window, "撤销", "没有可撤销的操作。")
+            return
+        redo_stack.append(copy.deepcopy(file))
+        file = undo_stack.pop()
+        table_update()
+
+    def redo():
+        global file
+        if not redo_stack:
+            QMessageBox.information(window, "重做", "没有可重做的操作。")
+            return
+        undo_stack.append(copy.deepcopy(file))
+        file = redo_stack.pop()
+        table_update()
+
+    def get_selected_row_indexes():
+        # 优先返回“选择”列勾选的行；若都没有勾选，则回退到表格当前选中的行
+        result = []
+        if table is None:
+            return result
+        for row in range(table.rowCount()):
+            cell_w = table.cellWidget(row, 0)
+            if cell_w is not None:
+                cb = cell_w.findChild(QCheckBox)
+                if cb is not None and cb.isChecked():
+                    result.append(row)
+        if result:
+            return result
+        for idx in table.selectionModel().selectedRows():
+            result.append(idx.row())
+        return result
+
+    def copy_records_to_clipboard(records):
+        if not records:
+            return False
+        lines = ['\t'.join(COPY_FIELDS)]
+        for rec in records:
+            lines.append('\t'.join(str(rec.get(k, '')) for k in COPY_FIELDS))
+        QApplication.clipboard().setText('\n'.join(lines))
+        return True
+
+    def copy_from_main():
+        rows = get_selected_row_indexes()
+        if not rows:
+            QMessageBox.information(window, "复制", "请先勾选或选中要复制的行。")
+            return
+        records = [file[r] for r in rows]
+        if copy_records_to_clipboard(records):
+            QMessageBox.information(window, "复制", f"已复制 {len(records)} 条日志到剪贴板。")
+
+    def paste_to_main():
+        text = QApplication.clipboard().text()
+        if not text or not text.strip():
+            QMessageBox.information(window, "粘贴", "剪贴板为空或不是文本。")
+            return
+        lines = [ln for ln in text.replace('\r\n', '\n').split('\n') if ln != '']
+        if not lines:
+            return
+        header = [h.strip() for h in lines[0].split('\t')]
+        label_to_field = {v: k for k, v in FIELD_LABELS.items()}
+        field_index = {}
+        for i, h in enumerate(header):
+            if h in COPY_FIELDS:
+                field_index[h] = i
+            elif h in label_to_field:
+                field_index[label_to_field[h]] = i
+        if not field_index:
+            QMessageBox.warning(window, "粘贴", "剪贴板内容无法识别为日志数据。")
+            return
+        new_records = []
+        for ln in lines[1:]:
+            cells = ln.split('\t')
+            rec = {k: '' for k in COPY_FIELDS}
+            for fld, idx in field_index.items():
+                if idx < len(cells):
+                    rec[fld] = cells[idx]
+            new_records.append(rec)
+        if not new_records:
+            return
+        snapshot_before()
+        file.extend(new_records)
+        table_update()
+        QMessageBox.information(window, "粘贴", f"已粘贴 {len(new_records)} 条日志。")
+
+    def table_context_menu(pos):
+        menu = QMenu(window)
+        a1 = QAction('全选', window); a1.triggered.connect(lambda: set_all_rows_checked(True)); menu.addAction(a1)
+        a2 = QAction('反选', window); a2.triggered.connect(invert_rows_checked); menu.addAction(a2)
+        a3 = QAction('取消选择', window); a3.triggered.connect(lambda: set_all_rows_checked(False)); menu.addAction(a3)
+        menu.addSeparator()
+        a4 = QAction('复制', window); a4.triggered.connect(copy_from_main); menu.addAction(a4)
+        a5 = QAction('粘贴', window); a5.triggered.connect(paste_to_main); menu.addAction(a5)
+        menu.addSeparator()
+        a6 = QAction('撤销', window); a6.triggered.connect(undo); menu.addAction(a6)
+        a7 = QAction('重做', window); a7.triggered.connect(redo); menu.addAction(a7)
+        menu.exec(table.viewport().mapToGlobal(pos))
 
     def table_update(delete=True):
         nonlocal table
@@ -54,6 +180,9 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
         table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         table.setSelectionBehavior(QAbstractItemView.SelectRows)
         table.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        # 右键上下文菜单（含 选择/复制/粘贴/撤销/重做）
+        table.setContextMenuPolicy(Qt.CustomContextMenu)
+        table.customContextMenuRequested.connect(table_context_menu)
         print(file_length)
         # 统一使用默认列宽，不设置任何固定宽度
         
@@ -117,7 +246,7 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
 
         table.scrollToBottom()  # 自动跳到底部
 
-    def new():
+    def new(preset=None):
             with open('file/m_xml.txt', 'r', encoding='utf-8') as f:
                 xml_dict = eval(f.read())
             global project_others_window,file
@@ -127,7 +256,7 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
             file_app = {
                 'date': date,
                 'time': time,
-                'm_call': xml_dict['m_call'],
+                'm_call': xml_dict.get('m_call', ''),
                 'o_call': '',
                 'freq': '',
                 'freq_rx': '',
@@ -136,9 +265,9 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
                 'sat_name': '',
                 'm_rst': '59',
                 'o_rst': '59',
-                'm_qth': xml_dict['m_qth'],
+                'm_qth': xml_dict.get('m_qth', ''),
                 'o_qth': '',
-                "m_dig": xml_dict['m_dig'],
+                "m_dig": xml_dict.get('m_dig', ''),
                 'o_dig': '',
                 'm_ant': '',
                 'o_ant': '',
@@ -146,6 +275,12 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
                 'o_pow': '',
                 'notes': ''
             }
+            if preset:
+                for k in ('date', 'time', 'm_call', 'o_call', 'freq', 'freq_rx',
+                          'mode', 'prop_mode', 'sat_name'):
+                    v = preset.get(k)
+                    if v not in (None, ''):
+                        file_app[k] = v
             
             project_others_window = QMainWindow()
             project_others_window.resize(410, 650)
@@ -196,8 +331,8 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
                                 QMessageBox.warning(project_others_window, "格式错误", f"日期格式错误，应为YYYY-MM-DD")
                                 return
                     elif key == 'time':
-                        if not re.search(r'^\d{2}:\d{2}$', table_others.item(row, 1).text()):
-                            QMessageBox.warning(project_others_window, "格式错误", f"时间格式错误，应为HH:MM")
+                        if not re.search(r'^\d{2}:\d{2}(:\d{2})?$', table_others.item(row, 1).text()):
+                            QMessageBox.warning(project_others_window, "格式错误", f"时间格式错误，应为HH:MM或HH:MM:SS")
                             return
                     elif key == 'm_call' or key == 'o_call' or key == 'freq' or key == 'mode'or key == 'm_rst' or key == 'o_rst':
                         if table_others.item(row, 1).text() == '':
@@ -209,6 +344,7 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
                         file_app[key] = item.text()
                 project_others_window.close()
 
+                snapshot_before()
                 file.append(file_app)
 
                 table_update()
@@ -261,22 +397,26 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
         def save_changes():
             # 获取表格数据并更新到 file 结构
             keys_list = list(translation_dict.keys())
+            # 先校验所有字段，校验不通过则不记录撤销点
             for row in range(len(keys_list)):
                 key = keys_list[row]
-
+                text = table_others.item(row, 1).text()
                 if key == 'date':
-                    if not re.search(r'^\d{4}-\d{2}-\d{2}$', table_others.item(row, 1).text()):
+                    if not re.search(r'^\d{4}-\d{2}-\d{2}$', text):
                         QMessageBox.warning(project_others_window, "格式错误", f"日期格式错误，应为YYYY-MM-DD")
                         return
                 elif key == 'time':
-                    if not re.search(r'^\d{2}:\d{2}$', table_others.item(row, 1).text()):
+                    if not re.search(r'^\d{2}:\d{2}$', text):
                         QMessageBox.warning(project_others_window, "格式错误", f"时间格式错误，应为HH:MM")
                         return
                 elif key == 'm_call' or key == 'o_call' or key == 'freq' or key == 'mode'or key == 'm_rst' or key == 'o_rst':
-                    if table_others.item(row, 1).text() == '':
+                    if text == '':
                         QMessageBox.warning(project_others_window, "格式错误", f"缺少 {translation_dict[key]} (必填)")
                         return
-
+            # 校验通过，记录撤销点后再写入
+            snapshot_before()
+            for row in range(len(keys_list)):
+                key = keys_list[row]
                 item = table_others.item(row, 1)  # 第二列是可编辑的内容
                 if item!=None:
                     file[index][key] = item.text()
@@ -284,6 +424,7 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
             table_update()
         def del_log(index):
             if QMessageBox.question(window, "删除日志", "确定要删除此日志吗？") == QMessageBox.Yes:
+                snapshot_before()
                 file.pop(index)
                 project_others_window.close()
                 table_update()
@@ -352,6 +493,7 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
         global file
         old_file = file.copy()  # 使用copy()确保是深拷贝
         import input_HAM_tolls
+        snapshot_before()
         file = input_HAM_tolls.main(file)
         table_update()
         if file == old_file:  # 如果没有导入任何内容，则不保存
@@ -365,6 +507,7 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
         old_file = file.copy()
         import input_adi
         try:
+            snapshot_before()
             file = input_adi.main(file)
         except Exception as e:
             QMessageBox.warning(window, "导入失败", f"导入 ADI 失败：{e}")
@@ -380,6 +523,7 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
         global file
         old_file = file.copy()  # 使用copy()确保是深拷贝
         import input_fhl
+        snapshot_before()
         file = input_fhl.main(file)
         table_update()
         if file == old_file:  # 如果没有导入任何内容，则不保存
@@ -422,6 +566,23 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
             QMessageBox.warning(window, "导出失败", "请先勾选要导出的日志行。")
             return None
         return selected_records
+
+    def _get_main_checkbox(orig_index):
+        # 获取主页面表格指定行第0列内嵌的复选框控件
+        if table is None:
+            return None
+        if orig_index < 0 or orig_index >= table.rowCount():
+            return None
+        cell_w = table.cellWidget(orig_index, 0)
+        if cell_w is not None:
+            return cell_w.findChild(QCheckBox)
+        return None
+
+    def set_main_checkbox(orig_index, checked):
+        # 将搜索结果的勾选状态同步到主页面对应行的复选框
+        cb = _get_main_checkbox(orig_index)
+        if cb is not None:
+            cb.setChecked(bool(checked))
 
     def output_selected_fhl():
         selected_records = get_selected_records()
@@ -532,6 +693,71 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
     zexit_action.triggered.connect(lambda: sys.exit())
     file_menu.addAction(zexit_action)
 
+    # 创建"编辑"菜单（撤销/重做/复制/粘贴）
+    edit_menu = menu_bar.addMenu('编辑')
+
+    undo_action = QAction('撤销', window)
+    undo_action.setShortcut('Ctrl+Z')
+    undo_action.triggered.connect(undo)
+    edit_menu.addAction(undo_action)
+
+    redo_action = QAction('重做', window)
+    redo_action.setShortcut('Ctrl+Y')
+    redo_action.triggered.connect(redo)
+    edit_menu.addAction(redo_action)
+
+    edit_menu.addSeparator()
+
+    copy_action = QAction('复制', window)
+    copy_action.setShortcut('Ctrl+C')
+    copy_action.triggered.connect(copy_from_main)
+    edit_menu.addAction(copy_action)
+
+    paste_action = QAction('粘贴', window)
+    paste_action.setShortcut('Ctrl+V')
+    paste_action.triggered.connect(paste_to_main)
+    edit_menu.addAction(paste_action)
+
+    def set_all_rows_checked(checked):
+        # 遍历主表格“选择”列（第0列）的复选框，统一设置勾选状态
+        if table is None:
+            return
+        for row in range(table.rowCount()):
+            cell_w = table.cellWidget(row, 0)
+            if cell_w is not None:
+                cb = cell_w.findChild(QCheckBox)
+                if cb is not None:
+                    cb.setChecked(checked)
+
+    def invert_rows_checked():
+        # 反转每一行的勾选状态
+        if table is None:
+            return
+        for row in range(table.rowCount()):
+            cell_w = table.cellWidget(row, 0)
+            if cell_w is not None:
+                cb = cell_w.findChild(QCheckBox)
+                if cb is not None:
+                    cb.setChecked(not cb.isChecked())
+
+    select_menu = menu_bar.addMenu('选择')
+
+    select_all_action = QAction('全选', window)
+    select_all_action.setShortcut('Ctrl+A')
+    select_all_action.triggered.connect(lambda: set_all_rows_checked(True))
+    select_menu.addAction(select_all_action)
+
+    invert_action = QAction('反选', window)
+    invert_action.setShortcut('Ctrl+I')
+    invert_action.triggered.connect(invert_rows_checked)
+    select_menu.addAction(invert_action)
+
+    deselect_action = QAction('取消选择', window)
+    deselect_action.setShortcut('Ctrl+D')
+    deselect_action.triggered.connect(lambda: set_all_rows_checked(False))
+    select_menu.addAction(deselect_action)
+
+
     import_menu = menu_bar.addMenu('导入/导出')
 
     import_from_ADI_action = QAction('从ADI导入日志', window)
@@ -570,6 +796,10 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
     export_selected_fhl_action = QAction('导出选中的日志为 F HamLog 项目文件', window)
     export_selected_fhl_action.triggered.connect(output_selected_fhl)
     export_selected_menu.addAction(export_selected_fhl_action)
+
+    # ---------- 选择菜单：全选 / 反选 / 取消选择 ----------
+    
+
     def list_time(message=True):
         with open('file/m_xml.txt', 'r', encoding='utf-8') as f:
             xml_dict = eval(f.read())
@@ -656,48 +886,118 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
             return
 
         research_window = QMainWindow()
-        research_window.resize(1250, 600)
+        research_window.resize(1300, 600)
         research_window.setWindowTitle(f"搜索结果：{edit.text().strip()}")
         central = QWidget()
         research_window.setCentralWidget(central)
         lay = QVBoxLayout(central)
-        table_r = QTableWidget(len(matches), 13)
-        table_r.setHorizontalHeaderLabels(["日期","时间","己方呼号","对方呼号","频率","调制模式","传播模式","卫星名称", "己方接收信号", "对方接收信号", "己方QTH", "对方QTH","更多"])
+
+        # 顶部工具栏：提示 + 全选/取消全选
+        search_checkboxes = []  # [(checkbox, orig_index), ...]
+        top_row = QHBoxLayout()
+        hint = QLabel('勾选下方记录，选择结果会自动同步到主页面的选择框')
+        hint.setStyleSheet('color: gray;')
+        top_row.addWidget(hint)
+        top_row.addStretch(1)
+        select_all_btn = QPushButton('全选')
+        clear_all_btn = QPushButton('取消全选')
+
+        def _select_all():
+            for cb, _ in search_checkboxes:
+                cb.setChecked(True)
+
+        def _clear_all():
+            for cb, _ in search_checkboxes:
+                cb.setChecked(False)
+
+        select_all_btn.clicked.connect(_select_all)
+        clear_all_btn.clicked.connect(_clear_all)
+        top_row.addWidget(select_all_btn)
+        top_row.addWidget(clear_all_btn)
+        lay.addLayout(top_row)
+
+        # 新增"选择"列（列0），其余列整体右移一列
+        table_r = QTableWidget(len(matches), 14)
+        table_r.setHorizontalHeaderLabels(["选择","日期","时间","己方呼号","对方呼号","频率","调制模式","传播模式","卫星名称", "己方接收信号", "对方接收信号", "己方QTH", "对方QTH","更多"])
         table_r.setEditTriggers(QAbstractItemView.NoEditTriggers)
         for row, (orig_index, rec) in enumerate(matches):
-            table_r.setItem(row, 0, QTableWidgetItem(rec.get('date', '')))
-            table_r.setItem(row, 1, QTableWidgetItem(rec.get('time', '')))
-            table_r.setItem(row, 2, QTableWidgetItem(rec.get('m_call', '')))
-            table_r.setItem(row, 3, QTableWidgetItem(rec.get('o_call', '')))
-            table_r.setItem(row, 4, QTableWidgetItem(rec.get('freq', '')))
-            table_r.setItem(row, 5, QTableWidgetItem(rec.get('mode', '')))
-            table_r.setItem(row, 6, QTableWidgetItem(rec.get('prop_mode', '')))
-            table_r.setItem(row, 7, QTableWidgetItem(rec.get('sat_name', '')))
-            table_r.setItem(row, 8, QTableWidgetItem(rec.get('m_rst', '')))
-            table_r.setItem(row, 9, QTableWidgetItem(rec.get('o_rst', '')))
-            table_r.setItem(row, 10, QTableWidgetItem(rec.get('m_qth', '')))
-            table_r.setItem(row, 11, QTableWidgetItem(rec.get('o_qth', '')))
+            # 选择复选框：初始状态与主页面当前勾选保持一致
+            checkbox = QCheckBox()
+            main_cb = _get_main_checkbox(orig_index)
+            checkbox.setChecked(main_cb.isChecked() if main_cb is not None else False)
+            checkbox.setFixedSize(25, 20)
+            checkbox_widget = QWidget()
+            checkbox_layout = QHBoxLayout(checkbox_widget)
+            checkbox_layout.setContentsMargins(0, 0, 0, 0)
+            checkbox_layout.setAlignment(Qt.AlignCenter)
+            checkbox_layout.addWidget(checkbox)
+            table_r.setCellWidget(row, 0, checkbox_widget)
+            # 勾选变化时实时同步到主页面对应行
+            checkbox.toggled.connect(partial(set_main_checkbox, orig_index))
+            search_checkboxes.append((checkbox, orig_index))
+
+            table_r.setItem(row, 1, QTableWidgetItem(rec.get('date', '')))
+            table_r.setItem(row, 2, QTableWidgetItem(rec.get('time', '')))
+            table_r.setItem(row, 3, QTableWidgetItem(rec.get('m_call', '')))
+            table_r.setItem(row, 4, QTableWidgetItem(rec.get('o_call', '')))
+            table_r.setItem(row, 5, QTableWidgetItem(rec.get('freq', '')))
+            table_r.setItem(row, 6, QTableWidgetItem(rec.get('mode', '')))
+            table_r.setItem(row, 7, QTableWidgetItem(rec.get('prop_mode', '')))
+            table_r.setItem(row, 8, QTableWidgetItem(rec.get('sat_name', '')))
+            table_r.setItem(row, 9, QTableWidgetItem(rec.get('m_rst', '')))
+            table_r.setItem(row, 10, QTableWidgetItem(rec.get('o_rst', '')))
+            table_r.setItem(row, 11, QTableWidgetItem(rec.get('m_qth', '')))
+            table_r.setItem(row, 12, QTableWidgetItem(rec.get('o_qth', '')))
             more_btn = QPushButton("更多")
             more_btn.clicked.connect(partial(project_others, orig_index))
-            table_r.setCellWidget(row, 12, more_btn)
+            table_r.setCellWidget(row, 13, more_btn)
 
         table_r.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
-        table_r.setColumnWidth(0, 80)
-        table_r.setColumnWidth(1, 70)
-        table_r.setColumnWidth(2, 90)
+        table_r.setColumnWidth(0, 45)
+        table_r.setColumnWidth(1, 80)
+        table_r.setColumnWidth(2, 70)
         table_r.setColumnWidth(3, 90)
-        table_r.setColumnWidth(4, 70)
-        table_r.setColumnWidth(5, 80)
-        table_r.setColumnWidth(6, 90)
+        table_r.setColumnWidth(4, 90)
+        table_r.setColumnWidth(5, 70)
+        table_r.setColumnWidth(6, 80)
         table_r.setColumnWidth(7, 90)
-        table_r.setColumnWidth(8, 80)
+        table_r.setColumnWidth(8, 90)
         table_r.setColumnWidth(9, 80)
-        table_r.setColumnWidth(10, 120)
+        table_r.setColumnWidth(10, 80)
         table_r.setColumnWidth(11, 120)
-        table_r.setColumnWidth(12, 80)
+        table_r.setColumnWidth(12, 120)
+        table_r.setColumnWidth(13, 80)
 
         lay.addWidget(table_r)
         table_r.scrollToBottom()
+
+        # 搜索结果表格右键菜单：复制选中行 / 全选 / 取消全选（复制的记录可粘贴到主窗口或 Excel）
+        def _search_context_menu(pos):
+            menu = QMenu(window)
+            act_copy = QAction('复制选中行', window)
+            def do_copy():
+                recs = []
+                for cb, orig_index in search_checkboxes:
+                    if cb.isChecked():
+                        recs.append(file[orig_index])
+                if not recs:
+                    for idx in table_r.selectionModel().selectedRows():
+                        recs.append(file[matches[idx.row()][0]])
+                if not recs:
+                    QMessageBox.information(window, "复制", "请先勾选要复制的行。")
+                    return
+                if copy_records_to_clipboard(recs):
+                    QMessageBox.information(window, "复制", f"已复制 {len(recs)} 条日志到剪贴板。")
+            act_copy.triggered.connect(do_copy)
+            menu.addAction(act_copy)
+            menu.addSeparator()
+            act_all = QAction('全选', window); act_all.triggered.connect(_select_all); menu.addAction(act_all)
+            act_none = QAction('取消全选', window); act_none.triggered.connect(_clear_all); menu.addAction(act_none)
+            menu.exec(table_r.viewport().mapToGlobal(pos))
+
+        table_r.setContextMenuPolicy(Qt.CustomContextMenu)
+        table_r.customContextMenuRequested.connect(_search_context_menu)
+
         research_window.show()
 
     def show_statistics():
@@ -802,7 +1102,37 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
     research_call_action.setShortcut('Ctrl+R')
     research_call_action.triggered.connect(lambda: research_call(file))
     tool_menu.addAction(research_call_action)
-    
+
+
+    # ---------- 卫星功能菜单 ----------
+    sat_menu = menu_bar.addMenu('卫星')
+
+    def quick_log(preset):
+        """由卫星过境窗口“记录”按钮回调：打开批量记录窗口并预填卫星信息；
+        保存时直接追加到当前打开的项目文件（不再弹出保存方式选择）。"""
+        import batch_project
+        def append_to_project(records):
+            snapshot_before()
+            for rec in records:
+                file.append(rec)
+            table_update()
+            # 直接落盘到当前项目文件（不依赖自动保存开关，也不弹“保存成功”）
+            global key
+            fhl_rw.write_fhl_file(save_path, file, key)
+        bw = QMainWindow()
+        bw.setWindowTitle('批量记录 - ' + str(preset.get('sat_name', '')))
+        batch_project.main(bw, preset=preset, on_saved=append_to_project)
+        _open_windows.append(bw)
+
+    def open_satellite_window():
+        import satellite_window
+        satellite_window.main(window, quick_log_callback=quick_log)
+
+    sat_predict_action = QAction('卫星过境预测', window)
+    sat_predict_action.setShortcut('Ctrl+Shift+W')
+    sat_predict_action.triggered.connect(open_satellite_window)
+    sat_menu.addAction(sat_predict_action)
+
 
     central_widget = QWidget()
     window.setCentralWidget(central_widget)
@@ -812,6 +1142,10 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
     button_new.setShortcut('Ctrl+N')
     button_new.clicked.connect(lambda: new())
     layout.addWidget(button_new)
+
+    # 暴露给外部（如主页“卫星过境”记录按钮）调用，实现快速记录
+    window._new_qso = new          # 弹出预填的“新建日志”窗口
+    window._quick_add = quick_log  # 直接把预填记录追加到当前项目（不弹窗）
 
     pack_menu = menu_bar.addMenu('插件')
     with open('file/pack_list.txt', 'r', encoding='utf-8') as f:
@@ -842,6 +1176,7 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
             subprocess.run(['python', f'file/pypack/{pack_name}/main.py'])
             try:
                 with open(f'file/pypack/{pack_name}/output.fhl','r',encoding='utf-8') as f:
+                    snapshot_before()
                     file = json.load(f)
             except FileNotFoundError:
                 QMessageBox.warning(window, "插件错误", f"插件 {pack_name} 未正确生成输出文件！")

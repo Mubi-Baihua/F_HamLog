@@ -1,12 +1,18 @@
 from PySide6.QtWidgets import *
 def main(window):
+    import satellite_pred as sp
     with open('file/m_xml.txt', 'r', encoding='utf-8') as f:
         xml_dict = eval(f.read())
-    m_call = xml_dict['m_call']
-    m_qth = xml_dict['m_qth']
-    m_dig = xml_dict['m_dig']
-    aouto_save_b = xml_dict['aouto_save']
-    aouto_list_b = xml_dict['aouto_list']
+    m_call = xml_dict.get('m_call', '')
+    m_qth = xml_dict.get('m_qth', '')
+    m_dig = xml_dict.get('m_dig', '')
+    aouto_save_b = xml_dict.get('aouto_save', False)
+    aouto_list_b = xml_dict.get('aouto_list', False)
+    m_lat = xml_dict.get('m_lat', 0.0)
+    m_lon = xml_dict.get('m_lon', 0.0)
+    m_alt = xml_dict.get('m_alt', 0.0)
+    sat_auto_update_b = xml_dict.get('sat_auto_update', False)
+    sat_update_hours = int(xml_dict.get('sat_update_hours', 24) or 24)
 
     def set():
         m_call = m_call_input.text()
@@ -14,15 +20,33 @@ def main(window):
         m_dig = m_dig_input.text()
         aouto_save_b = aouto_save.isChecked()
         aouto_list_b = aouto_list_.isChecked()
-        print(f"保存设置: 我的呼号={m_call}, 我的QTH={m_qth}, 我的设备={m_dig}, 自动保存={aouto_save_b}, 自动按时间排序={aouto_list_b}")
+        sat_auto_update_b = sat_auto_update.isChecked()
+        sat_update_hours = sat_update_hours_spin.value()
+        try:
+            m_lat = float(lat_input.text())
+            m_lon = float(lon_input.text())
+            m_alt = float(alt_input.text())
+        except ValueError:
+            QMessageBox.warning(window, "输入错误", "观测站经纬度/海拔请填写数字。")
+            return
+        print(f"保存设置: 我的呼号={m_call}, 我的QTH={m_qth}, 我的设备={m_dig}, 自动保存={aouto_save_b}, 自动按时间排序={aouto_list_b}, 观测站=({m_lat},{m_lon},{m_alt})")
+        # 读取现有设置，仅更新本窗口管理的键，保留其它键（如卫星预测设置 sat_*）
+        with open('file/m_xml.txt', 'r', encoding='utf-8') as f:
+            data = eval(f.read())
+        data.update({
+            'm_call': m_call,
+            'm_qth': m_qth,
+            'm_dig': m_dig,
+            'aouto_save': aouto_save_b,
+            'aouto_list': aouto_list_b,
+            'm_lat': m_lat,
+            'm_lon': m_lon,
+            'm_alt': m_alt,
+            'sat_auto_update': sat_auto_update_b,
+            'sat_update_hours': sat_update_hours,
+        })
         with open('file/m_xml.txt', 'w', encoding='utf-8') as f:
-            f.write(str({
-                'm_call': m_call,
-                'm_qth': m_qth,
-                'm_dig': m_dig,
-                'aouto_save': aouto_save_b,
-                'aouto_list': aouto_list_b
-            }))
+            f.write(str(data))
         window.close()
     def pack_set():
         print("插件设置")
@@ -61,8 +85,8 @@ def main(window):
                 QMessageBox.warning(window, "从之前版本导入数据", "请选择之前版本 F HamLog.exe 所在的文件夹！")
                 back_set()
 
-    window.resize(650, 400)
-    window.setFixedSize(650, 400)
+    window.resize(770, 475)
+    window.setFixedSize(770, 475)
     window.setWindowTitle('设置')
     central_widget = QWidget()
     window.setCentralWidget(central_widget)
@@ -76,13 +100,42 @@ def main(window):
     m_dig_label = QLabel("我的设备:", central_widget)
     m_dig_input = QLineEdit(central_widget)
     m_dig_input.setText(m_dig)
+    lat_input = QLineEdit(central_widget)
+    lat_input.setFixedWidth(110)
+    lat_input.setText(f"{m_lat:.5f}")
+    lon_input = QLineEdit(central_widget)
+    lon_input.setFixedWidth(110)
+    lon_input.setText(f"{m_lon:.5f}")
+    alt_input = QLineEdit(central_widget)
+    alt_input.setFixedWidth(90)
+    alt_input.setText(f"{m_alt:.1f}")
+    grid_input = QLineEdit(central_widget)
+    grid_input.setFixedWidth(110)
+    try:
+        grid_input.setPlaceholderText('梅登黑格网格，如 %s' % sp.latlon_to_maidenhead(m_lat, m_lon))
+    except Exception:
+        grid_input.setPlaceholderText('梅登黑格网格，如 PM84')
+    grid_to_coord = QPushButton('网格→坐标', central_widget)
+    grid_to_coord.setToolTip('将梅登黑格网格（如 PM84）转换为经纬度并填入上方输入框')
     aouto_save = QCheckBox("自动保存", central_widget)
     aouto_save.setChecked(aouto_save_b)
     aouto_list_ = QCheckBox("自动按时间排序", central_widget)
     aouto_list_.setChecked(aouto_list_b)
+    sat_auto_update = QCheckBox("卫星星历自动更新", central_widget)
+    sat_auto_update.setChecked(sat_auto_update_b)
+    sat_auto_update.setToolTip("开启后，程序会在后台按设定间隔自动从 Celestrak 刷新卫星星历(TLE) 缓存")
+    sat_update_hours_spin = QSpinBox(central_widget)
+    sat_update_hours_spin.setRange(1, 168)
+    sat_update_hours_spin.setValue(sat_update_hours)
+    sat_update_hours_spin.setSuffix(" 小时")
+    sat_update_label = QLabel("更新间隔:", central_widget)
     h_layout = QHBoxLayout()
     h_layout.addWidget(aouto_save)
     h_layout.addWidget(aouto_list_)
+    h_layout.addSpacing(15)
+    h_layout.addWidget(sat_auto_update)
+    h_layout.addWidget(sat_update_label)
+    h_layout.addWidget(sat_update_hours_spin)
     sett_button = QPushButton("保存更改", central_widget)
     sett_button.clicked.connect(lambda: set())
     layout.addWidget(m_call_label)
@@ -91,6 +144,34 @@ def main(window):
     layout.addWidget(m_qth_input)
     layout.addWidget(m_dig_label)
     layout.addWidget(m_dig_input)
+    layout.addWidget(QLabel("观测站位置（纬度北纬为正，经度东经为正）：", central_widget))
+    pos_row = QHBoxLayout()
+    pos_row.addWidget(QLabel("纬度(°):", central_widget))
+    pos_row.addWidget(lat_input)
+    pos_row.addWidget(QLabel("经度(°):", central_widget))
+    pos_row.addWidget(lon_input)
+    pos_row.addWidget(QLabel("海拔(m):", central_widget))
+    pos_row.addWidget(alt_input)
+    pos_row.addSpacing(15)
+    pos_row.addWidget(QLabel('坐标网:', central_widget))
+    pos_row.addWidget(grid_input)
+    pos_row.addWidget(grid_to_coord)
+    pos_row.addStretch(1)
+    layout.addLayout(pos_row)
+
+    def on_grid_to_coord():
+        text = grid_input.text().strip()
+        if not text:
+            return
+        try:
+            glat, glon = sp.maidenhead_to_latlon(text)
+        except ValueError as e:
+            QMessageBox.warning(window, '网格无效', str(e))
+            return
+        lat_input.setText(f'{glat:.5f}')
+        lon_input.setText(f'{glon:.5f}')
+
+    grid_to_coord.clicked.connect(on_grid_to_coord)
     layout.addLayout(h_layout)
     layout.addWidget(sett_button)
     
@@ -135,7 +216,7 @@ def main(window):
     line.setLineWidth(1)  # 设置线宽
     layout.addWidget(line)
 
-    fk_v = QLabel("F HamLog 版本：2.0.0", central_widget)
+    fk_v = QLabel("F HamLog 版本：2.1.0", central_widget)
     layout.addWidget(fk_v)
 
     line = QFrame(central_widget)

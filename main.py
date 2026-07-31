@@ -78,108 +78,135 @@ def main():
         global batch_window  # 保持引用，防止被回收
         batch_window = QMainWindow()
         batch_project.main(batch_window)
+
+    def satellite_pred_open():
+            print("卫星过境预测")
+            import satellite_window
+            import batch_project
+            _batch_windows = []
+            def quick_log(preset):
+                # 主页：使用原有批量记录方式，保存时弹出“保存方式选择”对话框
+                bw = QMainWindow()
+                bw.setWindowTitle('批量记录')
+                batch_project.main(bw, preset=preset)
+                _batch_windows.append(bw)
+            satellite_window.main(None, quick_log_callback=quick_log)
     
     app = QApplication(sys.argv)
     app.setWindowIcon(QIcon("file/F_HamLog.ico"))
 
     global window
     window = QMainWindow()
-    window.resize(500, 300)
-    window.setFixedSize(500, 300)
+    window.resize(575, 375)
+    window.setFixedSize(575, 375)
     window.setWindowTitle('F HamLog 2')
 
     central_widget = QWidget()
     window.setCentralWidget(central_widget)
 
     main_layout = QVBoxLayout(central_widget)
-    main_layout.setContentsMargins(20, 20, 20, 7)
-    #main_layout.setSpacing(10)
-    #main_layout.setAlignment(Qt.AlignTop | Qt.AlignHCenter)
+    main_layout.setContentsMargins(24, 18, 24, 16)
+    main_layout.setSpacing(6)
 
-    text_label = QLabel("F HamLog 2")
-    text_label.setAlignment(Qt.AlignCenter)
-    font_t = text_label.font()
-    font_t.setPointSize(15)
-    font_t.setBold(True)
-    text_label.setFont(font_t)
-    main_layout.addWidget(text_label)
+    ACCENT = '#2f6fed'
+    BTN_H = 40
 
-    text_label2 = QLabel("通联日志！")
-    text_label2.setAlignment(Qt.AlignCenter)
-    font_i = text_label2.font()
-    font_i.setPointSize(10)
-    text_label2.setFont(font_i)
-    main_layout.addWidget(text_label2)
+    def _style_btn(btn, primary=False):
+        if primary:
+            btn.setMinimumHeight(BTN_H)
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.setStyleSheet(
+                "QPushButton{background:%s;color:#ffffff;border:none;"
+                "border-radius:6px;font-size:13px;font-weight:bold;}"
+                "QPushButton:hover{background:#2a63d4;}"
+                "QPushButton:pressed{background:#2356ba;}" % ACCENT)
 
-    text_endl = QLabel(" ")
-    text_endl.setAlignment(Qt.AlignCenter)
-    font_i = text_endl.font()
-    font_i.setPointSize(8)
-    text_endl.setFont(font_i)
-    main_layout.addWidget(text_endl)
+    # ---------- 标题区 ----------
+    title = QLabel('F HamLog 2')
+    title.setAlignment(Qt.AlignCenter)
+    f = title.font(); f.setPointSize(18); f.setBold(True)
+    title.setFont(f)
+    sub = QLabel('业余无线电通联日志')
+    sub.setAlignment(Qt.AlignCenter)
+    f = sub.font(); f.setPointSize(10)
+    sub.setFont(f)
+    sub.setStyleSheet('color:#7a8190;')
+    main_layout.addWidget(title)
+    main_layout.addWidget(sub)
+    main_layout.addSpacing(50)
 
+    main_layout
 
-    button_quick = QPushButton("通联日志")
-    button_quick.setFixedSize(200, 50)
+    # ---------- 主操作 ----------
+    button_quick = QPushButton('通联日志')
+    button_quick.setFixedSize(220, 46)
     button_quick.clicked.connect(quick_project)
+    _style_btn(button_quick, primary=True)
+    button_quick.setDefault(True)
     main_layout.addWidget(button_quick, alignment=Qt.AlignHCenter)
 
-    row_widget = QWidget()
-    row_widget.setFixedSize(200, 40)
+    # ---------- 次要操作（两列网格） ----------
+    grid_box = QWidget()
+    grid_box.setFixedWidth(220)
+    grid = QGridLayout(grid_box)
+    grid.setContentsMargins(0, 0, 0, 0)
+    grid.setSpacing(6)
 
-    h_layout = QHBoxLayout(row_widget)
-    h_layout.setContentsMargins(0, 0, 0, 0)
-    h_layout.setSpacing(0)
-
-    button_batch = QPushButton("批量记录")
-    button_batch.setFixedSize(100, 40)
+    button_batch = QPushButton('批量记录')
+    button_batch.setFixedSize(105, BTN_H)
     button_batch.clicked.connect(batch_project)
-    h_layout.addWidget(button_batch)
+    _style_btn(button_batch)
 
-    button_qrz = QPushButton("QRZ主页")
-    button_qrz.setFixedSize(100, 40)
-    h_layout.addWidget(button_qrz)
+    button_qrz = QPushButton('QRZ主页')
+    button_qrz.setFixedSize(105, BTN_H)
     button_qrz.clicked.connect(qrz_page)
+    _style_btn(button_qrz)
 
-    main_layout.addWidget(row_widget, alignment=Qt.AlignHCenter)
+    button_sat = QPushButton('卫星过境')
+    button_sat.setFixedSize(220, BTN_H)
+    button_sat.clicked.connect(satellite_pred_open)
+    _style_btn(button_sat)
 
-    row_widget2 = QWidget()
-    row_widget2.setFixedSize(200, 40)
-    h_layout2 = QHBoxLayout(row_widget2)
-    h_layout2.setContentsMargins(0, 0, 0, 0)
-    h_layout2.setSpacing(0)
-
-    button_start = QPushButton("新建项目")
-    button_start.setFixedSize(100, 40)
+    button_start = QPushButton('新建项目')
+    button_start.setFixedSize(105, BTN_H)
     button_start.clicked.connect(new_project)
-    h_layout2.addWidget(button_start)
+    _style_btn(button_start)
 
-    button_open = QPushButton("打开项目")
-    button_open.setFixedSize(100, 40)
+    button_open = QPushButton('打开项目')
+    button_open.setFixedSize(105, BTN_H)
     button_open.clicked.connect(open_project)
-    h_layout2.addWidget(button_open)
+    _style_btn(button_open)
 
-    main_layout.addWidget(row_widget2, alignment=Qt.AlignHCenter)
+    grid.addWidget(button_batch, 0, 0)
+    grid.addWidget(button_qrz, 0, 1)
+    grid.addWidget(button_sat, 1, 0, 1, 2)
+    grid.addWidget(button_start, 2, 0)
+    grid.addWidget(button_open, 2, 1)
+    main_layout.addWidget(grid_box, alignment=Qt.AlignHCenter)
 
-    '''
-    button_open = QPushButton("远程日志")
-    button_open.setFixedSize(100, 40)
-    button_open.clicked.connect(remote_project)'''
-
+    # ---------- 分隔线 ----------
     line = QFrame(central_widget)
     line.setFrameShape(QFrame.HLine)
     line.setFrameShadow(QFrame.Sunken)
-    line.setLineWidth(1)  # 设置线宽
+    line.setLineWidth(1)
     main_layout.addWidget(line)
 
-    button_set = QPushButton("设置")
-    button_set.setFixedSize(100, 40)
+    # ---------- 设置 ----------
+    button_set = QPushButton('设置')
+    button_set.setFixedSize(105, BTN_H)
     button_set.clicked.connect(set)
+    _style_btn(button_set)
     main_layout.addWidget(button_set, alignment=Qt.AlignHCenter)
 
     main_layout.addStretch(1)
 
     window.show()
+
+    # 启动卫星星历（TLE）自动定时更新：按“设置”中的开关与间隔，在后台周期性刷新缓存
+    import satellite_auto_update
+    satellite_auto_updater = satellite_auto_update.AutoTleUpdater(window)
+    satellite_auto_updater.start()
+
     app.exec()
 
 if __name__ == '__main__':
