@@ -1,1 +1,1 @@
-pyside6 pandas openpyxl nuitka skyfield numpy
+pyside6 pandas openpyxl nuitka skyfield numpy cryptography
