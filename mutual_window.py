@@ -63,7 +63,7 @@ class StationBox(QGroupBox):
         grid.addWidget(self.alt_edit, 0, 5)
 
         self.grid_edit = QLineEdit()
-        self.grid_edit.setPlaceholderText('梅登黑格网格，如 PM84lx')
+        self.grid_edit.setPlaceholderText('梅登黑格网格，如 PM84')
         self.grid_edit.setMaximumWidth(120)
         try:
             # 坐标为 (0,0) 视为“未设置”，网格留空更直观
@@ -269,12 +269,12 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
     start_edit.setText(datetime.datetime.now(LOCAL_TZ).strftime('%Y-%m-%d %H:%M'))
     start_edit.setPlaceholderText('YYYY-MM-DD HH:MM')
     start_edit.setMinimumWidth(150)
-    start_edit.setToolTip('预测起始时刻（系统本地时间），支持 YYYY-MM-DD HH:MM 或带秒。')
+    start_edit.setToolTip('预测起始时刻（系统本地时间），默认当前时间，支持 YYYY-MM-DD HH:MM 或带秒。')
 
     dur_spin = QSpinBox()
     dur_spin.setRange(sp.MIN_PREDICT_HOURS, sp.MAX_PREDICT_HOURS)
     dur_spin.setValue(mu_dur)
-    dur_spin.setToolTip('预测时间跨度，最长 %d 小时（10 天）'
+    dur_spin.setToolTip('预测时间跨度，最长 %d 小时（10 天）。'
                         % sp.MAX_PREDICT_HOURS)
 
     filter_combo = QComboBox()
@@ -368,7 +368,7 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
             table.setItem(i, 5, QTableWidgetItem(f"{r['b_max_elev']:.1f}°"))
             table.setItem(i, 6, QTableWidgetItem(r['best_str']))
             btn = QPushButton('记录')
-            btn.setToolTip('打开批量记录窗口并预填该卫星的卫星名/传播模式/收发频率')
+            btn.setToolTip('打开批量记录窗口并预填该卫星的卫星名/传播模式/收发频率等信息')
             btn.clicked.connect(lambda _checked=False, i=i: log_row(i))
             table.setCellWidget(i, 7, btn)
         table.scrollToTop()

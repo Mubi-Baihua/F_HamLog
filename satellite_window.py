@@ -525,17 +525,17 @@ def main(parent_window, quick_log_callback=None):
     start_edit.setText(datetime.datetime.now(LOCAL_TZ).strftime('%Y-%m-%d %H:%M'))
     start_edit.setPlaceholderText('YYYY-MM-DD HH:MM（如 2026-07-27 17:45）')
     start_edit.setMinimumWidth(150)
-    start_edit.setToolTip('预测起始时刻（系统本地时间）。默认当前时间，可直接键入；\n'
-                          '支持格式：YYYY-MM-DD HH:MM 或 YYYY-MM-DD HH:MM:SS。')
+    start_edit.setToolTip('预测起始时刻（系统本地时间），默认当前时间，支持 YYYY-MM-DD HH:MM 或带秒。')
     dur_label = QLabel('预测时长(小时):')
     dur_spin = QSpinBox()
     dur_spin.setRange(sp.MIN_PREDICT_HOURS, sp.MAX_PREDICT_HOURS)  # 最长 240 小时（10 天）
     dur_spin.setToolTip('预测时间跨度，最长 %d 小时（10 天）。' % sp.MAX_PREDICT_HOURS)
     dur_spin.setValue(sat_dur)  # 自动读取上次的值（已钳制到 240 以内）
-    el_label = QLabel('最小仰角(°):')
+    el_label = QLabel('最低仰角(°):')
     el_spin = QSpinBox()
     el_spin.setRange(0, 90)
     el_spin.setValue(sat_el)
+    el_spin.setToolTip('本站（观测站）的最低可用仰角：低于该仰角认为天线被遮挡 / 信号不可用，不计入可见过境。')
     filter_label = QLabel('范围:')
     filter_combo = QComboBox()
     filter_combo.addItems(['全部卫星', '自选卫星'])
