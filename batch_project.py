@@ -70,7 +70,8 @@ def main(window, preset=None, on_saved=None):
     # 若由卫星窗口等外部调用并传入预填数据，则用其覆盖对应字段
     # （其余字段如 m_call/o_call/m_qth 仍取自设置，保持默认）
     if preset:
-        for k in ('date', 'time', 'freq', 'freq_rx', 'mode', 'prop_mode', 'sat_name'):
+        for k in ('date', 'time', 'freq', 'freq_rx', 'mode', 'prop_mode', 'sat_name',
+                  'm_qth', 'o_qth', 'o_call', 'notes'):
             v = preset.get(k)
             if v not in (None, ''):
                 app_list[k] = v

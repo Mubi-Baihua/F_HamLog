@@ -1132,6 +1132,8 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
     sat_predict_action.setShortcut('Ctrl+Shift+W')
     sat_predict_action.triggered.connect(open_satellite_window)
     sat_menu.addAction(sat_predict_action)
+    # 通联预测入口统一收归「卫星过境预测」窗口内的「通联预测」按钮，
+    # 不再在菜单单独列出。
 
 
     central_widget = QWidget()

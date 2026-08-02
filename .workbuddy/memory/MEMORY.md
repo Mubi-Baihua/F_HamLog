@@ -14,5 +14,26 @@
 - **Nuitka 打包必带 `--include-package-data=skyfield`**：`skyfield` 的 `data/*.npz`（iers.npz 等）是运行时资源文件，`--include-package` 不会打包，缺了会导致 `load.timescale(builtin=True)` 崩溃、打包后无法读星历（与 CWD 无关，双击也炸）。另注意 `file/` 目录靠 `打包.txt` 里的 `--include-data-dir=file=file` 打包。
 - **数据路径一律走 `satellite_pred.app_path(rel)`**：`satellite_pred` 提供 `_app_base_dir()`/`app_path()`，优先返回“确实含 `file/` 子目录”的目录（exe 目录优先于 `__file__` 目录），把 `file/amateur.tle`、`file/m_xml.txt`、`file/*_dict.txt` 等解析为绝对路径，避免从非 exe 目录启动（快捷方式等）时找不到数据。`satellite_window.py`/`satellite_auto_update.py` 的 `SETTINGS_PATH`/`TLE_CACHE` 已改用 `sp.app_path(...)`。
 
+## 通联预测（双站卫星互视，2026-08-02 新增）
+- 算法在 `satellite_pred.py`：`visibility_windows()`（以**用户最低仰角**为门限的连续可见窗口，带 clipped 截断标记）
+  + `predict_mutual_passes()`（双指针求两站窗口交集，交集内矢量化采样得两站最大仰角/方位/最佳时刻）
+  + `great_circle_km()`。「最佳时刻」= `min(仰角A, 仰角B)` 最大的时刻。
+- 界面 `mutual_window.py`：两个 `StationBox`（经纬高 + 梅登黑格双向互转 + 各自最低仰角），A 站默认取 `m_lat/m_lon/m_alt`；
+  显式「开始预测」按钮 + `MutualWorker(QThread)`。复用 `satellite_window` 的 `SatelliteSelectDialog/TleFetchWorker/
+  _load_settings/_save_settings/_duration_str/_utc_to_local_str/LOCAL_TZ`（单向依赖，无循环导入）。
+- 入口：`project.py`「卫星 → 通联预测」(Ctrl+Shift+E)、`main.py` 主页「通联预测」按钮。
+- 设置新增键：`sat_b_lat/sat_b_lon/sat_b_alt`、`sat_mu_el_a/sat_mu_el_b`、`sat_mu_dur`、`sat_mu_filter`、`sat_mu_sats`。
+- `batch_project.main(preset=...)` 的 preset 白名单已扩到含 `m_qth/o_qth/o_call/notes`。
+
+## 预测时长上限（2026-08-02）
+- `satellite_pred.MAX_PREDICT_HOURS = 240`（10 天）/ `MIN_PREDICT_HOURS = 1` / `clamp_predict_hours()`。
+- 三处兜底：算法层（`predict_passes`/`visibility_windows` 内部钳制）、GUI spinbox `setRange`、读取与写回设置时钳制。
+  历史设置里的越界值（如 999）打开窗口即自动收敛为 240。
+
 ## 验证环境提示
-- 沙箱内无 PySide6，无法运行 GUI；只能 `py_compile` 校验 + 对纯 Python 模块（`satellite_pred.py`）做运行时冒烟测试。
+- 沙箱 venv（`C:\Users\13577\.workbuddy\binaries\python\envs\default`）**已装 PySide6-Essentials + cryptography + skyfield + numpy**，
+  可用 `QT_QPA_PLATFORM=offscreen` 做真实 GUI 冒烟测试（构建窗口、跑后台线程、读表格内容、点按钮）。
+- **但 `project.py` 的主窗口在 offscreen 下会硬崩溃（无回溯、exit 1）**，这是环境限制而非代码问题
+  —— 已用 `git show HEAD:project.py` 的未修改版对照验证，同样崩溃。`main.py` / `satellite_window.py` /
+  `mutual_window.py` / `batch_project.py` 均可正常离屏测试。
+- 离屏测 GUI 时若脚本中途崩溃，会把测试用的坐标残留写进 `file/m_xml.txt`，**测完务必核对并还原设置文件**。

@@ -8,6 +8,7 @@
 # ---- 常用 FM / 线性转发器卫星（与 SATE_BANDS 对应） ----
 
 # ---- 其它常见业余卫星（按需在 LoTW 卫星列表中核对后补充） ----
-ISS (ZARYA)=ISS
+ISS (ZARYA)=ARISS
 SO-50=SO-50
 SAUDISAT 1C (SO-50)=SO-50
+ASRTU-1 (AO-123)=AO-123

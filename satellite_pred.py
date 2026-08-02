@@ -71,6 +71,34 @@ def app_path(rel):
 
 
 # ---------------------------------------------------------------------------
+#  预测时长上限
+# ---------------------------------------------------------------------------
+
+# 过境预测的最长时间跨度（小时）。240 小时 = 10 天，已接近 TLE 的有效精度边界，
+# 再长的外推误差会明显增大，因此统一在此处限制。
+MAX_PREDICT_HOURS = 240
+MIN_PREDICT_HOURS = 1
+
+
+def clamp_predict_hours(hours, default=24.0):
+    """把用户输入的预测时长钳制到 [MIN_PREDICT_HOURS, MAX_PREDICT_HOURS]。
+
+    超过 240 小时一律按 240 小时处理；非法/空输入回退到 default。
+    """
+    try:
+        h = float(hours)
+    except (TypeError, ValueError):
+        h = float(default)
+    if h != h:  # NaN
+        h = float(default)
+    if h < MIN_PREDICT_HOURS:
+        h = float(MIN_PREDICT_HOURS)
+    if h > MAX_PREDICT_HOURS:
+        h = float(MAX_PREDICT_HOURS)
+    return h
+
+
+# ---------------------------------------------------------------------------
 #  时标（离线可用）
 # ---------------------------------------------------------------------------
 
@@ -188,13 +216,15 @@ def predict_passes(satrec, observer, start_utc, duration_hours=24.0,
       - 用户设定的最小仰角仅用于过滤：保留最大仰角达到该值的过境；
       - duration_sec = LOS 时刻 − AOS 时刻（秒级精度，从 0° 起算）。
     仅返回「AOS→MAX→LOS」完整的三元组（窗口边缘被截断的不完整过境不计入）。
+
+    duration_hours 会被钳制到 MAX_PREDICT_HOURS（240 小时）以内。
     """
     ts = _get_timescale()
     if isinstance(start_utc, datetime):
         t0 = ts.from_datetime(start_utc)
     else:
         t0 = ts.utc(jd=float(start_utc))
-    t1 = t0 + timedelta(hours=float(duration_hours))
+    t1 = t0 + timedelta(hours=clamp_predict_hours(duration_hours))
 
     lat, lon, alt = observer
     topos = wgs84.latlon(float(lat), float(lon), float(alt))
@@ -244,6 +274,176 @@ def predict_passes(satrec, observer, start_utc, duration_hours=24.0,
         else:
             i += 1
     return passes
+
+
+# ---------------------------------------------------------------------------
+#  双站「通联预测」：两地同时可见同一颗卫星的时间窗口
+# ---------------------------------------------------------------------------
+
+def great_circle_km(lat1, lon1, lat2, lon2):
+    """两点间大圆距离（公里），用于展示两台站的地面距离。"""
+    import math
+    r = 6371.0088
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dp = p2 - p1
+    dl = math.radians(lon2 - lon1)
+    a = (math.sin(dp / 2) ** 2 +
+         math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2)
+    return 2 * r * math.asin(min(1.0, math.sqrt(a)))
+
+
+def visibility_windows(satrec, observer, start_utc, duration_hours=24.0,
+                       min_elevation_deg=0.0):
+    """求一段时间内「卫星仰角 ≥ min_elevation_deg」的连续时间窗口。
+
+    与 predict_passes 不同，本函数的 AOS/LOS 直接以用户设定的最小仰角为门限
+    （而非 0° 地平线），因为「能否通联」取决于卫星是否高于该台站的可用仰角。
+
+    返回列表，元素为 dict：
+        {'start_tt': float, 'end_tt': float,   # skyfield TT 儒略日，便于求交
+         'clipped_start': bool, 'clipped_end': bool}
+    其中 clipped_* 表示该窗口在预测区间边界被截断（起点早于 start / 终点晚于结束）。
+    """
+    ts = _get_timescale()
+    if isinstance(start_utc, datetime):
+        t0 = ts.from_datetime(start_utc)
+    else:
+        t0 = ts.utc(jd=float(start_utc))
+    t1 = t0 + timedelta(hours=clamp_predict_hours(duration_hours))
+
+    lat, lon, alt = observer
+    topos = wgs84.latlon(float(lat), float(lon), float(alt))
+    min_elev = max(float(min_elevation_deg), 0.0)
+
+    times, events = satrec._earth_sat.find_events(
+        topos, t0, t1, altitude_degrees=min_elev)
+
+    windows = []
+    cur_start = None
+    clipped_start = False
+    for t, e in zip(times, events):
+        if e == 0:          # rise：升过门限仰角
+            cur_start = float(t.tt)
+            clipped_start = False
+        elif e == 2:        # set：降至门限仰角以下
+            if cur_start is None:
+                # 预测区间开始时卫星已在门限之上 → 起点被截断
+                cur_start = float(t0.tt)
+                clipped_start = True
+            windows.append({
+                'start_tt': cur_start,
+                'end_tt': float(t.tt),
+                'clipped_start': clipped_start,
+                'clipped_end': False,
+            })
+            cur_start = None
+            clipped_start = False
+    if cur_start is not None:
+        # 预测区间结束时卫星仍在门限之上 → 终点被截断
+        windows.append({
+            'start_tt': cur_start,
+            'end_tt': float(t1.tt),
+            'clipped_start': clipped_start,
+            'clipped_end': True,
+        })
+    return windows
+
+
+def predict_mutual_passes(satrec, observer_a, observer_b, start_utc,
+                          duration_hours=24.0, min_elev_a=0.0, min_elev_b=0.0,
+                          min_duration_sec=10.0, samples=48):
+    """预测「两个台站可通过同一颗卫星互相通联」的时间窗口。
+
+    通联成立的判据：同一时刻卫星对 A 站的仰角 ≥ min_elev_a，
+    且对 B 站的仰角 ≥ min_elev_b（即两站的可见窗口存在交集）。
+
+    参数：
+        observer_a / observer_b : (lat_deg, lon_deg, alt_m)
+        min_elev_a / min_elev_b : 各自的最低可用仰角（度）
+        min_duration_sec        : 过滤掉过短的交集窗口（默认 10 秒）
+        samples                 : 每个窗口内的采样点数，用于求两站最大仰角与最佳时刻
+
+    返回列表，每个元素为 dict：
+        name, satnum,
+        start(datetime UTC), end(datetime UTC), duration_sec, start_jd,
+        a_max_elev, b_max_elev,            # 窗口内各自的最大仰角
+        a_az_start, a_az_end,              # A 站在窗口首尾的方位角
+        b_az_start, b_az_end,              # B 站在窗口首尾的方位角
+        best_time(datetime UTC),           # 两站仰角「较低者」最高的时刻（最佳通联时刻）
+        best_min_elev,                     # 该时刻两站仰角的较低值
+        a_elev_at_best, b_elev_at_best,
+        clipped_start, clipped_end         # 窗口是否被预测区间边界截断
+    """
+    import numpy as np
+
+    hours = clamp_predict_hours(duration_hours)
+    wins_a = visibility_windows(satrec, observer_a, start_utc, hours, min_elev_a)
+    if not wins_a:
+        return []
+    wins_b = visibility_windows(satrec, observer_b, start_utc, hours, min_elev_b)
+    if not wins_b:
+        return []
+
+    ts = _get_timescale()
+    topos_a = wgs84.latlon(float(observer_a[0]), float(observer_a[1]), float(observer_a[2]))
+    topos_b = wgs84.latlon(float(observer_b[0]), float(observer_b[1]), float(observer_b[2]))
+    diff_a = satrec._earth_sat - topos_a
+    diff_b = satrec._earth_sat - topos_b
+
+    n_samples = max(int(samples), 8)
+    results = []
+    i = j = 0
+    while i < len(wins_a) and j < len(wins_b):
+        wa, wb = wins_a[i], wins_b[j]
+        s = max(wa['start_tt'], wb['start_tt'])
+        e = min(wa['end_tt'], wb['end_tt'])
+        dur_sec = (e - s) * 86400.0
+        if dur_sec > max(float(min_duration_sec), 0.0):
+            tts = np.linspace(s, e, n_samples)
+            t_arr = ts.tt_jd(tts)
+            alt_a, az_a, _ = diff_a.at(t_arr).altaz()
+            alt_b, az_b, _ = diff_b.at(t_arr).altaz()
+            ea = np.asarray(alt_a.degrees, dtype=float)
+            eb = np.asarray(alt_b.degrees, dtype=float)
+            both = np.minimum(ea, eb)
+            k = int(np.argmax(both))
+
+            t_start = ts.tt_jd(s)
+            t_end = ts.tt_jd(e)
+            start_dt = t_start.utc_datetime()
+            end_dt = t_end.utc_datetime()
+            best_dt = ts.tt_jd(float(tts[k])).utc_datetime()
+
+            results.append({
+                'name': satrec.name or satrec.satnum,
+                'satnum': satrec.satnum,
+                'start': start_dt,
+                'end': end_dt,
+                'start_jd': datetime_to_jd(start_dt),
+                'duration_sec': float(end_dt.timestamp() - start_dt.timestamp()),
+                'a_max_elev': float(ea.max()),
+                'b_max_elev': float(eb.max()),
+                'a_az_start': float(np.asarray(az_a.degrees, dtype=float)[0]),
+                'a_az_end': float(np.asarray(az_a.degrees, dtype=float)[-1]),
+                'b_az_start': float(np.asarray(az_b.degrees, dtype=float)[0]),
+                'b_az_end': float(np.asarray(az_b.degrees, dtype=float)[-1]),
+                'best_time': best_dt,
+                'best_min_elev': float(both[k]),
+                'a_elev_at_best': float(ea[k]),
+                'b_elev_at_best': float(eb[k]),
+                'clipped_start': bool(
+                    (wa['clipped_start'] and s == wa['start_tt']) or
+                    (wb['clipped_start'] and s == wb['start_tt'])),
+                'clipped_end': bool(
+                    (wa['clipped_end'] and e == wa['end_tt']) or
+                    (wb['clipped_end'] and e == wb['end_tt'])),
+            })
+        # 推进结束较早的那个窗口
+        if wa['end_tt'] <= wb['end_tt']:
+            i += 1
+        else:
+            j += 1
+    return results
 
 
 # ---------------------------------------------------------------------------

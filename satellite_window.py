@@ -456,7 +456,8 @@ def main(parent_window, quick_log_callback=None):
     observer_unset = (lat == 0.0 and lon == 0.0)
 
     # 上次保存的预测设置（时长/仰角/范围/自选卫星）
-    sat_dur = int(settings.get('sat_dur', 24) or 24)
+    # 时长统一钳制到 [1, 240] 小时：历史设置里若存有更大的值，这里自动收敛到 240
+    sat_dur = int(sp.clamp_predict_hours(settings.get('sat_dur', 24) or 24))
     sat_el = int(settings.get('sat_el', 10) or 10)
     sat_filter = settings.get('sat_filter', '全部卫星')
     if sat_filter not in ('全部卫星', '自选卫星'):
@@ -482,6 +483,9 @@ def main(parent_window, quick_log_callback=None):
     edit_tqsl_btn.setToolTip('在界面内直接编辑 TQSL/LoTW 卫星名称映射 tqsl_dict.txt')
     import_btn = QPushButton('导入转发器')
     import_btn.setToolTip('从文本文件批量导入卫星转发器数据（格式：卫星名=下行频率,上行频率,模式）到 sat_radio_dict.txt')
+    # 双站通联预测：从本窗口直接打开，无需再回到主页或菜单
+    mutual_btn = QPushButton('通联预测')
+    mutual_btn.setToolTip('打开双站通联预测：输入对方台站位置与各自最低仰角，预测两地可通过哪些卫星互相通联')
     # 星历自动更新实时开关（等价于“设置”中的复选框）
     auto_cb = QCheckBox('卫星星历自动更新')
     _auto_on = bool(settings.get('sat_auto_update', False))
@@ -494,6 +498,8 @@ def main(parent_window, quick_log_callback=None):
     tool_top.addWidget(edit_radio_btn)
     tool_top.addWidget(edit_tqsl_btn)
     tool_top.addWidget(import_btn)
+    tool_top.addSpacing(10)
+    tool_top.addWidget(mutual_btn)
     tool_top.addStretch(1)
     tool_top.addWidget(auto_cb)
     layout.addWidget(top_grp)
@@ -516,8 +522,9 @@ def main(parent_window, quick_log_callback=None):
                           '支持格式：YYYY-MM-DD HH:MM 或 YYYY-MM-DD HH:MM:SS。')
     dur_label = QLabel('预测时长(小时):')
     dur_spin = QSpinBox()
-    dur_spin.setRange(1, 72)
-    dur_spin.setValue(sat_dur)  # 自动读取上次的值
+    dur_spin.setRange(sp.MIN_PREDICT_HOURS, sp.MAX_PREDICT_HOURS)  # 最长 240 小时（10 天）
+    dur_spin.setToolTip('预测时间跨度，最长 %d 小时（10 天）。' % sp.MAX_PREDICT_HOURS)
+    dur_spin.setValue(sat_dur)  # 自动读取上次的值（已钳制到 240 以内）
     el_label = QLabel('最小仰角(°):')
     el_spin = QSpinBox()
     el_spin.setRange(0, 90)
@@ -576,7 +583,7 @@ def main(parent_window, quick_log_callback=None):
     def _persist():
         """把当前的预测设置写入 file/m_xml.txt，便于下次启动恢复。"""
         s = _load_settings()
-        s['sat_dur'] = dur_spin.value()
+        s['sat_dur'] = int(sp.clamp_predict_hours(dur_spin.value()))
         s['sat_el'] = el_spin.value()
         s['sat_filter'] = filter_combo.currentText()
         s['sat_sats'] = sorted(selected_names) if selected_names is not None else None
@@ -627,9 +634,18 @@ def main(parent_window, quick_log_callback=None):
             refresh_btn.setEnabled(True)
             return
         start = start_local.replace(tzinfo=LOCAL_TZ).astimezone(datetime.timezone.utc)
+        # 时长兜底钳制：任何来源（手输/历史设置）超过 240 小时都按 240 小时算
+        hours = sp.clamp_predict_hours(dur_spin.value())
+        if dur_spin.value() != int(hours):
+            dur_spin.blockSignals(True)
+            dur_spin.setValue(int(hours))
+            dur_spin.blockSignals(False)
+        if hours > 72:
+            status.setText('正在计算过境（%d 颗卫星，跨度 %d 小时，可能较慢）…'
+                           % (len(active_sats), int(hours)))
         worker = PredictWorker(
             active_sats, observer, start,
-            duration_hours=dur_spin.value(),
+            duration_hours=hours,
             min_elev=el_spin.value(),
             step_sec=60)
         win._worker = worker  # 防止被回收
@@ -787,6 +803,23 @@ def main(parent_window, quick_log_callback=None):
         if dlg.exec() == QDialog.Accepted and sats:
             run_prediction()  # 预填的卫星名（TQSL 认可名）会随之更新
 
+    def open_mutual():
+        """从卫星过境预测窗口内打开双站通联预测（入口统一收归此处）。"""
+        import mutual_window
+
+        def on_sel_change(filter_mode, sel):
+            """通联预测里改了自选卫星 / 范围，实时同步回本窗口。"""
+            nonlocal selected_names
+            selected_names = sel
+            filter_combo.setCurrentText(filter_mode)
+            _persist()
+            if sats:
+                run_prediction()
+
+        mutual_window.main(
+            win, quick_log_callback=quick_log_callback,
+            on_selection_change=on_sel_change)
+
     def on_auto_toggled(checked):
         """实时开关星历自动更新（与“设置”中的复选框等价）。"""
         s = _load_settings()
@@ -829,6 +862,7 @@ def main(parent_window, quick_log_callback=None):
     import_btn.clicked.connect(import_radio)
     edit_radio_btn.clicked.connect(edit_radio_dict)
     edit_tqsl_btn.clicked.connect(edit_tqsl_dict)
+    mutual_btn.clicked.connect(open_mutual)
     auto_cb.toggled.connect(on_auto_toggled)
     dur_spin.valueChanged.connect(lambda: (run_prediction() if sats else None, _persist()))
     el_spin.valueChanged.connect(lambda: (run_prediction() if sats else None, _persist()))
