@@ -177,6 +177,7 @@ class SatelliteSelectDialog(QDialog):
         btns.rejected.connect(self.reject)
         lay.addWidget(btns)
 
+        self._search = ''
         self.search_edit.textChanged.connect(self._filter)
 
     def _mk_btn(self, text, slot):
@@ -185,17 +186,23 @@ class SatelliteSelectDialog(QDialog):
         return b
 
     def _filter(self, text):
-        t = text.strip().lower()
+        self._search = text.strip().lower()
         for n, row in self.rows.items():
-            row.setVisible(t in n.lower())
+            row.setVisible(self._search in n.lower())
+
+    def _visible_names(self):
+        """当前搜索条件下可见的卫星名；无搜索时返回全部。"""
+        if not self._search:
+            return list(self.rows.keys())
+        return [n for n in self.rows if self._search in n.lower()]
 
     def _select_all(self):
-        for cb in self.checks.values():
-            cb.setChecked(True)
+        for n in self._visible_names():
+            self.checks[n].setChecked(True)
 
     def _select_none(self):
-        for cb in self.checks.values():
-            cb.setChecked(False)
+        for n in self._visible_names():
+            self.checks[n].setChecked(False)
 
     def get_selected(self):
         return {n for n, cb in self.checks.items() if cb.isChecked()}
@@ -744,6 +751,17 @@ def main(parent_window, quick_log_callback=None):
             _save_settings(s)
             run_prediction()
 
+    def _push_selection_to_mutual():
+        """把本窗口当前的 范围/自选卫星 反向同步到所有已打开的「通联预测」窗口。"""
+        try:
+            import mutual_window
+        except Exception:
+            return
+        for w in list(getattr(mutual_window, '_open_windows', [])):
+            fn = getattr(w, 'apply_remote_selection', None)
+            if callable(fn):
+                fn(filter_combo.currentText(), selected_names)
+
     def open_select():
         nonlocal selected_names
         if not sats:
@@ -755,6 +773,7 @@ def main(parent_window, quick_log_callback=None):
             selected_names = dlg.get_selected()
             _persist()
             run_prediction()
+            _push_selection_to_mutual()
 
     def import_radio():
         """从用户选择的文本文件批量导入卫星转发器数据，合并到 file/sat_radio_dict.txt。"""
@@ -855,6 +874,7 @@ def main(parent_window, quick_log_callback=None):
         if sats:
             run_prediction()
         _persist()
+        _push_selection_to_mutual()
 
     refresh_btn.clicked.connect(lambda: refresh_tle(force=True))
     obs_btn.clicked.connect(edit_observer)

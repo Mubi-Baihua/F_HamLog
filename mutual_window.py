@@ -513,6 +513,19 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
             if on_selection_change is not None:
                 on_selection_change(filter_combo.currentText(), selected_names)
 
+    def apply_remote_selection(filter_mode, sel):
+        """由「卫星过境预测」窗口反向同步：更新范围/自选卫星并重新预测。
+
+        刻意不调用 on_selection_change 回弹，避免两个窗口互相触发形成循环。"""
+        nonlocal selected_names
+        filter_combo.blockSignals(True)
+        filter_combo.setCurrentText(filter_mode)
+        filter_combo.blockSignals(False)
+        sel_btn.setEnabled(filter_combo.currentText() == '自选卫星')
+        selected_names = sel
+        if sats:
+            run_prediction()
+
     def log_row(row_index):
         if row_index < 0 or row_index >= len(last_rows):
             QMessageBox.information(win, '记录', '请先在表格里选中一行。')
@@ -571,6 +584,8 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
     win.closeEvent = _on_close
 
     win.show()
+    # 暴露反向同步接口，供「卫星过境预测」窗口在改选卫星时调用
+    win.apply_remote_selection = apply_remote_selection
     if a_lat == 0.0 and a_lon == 0.0:
         QMessageBox.information(
             win, '未设置本站位置',
