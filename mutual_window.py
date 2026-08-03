@@ -248,6 +248,7 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
     win = QMainWindow()
     win.resize(1000, 660)
     win.setWindowTitle('通联预测')
+    win._map_window = None  # 卫星地图窗口引用（由“地图”按钮打开）
     central = QWidget()
     win.setCentralWidget(central)
     layout = QVBoxLayout(central)
@@ -296,6 +297,12 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
     par.addWidget(sel_btn)
     par.addStretch(1)
     par.addWidget(refresh_btn)
+    map_btn = QPushButton('卫星地图')
+    map_btn.setToolTip(
+        '打开全球卫星地图：显示所有已选卫星（与上方“范围/自选卫星”实时同步）'
+        '自当前时刻起的地面轨迹与实时位置，以及本台站与对方台站。\n'
+        '在结果表中点选一行，该卫星会在地图上聚焦高亮。')
+    par.addWidget(map_btn)
     layout.addWidget(par_grp)
 
     sep = QFrame()
@@ -348,6 +355,25 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
                 continue
         return None, ('格式应为 YYYY-MM-DD HH:MM（例如 2026-08-02 17:45），当前输入：'
                       + (txt or '（空）'))
+
+    def active_sats_list():
+        """当前「已选择的卫星」= 范围 / 自选卫星生效后的卫星列表。
+
+        预测与地图共用同一份，保证地图上显示的卫星与预测范围始终一致。
+        selected_names 为 None 表示「尚未手动选择」，按全部处理。
+        """
+        if filter_combo.currentText() == '自选卫星' and selected_names is not None:
+            return [(n, s) for (n, s) in sats if n in selected_names]
+        return list(sats)
+
+    def _push_sats_to_map():
+        """把当前「已选卫星」与台站 A / B 最低仰角同步给已打开的地图窗口。"""
+        mw = getattr(win, '_map_window', None)
+        if mw is None:
+            return
+        mw.set_sats(active_sats_list())
+        mw.set_min_elev(box_a.min_elev())
+        mw.set_min_elev_b(box_b.min_elev())
 
     def populate(rows):
         last_rows[:] = rows
@@ -410,17 +436,12 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
             dur_spin.blockSignals(False)
 
         mode = filter_combo.currentText()
-        if mode == '自选卫星':
-            if selected_names is None:
-                active_sats = sats
-            elif not selected_names:
-                status.setText('尚未选择卫星，请点击“选择卫星…”勾选。')
-                table.setRowCount(0)
-                return
-            else:
-                active_sats = [(n, s) for (n, s) in sats if n in selected_names]
-        else:
-            active_sats = sats
+        active_sats = active_sats_list()
+        if mode == '自选卫星' and selected_names is not None and not selected_names:
+            status.setText('尚未选择卫星，请点击“选择卫星…”勾选。')
+            table.setRowCount(0)
+            _push_sats_to_map()
+            return
 
         old = getattr(win, '_worker', None)
         if old is not None and old.isRunning():
@@ -455,6 +476,12 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
         worker.done.connect(on_done)
         worker.finished.connect(worker.deleteLater)
         worker.start()
+        # 台站 A / B 位置、已选卫星、最低仰角变化，实时同步到已打开的地图窗口
+        mw = getattr(win, '_map_window', None)
+        if mw is not None:
+            mw.set_stations(home=va, station_b=vb)
+            mw.set_min_elev_b(box_b.min_elev())
+            _push_sats_to_map()
 
     def refresh_tle(force=False, then_predict=True):
         nonlocal sats
@@ -474,6 +501,8 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
             sats = s
             refresh_btn.setEnabled(True)
             status.setText('已载入 TLE，共 %d 颗卫星。' % len(sats))
+            # 若地图窗口已打开，同步最新的「已选卫星」列表（名称/轨道根数）
+            _push_sats_to_map()
             if then_predict:
                 va, vb = box_a.get_values(), box_b.get_values()
                 if (va and vb and not (va[0] == 0.0 and va[1] == 0.0)
@@ -509,6 +538,7 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
             selected_names = dlg.get_selected()
             _persist()
             run_prediction()  # 选择卫星后自动重新预测
+            _push_sats_to_map()   # 自选卫星变化 → 地图同步显示新的一批卫星
             # 把选择实时同步回卫星过境预测窗口（若该窗口仍打开）
             if on_selection_change is not None:
                 on_selection_change(filter_combo.currentText(), selected_names)
@@ -525,6 +555,62 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
         selected_names = sel
         if sats:
             run_prediction()
+        _push_sats_to_map()
+
+    def open_map():
+        """打开卫星地图窗口：显示「所有已选卫星」的地面轨迹 / 实时位置，以及
+        台站 A（本台）、台站 B（对方）位置。
+
+        - 卫星范围与本窗口的「范围 / 自选卫星」实时同步；
+        - 在表格里点选某颗卫星，该星在地图上聚焦高亮；
+        - 地图的「轨迹时长」会记住上次的设置，并与卫星过境预测打开的地图共用。"""
+        import satellite_map_window
+
+        name = None
+        rows = table.selectedIndexes()
+        if rows:
+            name = table.item(rows[0].row(), 0).text()
+        if not name and last_rows:
+            name = last_rows[0]['name']
+        va = box_a.get_values()
+        vb = box_b.get_values()
+        # 已经开过就直接激活，避免堆出多个地图窗口
+        mw = getattr(win, '_map_window', None)
+        if mw is not None and mw.isVisible():
+            _push_sats_to_map()
+            if name:
+                mw.set_satellite(name)
+            mw.raise_()
+            mw.activateWindow()
+            return
+        def on_el_change(a, b):
+            """地图内调整最低仰角后，回写到本窗口两个台站并重新预测 / 落盘。"""
+            box_a.el_spin.blockSignals(True)
+            box_a.el_spin.setValue(int(round(a)))
+            box_a.el_spin.blockSignals(False)
+            box_b.el_spin.blockSignals(True)
+            box_b.el_spin.setValue(int(round(b)))
+            box_b.el_spin.blockSignals(False)
+            _persist()
+            run_prediction()
+
+        mw = satellite_map_window.open_map(
+            win, active_sats_list(),
+            home=va if va else None,
+            station_b=vb if vb else None,
+            selected_name=name, source=win, min_elev=box_a.min_elev(),
+            min_elev_b=box_b.min_elev(), on_min_elev_change=on_el_change)
+        win._map_window = mw
+
+    def _on_table_sel():
+        """表格行选择变化时，把选中的卫星名实时同步到已打开的地图窗口。"""
+        mw = getattr(win, '_map_window', None)
+        if mw is None:
+            return
+        rows = table.selectedIndexes()
+        if not rows:
+            return
+        mw.set_satellite(table.item(rows[0].row(), 0).text())
 
     def log_row(row_index):
         if row_index < 0 or row_index >= len(last_rows):
@@ -549,6 +635,7 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
         _persist()
         if sats:
             run_prediction()
+        _push_sats_to_map()   # 范围（全部/自选）变化 → 地图同步
         # 范围（全部卫星 / 自选卫星）切换也同步回卫星过境预测窗口
         if on_selection_change is not None:
             on_selection_change(filter_combo.currentText(), selected_names)
@@ -560,6 +647,8 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
 
     refresh_btn.clicked.connect(lambda: refresh_tle(force=True))
     sel_btn.clicked.connect(open_select)
+    map_btn.clicked.connect(open_map)
+    table.itemSelectionChanged.connect(_on_table_sel)
     filter_combo.currentIndexChanged.connect(lambda: on_filter_changed())
     # 任何数据变化都自动重新预测（不再有“开始预测”按钮）
     dur_spin.valueChanged.connect(lambda: run_prediction() if sats else None)

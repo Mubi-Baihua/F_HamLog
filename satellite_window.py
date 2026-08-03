@@ -474,6 +474,7 @@ def main(parent_window, quick_log_callback=None):
     win = QMainWindow()
     win.resize(940, 620)
     win.setWindowTitle('卫星过境预测')
+    win._map_window = None  # 卫星地图窗口引用（由“地图”按钮打开）
     central = QWidget()
     win.setCentralWidget(central)
     layout = QVBoxLayout(central)
@@ -493,6 +494,12 @@ def main(parent_window, quick_log_callback=None):
     # 双站通联预测：从本窗口直接打开，无需再回到主页或菜单
     mutual_btn = QPushButton('通联预测')
     mutual_btn.setToolTip('打开双站通联预测：输入对方台站位置与各自最低仰角，预测两地可通过哪些卫星互相通联')
+    # 卫星地图：打开全球地图窗口，显示选中卫星的地面轨迹 / 当前位置 / 本台站
+    map_btn = QPushButton('卫星地图')
+    map_btn.setToolTip(
+        '打开全球卫星地图：显示所有已选卫星（与下方“范围/自选卫星”实时同步）'
+        '自当前时刻起的地面轨迹与实时位置，以及本台站。\n'
+        '在结果表中点选一行，该卫星会在地图上聚焦高亮。')
     # 星历自动更新实时开关（等价于“设置”中的复选框）
     auto_cb = QCheckBox('卫星星历自动更新')
     _auto_on = bool(settings.get('sat_auto_update', False))
@@ -507,6 +514,7 @@ def main(parent_window, quick_log_callback=None):
     tool_top.addWidget(import_btn)
     tool_top.addSpacing(10)
     tool_top.addWidget(mutual_btn)
+    tool_top.addWidget(map_btn)
     tool_top.addStretch(1)
     tool_top.addWidget(auto_cb)
     layout.addWidget(top_grp)
@@ -608,23 +616,36 @@ def main(parent_window, quick_log_callback=None):
         return None, ('格式应为 YYYY-MM-DD HH:MM（例如 2026-07-27 17:45），'
                      '可带秒；当前输入：' + (txt or '（空）'))
 
+    def active_sats_list():
+        """当前「已选择的卫星」= 范围 / 自选卫星生效后的卫星列表。
+
+        预测与地图共用同一份，保证地图上显示的卫星与预测范围始终一致。
+        selected_names 为 None 表示「尚未手动选择」，按全部处理。
+        """
+        if filter_combo.currentText() == '自选卫星' and selected_names is not None:
+            return [(n, s) for (n, s) in sats if n in selected_names]
+        return list(sats)
+
+    def _push_sats_to_map():
+        """把当前「已选卫星」与最低仰角同步给已打开的地图窗口。"""
+        mw = getattr(win, '_map_window', None)
+        if mw is None:
+            return
+        mw.set_sats(active_sats_list())
+        mw.set_min_elev(el_spin.value())
+
     def run_prediction():
         nonlocal sats, selected_names
         if not sats:
             status.setText('没有可用的卫星数据，请先“刷新TLE”。')
             return
         mode = filter_combo.currentText()
-        if mode == '自选卫星':
-            if selected_names is None:
-                active_sats = sats  # 尚未手动选择，默认全部
-            elif not selected_names:
-                status.setText('尚未选择卫星，请点击“选择卫星…”勾选要跟踪的卫星。')
-                table.setRowCount(0)
-                return
-            else:
-                active_sats = [(n, s) for (n, s) in sats if n in selected_names]
-        else:
-            active_sats = sats
+        active_sats = active_sats_list()
+        if mode == '自选卫星' and selected_names is not None and not selected_names:
+            status.setText('尚未选择卫星，请点击“选择卫星…”勾选要跟踪的卫星。')
+            table.setRowCount(0)
+            _push_sats_to_map()
+            return
         observer = (lat, lon, alt)
         status.setText('正在计算过境（%d 颗卫星）…' % len(active_sats))
         refresh_btn.setEnabled(False)
@@ -718,6 +739,8 @@ def main(parent_window, quick_log_callback=None):
             status.setText(f'已更新 TLE，共 {len(sats)} 颗卫星。')
             refresh_btn.setEnabled(True)
             run_prediction()
+            # 若地图窗口已打开，同步最新的「已选卫星」列表（名称/轨道根数）
+            _push_sats_to_map()
 
         def on_warning(w):
             status.setText(w)
@@ -750,6 +773,10 @@ def main(parent_window, quick_log_callback=None):
             s['m_alt'] = alt_
             _save_settings(s)
             run_prediction()
+            # 本台站位置变化，同步到已打开的地图窗口
+            mw = getattr(win, '_map_window', None)
+            if mw is not None:
+                mw.set_stations(home=(lat_, lon_, alt_))
 
     def _push_selection_to_mutual():
         """把本窗口当前的 范围/自选卫星 反向同步到所有已打开的「通联预测」窗口。"""
@@ -774,6 +801,7 @@ def main(parent_window, quick_log_callback=None):
             _persist()
             run_prediction()
             _push_selection_to_mutual()
+            _push_sats_to_map()   # 自选卫星变化 → 地图同步显示新的一批卫星
 
     def import_radio():
         """从用户选择的文本文件批量导入卫星转发器数据，合并到 file/sat_radio_dict.txt。"""
@@ -834,10 +862,59 @@ def main(parent_window, quick_log_callback=None):
             _persist()
             if sats:
                 run_prediction()
+            _push_sats_to_map()   # 通联预测改了自选卫星 → 地图同步
 
         mutual_window.main(
             win, quick_log_callback=quick_log_callback,
             on_selection_change=on_sel_change)
+
+    def open_map():
+        """打开卫星地图窗口：显示「所有已选卫星」的地面轨迹 / 实时位置 / 本台站。
+
+        - 卫星范围与本窗口的「范围 / 自选卫星」实时同步；
+        - 在表格里点选某颗卫星，该星在地图上聚焦高亮；
+        - 地图的「轨迹时长」会记住上次的设置，并与通联预测打开的地图共用。"""
+        import satellite_map_window
+
+        name = None
+        rows = table.selectedIndexes()
+        if rows:
+            name = table.item(rows[0].row(), 0).text()
+        if not name and last_rows:
+            name = last_rows[0]['name']
+        # 已经开过就直接激活，避免堆出多个地图窗口
+        mw = getattr(win, '_map_window', None)
+        if mw is not None and mw.isVisible():
+            _push_sats_to_map()
+            if name:
+                mw.set_satellite(name)
+            mw.raise_()
+            mw.activateWindow()
+            return
+        def on_el_change(a, b):
+            """地图内调整最低仰角后，回写到本窗口并重新预测 / 落盘。"""
+            el_spin.blockSignals(True)
+            el_spin.setValue(int(round(a)))
+            el_spin.blockSignals(False)
+            _persist()
+            if sats:
+                run_prediction()
+
+        mw = satellite_map_window.open_map(
+            win, active_sats_list(), home=(lat, lon, alt),
+            selected_name=name, source=win, min_elev=el_spin.value(),
+            on_min_elev_change=on_el_change)
+        win._map_window = mw
+
+    def _on_table_sel():
+        """表格行选择变化时，把选中的卫星名实时同步到已打开的地图窗口。"""
+        mw = getattr(win, '_map_window', None)
+        if mw is None:
+            return
+        rows = table.selectedIndexes()
+        if not rows:
+            return
+        mw.set_satellite(table.item(rows[0].row(), 0).text())
 
     def on_auto_toggled(checked):
         """实时开关星历自动更新（与“设置”中的复选框等价）。"""
@@ -875,6 +952,7 @@ def main(parent_window, quick_log_callback=None):
             run_prediction()
         _persist()
         _push_selection_to_mutual()
+        _push_sats_to_map()   # 范围（全部/自选）变化 → 地图同步
 
     refresh_btn.clicked.connect(lambda: refresh_tle(force=True))
     obs_btn.clicked.connect(edit_observer)
@@ -883,9 +961,12 @@ def main(parent_window, quick_log_callback=None):
     edit_radio_btn.clicked.connect(edit_radio_dict)
     edit_tqsl_btn.clicked.connect(edit_tqsl_dict)
     mutual_btn.clicked.connect(open_mutual)
+    map_btn.clicked.connect(open_map)
+    table.itemSelectionChanged.connect(_on_table_sel)
     auto_cb.toggled.connect(on_auto_toggled)
     dur_spin.valueChanged.connect(lambda: (run_prediction() if sats else None, _persist()))
-    el_spin.valueChanged.connect(lambda: (run_prediction() if sats else None, _persist()))
+    el_spin.valueChanged.connect(
+        lambda: (run_prediction() if sats else None, _persist(), _push_sats_to_map()))
     def _on_start_text(_txt):
         _, err = _parse_start()
         if err and sats:

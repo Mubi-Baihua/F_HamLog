@@ -200,6 +200,81 @@ def observe(satrec, jd_utc, observer):
     }
 
 
+def subpoint(satrec, jd_utc):
+    """计算卫星星下点（地理坐标）：返回 (lat_deg, lon_deg, alt_km)。
+
+    底层由 skyfield 的 EarthSatellite.at(...).subpoint() 完成（WGS84 椭球），
+    供地图显示卫星地面轨迹 / 当前位置使用。jd_utc 可为带 UTC 时区的 datetime，
+    或 Julian Date 浮点数。
+    """
+    ts = _get_timescale()
+    if isinstance(jd_utc, datetime):
+        t = ts.from_datetime(jd_utc)
+    else:
+        t = ts.utc(jd=float(jd_utc))
+    g = satrec._earth_sat.at(t).subpoint()
+    return float(g.latitude.degrees), float(g.longitude.degrees), float(g.elevation.km)
+
+
+def ground_track(satrec, start_utc, duration_hours=3.0, samples=180,
+                 observer=None, observer_b=None):
+    """批量计算一段时间内的星下点轨迹（矢量化：一次 skyfield 调用算完全部采样点）。
+
+    地图需要同时画多颗卫星的轨迹，若逐点调用 subpoint() 会有成百上千次
+    skyfield 调用开销；本函数用时间数组一次性传播，速度快一到两个数量级。
+
+    参数：
+        start_utc      : 轨迹起始时刻（带 UTC 时区的 datetime，或 Julian Date）
+        duration_hours : 轨迹时间跨度（小时），自 start_utc 向「后」延伸
+        samples        : 采样点数（含首尾），至少 2
+        observer       : (lat_deg, lon_deg, alt_m) 或 None；给出时同时算出各
+                         采样点对该台站（台站 A / 本台）的仰角，便于地图高亮「可见区段」
+        observer_b     : (lat_deg, lon_deg, alt_m) 或 None；给出时同时算出各
+                         采样点对「对方台站 B」的仰角，便于通联预测地图区分两站可见区段
+
+    返回 list[(lat_deg, lon_deg, alt_km, elev_a_deg, elev_b_deg)]，
+    其中 observer / observer_b 为 None 时对应位置恒为 None。
+    """
+    import numpy as np
+
+    ts = _get_timescale()
+    if isinstance(start_utc, datetime):
+        t0 = ts.from_datetime(start_utc)
+    else:
+        t0 = ts.utc(jd=float(start_utc))
+    n = max(2, int(samples))
+    hours = max(0.01, float(duration_hours))
+    # 以 TT 儒略日均匀采样（跨度内 TT-UTC 为常数，不影响轨迹形状）
+    offsets = np.linspace(0.0, hours / 24.0, n)
+    t = ts.tt_jd(t0.tt + offsets)
+
+    sub = wgs84.subpoint(satrec._earth_sat.at(t))
+    lats = np.atleast_1d(sub.latitude.degrees)
+    lons = np.atleast_1d(sub.longitude.degrees)
+    alts = np.atleast_1d(sub.elevation.km)
+
+    elevs_a = None
+    if observer is not None:
+        olat, olon, oalt = observer
+        topos = wgs84.latlon(float(olat), float(olon), float(oalt))
+        alt_a, _az, _d = (satrec._earth_sat - topos).at(t).altaz()
+        elevs_a = np.atleast_1d(alt_a.degrees)
+
+    elevs_b = None
+    if observer_b is not None:
+        blat, blon, balt = observer_b
+        topos_b = wgs84.latlon(float(blat), float(blon), float(balt))
+        alt_b, _azb, _db = (satrec._earth_sat - topos_b).at(t).altaz()
+        elevs_b = np.atleast_1d(alt_b.degrees)
+
+    out = []
+    for i in range(n):
+        out.append((float(lats[i]), float(lons[i]), float(alts[i]),
+                    (float(elevs_a[i]) if elevs_a is not None else None),
+                    (float(elevs_b[i]) if elevs_b is not None else None)))
+    return out
+
+
 def predict_passes(satrec, observer, start_utc, duration_hours=24.0,
                    min_elevation_deg=0.0, step_sec=30):
     """预测一段时间内的可见过境。
