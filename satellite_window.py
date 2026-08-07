@@ -52,7 +52,7 @@ def _utc_to_local_str(dt, tz=None):
     if dt is None:
         return '--'
     local = dt.astimezone(tz) if tz is not None else dt.astimezone()
-    return local.strftime('%m-%d %H:%M:%S')
+    return local.strftime('%m-%d %H:%M')
 
 
 def _duration_str(sec):
@@ -409,7 +409,7 @@ class PredictWorker(QThread):
             'sat_name': sp.tqsl_sat_name(name),
             'prop_mode': 'SAT',
             'date': local_aos.strftime('%Y-%m-%d'),
-            'time': local_aos.strftime('%H:%M:%S'),
+            'time': local_aos.strftime('%H:%M'),
         }
         if band:
             # FM 转发器（或线性转发器）的模式与收发频率
@@ -489,8 +489,8 @@ def main(parent_window, quick_log_callback=None):
     edit_radio_btn.setToolTip('在界面内直接编辑卫星转发器数据 sat_radio_dict.txt（下行/上行频率与模式）')
     edit_tqsl_btn = QPushButton('编辑TQSL映射')
     edit_tqsl_btn.setToolTip('在界面内直接编辑 TQSL/LoTW 卫星名称映射 tqsl_dict.txt')
-    import_btn = QPushButton('导入转发器')
-    import_btn.setToolTip('从文本文件批量导入卫星转发器数据（格式：卫星名=下行频率,上行频率,模式）到 sat_radio_dict.txt')
+    import_tle_btn = QPushButton('导入星历数据')
+    import_tle_btn.setToolTip('从 txt 或 tle 文件导入卫星星历数据（TLE 格式），追加到现有卫星列表中')
     # 双站通联预测：从本窗口直接打开，无需再回到主页或菜单
     mutual_btn = QPushButton('通联预测')
     mutual_btn.setToolTip('打开双站通联预测：输入对方台站位置与各自最低仰角，预测两地可通过哪些卫星互相通联')
@@ -511,7 +511,7 @@ def main(parent_window, quick_log_callback=None):
     tool_top.addSpacing(12)
     tool_top.addWidget(edit_radio_btn)
     tool_top.addWidget(edit_tqsl_btn)
-    tool_top.addWidget(import_btn)
+    tool_top.addWidget(import_tle_btn)
     tool_top.addSpacing(10)
     tool_top.addWidget(mutual_btn)
     tool_top.addWidget(map_btn)
@@ -803,36 +803,40 @@ def main(parent_window, quick_log_callback=None):
             _push_selection_to_mutual()
             _push_sats_to_map()   # 自选卫星变化 → 地图同步显示新的一批卫星
 
-    def import_radio():
-        """从用户选择的文本文件批量导入卫星转发器数据，合并到 file/sat_radio_dict.txt。"""
+    def import_tle():
+        """从用户选择的 txt 或 tle 文件导入卫星星历数据，追加到现有卫星列表。"""
         path, _ = QFileDialog.getOpenFileName(
-            win, '导入卫星转发器数据', '', '文本文件 (*.txt)')
+            win, '导入卫星星历数据', '',
+            '星历文件 (*.tle *.txt);;TLE 文件 (*.tle);;文本文件 (*.txt)')
         if not path:
             return
         try:
-            imported = sp.load_sat_radio_dict(path)  # 复用同一解析逻辑（含内置兜底）
+            text = sp._read_text(path)
         except Exception as e:
-            QMessageBox.warning(win, '导入失败', '解析文件出错：%s' % e)
+            QMessageBox.warning(win, '读取失败', '无法读取文件：%s' % e)
             return
-        before = len(sp.load_sat_radio_dict())  # 导入前现有条目数（含内置）
-        current = sp.load_sat_radio_dict()       # 现有 file/sat_radio_dict.txt 内容
-        current.update(imported)
-        try:
-            with open(sp.SAT_RADIO_DICT_PATH, 'w', encoding='utf-8') as f:
-                f.write('# 卫星转发器数据（可由“卫星过境预测”窗口“导入转发器”批量导入）\n')
-                f.write('# 格式：卫星名=下行频率,上行频率,模式\n')
-                f.write('# 下行频率=接收频率(freq)，上行频率=发射频率(freq_rx)\n')
-                for name, b in current.items():
-                    f.write('%s=%s,%s,%s\n' % (name, b['downlink'], b['uplink'], b['mode']))
-        except Exception as e:
-            QMessageBox.warning(win, '保存失败', '写入 sat_radio_dict.txt 出错：%s' % e)
+        imported = sp.parse_tle_text(text)
+        if not imported:
+            QMessageBox.warning(win, '导入失败', '未从文件中解析到有效的 TLE 数据。')
             return
-        added = len(current) - before
+        existing_names = {n for n, _ in sats}
+        new_sats = [(n, sat) for n, sat in imported if n not in existing_names]
+        duplicate_count = len(imported) - len(new_sats)
+        if not new_sats:
+            QMessageBox.information(
+                win, '导入完成',
+                '文件中 %d 颗卫星均已存在，无需更新。' % len(imported))
+            return
+        sats.extend(new_sats)
+        selected_names = None  # 导入后重置为全部卫星范围
+        filter_combo.setCurrentText('全部卫星')
+        _persist()
         QMessageBox.information(
             win, '导入完成',
-            '已导入卫星转发器数据：本次新增/更新 %d 条，累计 %d 条。' % (added, len(current)))
-        if sats:
-            run_prediction()  # 应用新数据重新预测（若有卫星数据）
+            '已导入 %d 颗新卫星（跳过 %d 颗已存在），当前共 %d 颗。'
+            % (len(new_sats), duplicate_count, len(sats)))
+        run_prediction()
+        _push_sats_to_map()
 
     def edit_radio_dict():
         """在界面内直接编辑卫星转发器数据 sat_radio_dict.txt（下行/上行频率与模式）。"""
@@ -957,7 +961,7 @@ def main(parent_window, quick_log_callback=None):
     refresh_btn.clicked.connect(lambda: refresh_tle(force=True))
     obs_btn.clicked.connect(edit_observer)
     sel_btn.clicked.connect(open_select)
-    import_btn.clicked.connect(import_radio)
+    import_tle_btn.clicked.connect(import_tle)
     edit_radio_btn.clicked.connect(edit_radio_dict)
     edit_tqsl_btn.clicked.connect(edit_tqsl_dict)
     mutual_btn.clicked.connect(open_mutual)
