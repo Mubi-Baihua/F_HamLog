@@ -430,20 +430,37 @@ class MapCanvas(QWidget):
         self.show_track = True
         self.show_footprint = True
         self.show_labels = True
+        self._hot = []          # 可点击命中目标：[(name, x, y, radius), ...]
+        self.on_pick = None     # 点击命中卫星时的回调 (name) -> None
         self.setMinimumSize(380, 220)
+        self.setMouseTracking(True)
 
     # ---- 坐标换算 ----
+    def _map_rect(self):
+        """地图铺满整个画布（窗口）。
+
+        等距圆柱投影下世界本应为 2:1（经度 360° : 纬度 180°）；地图窗口默认尺寸
+        1192×600 ≈ 2:1，因此铺满后地图比例正常、几乎不变形。所有经纬度→像素的
+        投影都基于整块画布，不再保留 letterbox 留边。
+        """
+        W, H = self.width(), self.height()
+        return 0.0, 0.0, float(W), float(H)
+
     def _xy(self, lon, lat):
-        return ((lon + 180) / 360.0 * self.width(),
-                (90 - lat) / 180.0 * self.height())
+        x0, y0, mapW, mapH = self._map_rect()
+        return (x0 + (lon + 180) / 360.0 * mapW,
+                y0 + (90 - lat) / 180.0 * mapH)
 
     # ---- 静态底图 ----
     def _render_base(self):
-        pix = QPixmap(self.width(), self.height())
+        x0, y0, mapW, mapH = self._map_rect()
+        pw = max(1, int(round(mapW)))
+        ph = max(1, int(round(mapH)))
+        pix = QPixmap(pw, ph)
         pix.fill(self._bg)
         p = QPainter(pix)
         p.setRenderHint(QPainter.Antialiasing)
-        W, H = pix.width(), pix.height()
+        W, H = pw, ph
 
         # 经纬网格（每 30°）
         p.setPen(QPen(self._grid, 1))
@@ -565,14 +582,16 @@ class MapCanvas(QWidget):
             return
         col = entry['color']
         focus = entry['focus']
-        W, H = self.width(), self.height()
-        paths = _footprint_paths(lon, lat, ang, W, H)
+        x0, y0, mapW, mapH = self._map_rect()
+        paths = _footprint_paths(lon, lat, ang, mapW, mapH)
         p.setPen(QPen(QColor(col.red(), col.green(), col.blue(),
                              200 if focus else 110), 1.2))
         p.setBrush(QBrush(QColor(col.red(), col.green(), col.blue(),
                                  42 if focus else 20)))
         for path in paths:
-            p.drawPath(path)
+            pp = QPainterPath(path)
+            pp.translate(x0, y0)        # 把覆盖区从地图矩形局部坐标平移到画布位置
+            p.drawPath(pp)
 
     def _draw_current(self, p, entry):
         lon, lat, alt, elev_a, elev_b = entry['current']
@@ -616,8 +635,9 @@ class MapCanvas(QWidget):
         line_h = 15
         box_h = line_h * (len(rows) + (1 if extra > 0 else 0)) + 10
         box_w = 148
-        x0 = 8
-        y0 = self.height() - box_h - 8
+        rx, ry, mapW, mapH = self._map_rect()
+        x0 = rx + 8
+        y0 = ry + mapH - box_h - 8
         if y0 < 4:
             return
         p.setPen(QPen(QColor(120, 130, 140), 1))
@@ -643,13 +663,18 @@ class MapCanvas(QWidget):
             p.drawText(QPointF(x0 + 21, y + 10), '… 其余 %d 颗' % extra)
 
     def paintEvent(self, event):
+        self._hot = []
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
-        if (self._base is None or self._base.width() != self.width()
-                or self._base.height() != self.height()):
+        W, H = self.width(), self.height()
+        rx, ry, mapW, mapH = self._map_rect()
+        # 底图按整块画布尺寸缓存；画布先整体填海洋色（地图铺满窗口，无留边）
+        if (self._base is None or self._base.width() != int(round(mapW))
+                or self._base.height() != int(round(mapH))):
             self._render_base()
+        p.fillRect(0, 0, W, H, self._bg)
         if self._base is not None:
-            p.drawPixmap(0, 0, self._base)
+            p.drawPixmap(int(round(rx)), int(round(ry)), self._base)
 
         if self.show_track:
             for e in self.entries:
@@ -661,6 +686,9 @@ class MapCanvas(QWidget):
         if self.show_footprint:
             for e in self.entries:
                 if e['footprint']:
+                    fx, fy = self._xy(e['footprint'][0], e['footprint'][1])
+                    self._hot.append((e['name'], fx, fy,
+                                      max(10.0, e['footprint'][2] / 180.0 * mapH)))
                     self._draw_footprint(p, e)
         for st in self.stations:
             self._draw_station(p, st)
@@ -673,6 +701,47 @@ class MapCanvas(QWidget):
         self._draw_legend(p)
         p.end()
 
+    # ---- 点击聚焦 ----
+    def _pick_hit(self, x, y):
+        """返回点击位置命中的卫星名（优先当前位置圆点，其次轨迹点，再覆盖区中心）。
+        无命中返回 None。多目标时取几何距离最近且在各自阈值内的那颗。"""
+        best = None
+        best_d = None
+        for e in self.entries:
+            if e['current']:
+                cx, cy = self._xy(e['current'][0], e['current'][1])
+                d = (x - cx) ** 2 + (y - cy) ** 2
+                if d <= 100 and (best_d is None or d < best_d):   # 当前位置圆点 ~10px
+                    best_d = d
+                    best = e['name']
+            for s in e['track']:
+                tx, ty = self._xy(s[0], s[1])
+                d = (x - tx) ** 2 + (y - ty) ** 2
+                if d <= 36 and (best_d is None or d < best_d):    # 轨迹点 ~6px
+                    best_d = d
+                    best = e['name']
+        for name, hx, hy, rad in self._hot:
+            d = (x - hx) ** 2 + (y - hy) ** 2
+            if d <= rad * rad and (best_d is None or d < best_d):
+                best_d = d
+                best = name
+        return best
+
+    def mousePressEvent(self, event):
+        if self.on_pick is None:
+            return
+        name = self._pick_hit(event.position().x(), event.position().y())
+        if name:
+            self.on_pick(name)
+
+    def mouseMoveEvent(self, event):
+        if self.on_pick is None:
+            return
+        if self._pick_hit(event.position().x(), event.position().y()) is not None:
+            self.setCursor(Qt.PointingHandCursor)
+        else:
+            self.setCursor(Qt.ArrowCursor)
+
 
 class MapWindow(QMainWindow):
 
@@ -683,7 +752,7 @@ class MapWindow(QMainWindow):
                  on_min_elev_change=None):
         super().__init__(parent)
         self.setWindowTitle('卫星地图')
-        self.resize(960, 600)
+        self.resize(1192, 600)
         self._sats = dict(sats)                 # name -> Satrec（来源窗口的「已选卫星」）
         self._sats_order = [n for (n, _) in sats]
         self._home = home                       # (lat, lon, alt) 或 None
@@ -714,7 +783,8 @@ class MapWindow(QMainWindow):
         self._combo.setMinimumWidth(190)
         self._combo.setToolTip(
             '「全部已选卫星」= 来源窗口（卫星过境 / 通联预测）当前选中范围内的所有卫星；\n'
-            '也可只看其中某一颗。来源窗口修改自选卫星后，这里会实时同步。')
+            '也可只看其中某一颗（选中即成为聚焦卫星，整条加粗并显示覆盖区）。\n'
+            '来源窗口修改自选卫星后，这里会实时同步；直接在地图上点击卫星也可聚焦。')
         ctl.addWidget(self._combo)
 
         ctl.addWidget(QLabel('轨迹时长(小时):'))
@@ -786,6 +856,17 @@ class MapWindow(QMainWindow):
         ctl.addStretch(1)
         layout.addLayout(ctl)
 
+        # 统一窗口最小宽度：以「含对方最低仰角」的完整控制条为准测量一次。
+        # 卫星过境（无对方台站）会隐藏该组控件，若不约束最小宽度，其地图窗口会比
+        # 通联预测（含该组）窄约 180px，导致两处打开的地图宽度不一致。设统一最小宽度后，
+        # 两种来源打开的地图窗口宽度保持一致（卫星过境那组虽隐藏，但窗口不会因此变窄）。
+        self._el_b_label.setVisible(True)
+        self._el_b_spin.setVisible(True)
+        _uniform_min_w = self.centralWidget().minimumSizeHint().width()
+        self.setMinimumWidth(_uniform_min_w)
+        self._el_b_label.setVisible(self._station_b_valid())
+        self._el_b_spin.setVisible(self._station_b_valid())
+
         sep = QFrame()
         sep.setFrameShape(QFrame.HLine)
         sep.setFrameShadow(QFrame.Sunken)
@@ -794,12 +875,18 @@ class MapWindow(QMainWindow):
         # ---------- 信息条 ----------
         self._info = QLabel('准备中…')
         self._info.setStyleSheet('color: gray;')
+        # 关键：允许自动换行。否则 QLabel 默认不换行，其 minimumSizeHint 宽度
+        # 等于整段状态文字「单行」所需宽度，会把窗口最小宽度顶到上千像素，
+        # 导致 resize(960,600) 被最小约束覆盖、窗口被异常撑宽。
+        self._info.setWordWrap(True)
+        self._info.setMinimumWidth(0)
         layout.addWidget(self._info)
 
         # ---------- 画布 ----------
         self.canvas = MapCanvas()
         self.canvas.min_elev = self._min_elev
         self.canvas.min_elev_b = self._min_elev_b
+        self.canvas.on_pick = self.set_satellite   # 地图内点击卫星即聚焦
         self.canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         layout.addWidget(self.canvas, 1)
 
@@ -811,6 +898,27 @@ class MapWindow(QMainWindow):
         self._timer.timeout.connect(self._tick)
         self._timer.start(1000)
         self._tick()
+
+    def showEvent(self, event):
+        """首次显示时把窗口高度锁定为画布 2:1 所需值。
+
+        等距圆柱投影的世界地图本应为宽:高 = 2:1；地图窗口默认宽度固定（1192），
+        但控制条+信息条会挤掉一部分高度，使画布变成 1174×512（约 2.29:1）。
+        若让地图直接铺满该画布会被横向拉伸约 15%。因此在首次显示时按「画布宽度/2」
+        反推所需窗口高度并锁定最小高度，使地图铺满窗口的同时保持正确比例。
+        """
+        super().showEvent(event)
+        if getattr(self, '_aspect_fixed', False):
+            return
+        self._aspect_fixed = True
+        cw = self.canvas.width()
+        if cw <= 0:
+            return
+        ch = int(round(cw / 2.0))
+        cur = self.canvas.height()
+        if ch != cur:
+            self.resize(self.width(), self.height() + (ch - cur))
+        self.setMinimumHeight(self.height())   # 锁定最小高度，避免被缩小到低于 2:1 而变形
 
     # ---- 对外同步接口（由卫星过境 / 通联预测窗口调用） ----
     def set_sats(self, sats):
@@ -830,7 +938,10 @@ class MapWindow(QMainWindow):
 
         若当前正在「只看某一颗」，则同步切换为该颗；否则仅高亮，不改变显示范围。
         """
-        if not name or name not in self._sats:
+        if not name:
+            return
+        name = name.strip()  # TLE 名称行定宽填充可能带尾随空格，统一去除再匹配
+        if name not in self._sats:
             return
         self._focus = name
         # 注意：下拉框第 0 项文本带「(N)」计数后缀，判断是否「全部」只能看索引
@@ -958,6 +1069,11 @@ class MapWindow(QMainWindow):
         return shown, hidden
 
     def _on_combo(self, _idx):
+        # 下拉框选中某一颗卫星时，让它成为「聚焦卫星」（整条加粗 + 覆盖区 + 图例●）；
+        # 选回「全部已选卫星」则保留 self._focus（来源窗口选中的那颗仍高亮），不清空。
+        all_mode, one = self._combo_mode()
+        if not all_mode and one:
+            self._focus = one
         self._track_dirty = True
         self._tick()
 

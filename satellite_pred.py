@@ -588,13 +588,13 @@ def parse_tle_text(text):
         if (i + 2 <= len(lines) and lines[i].startswith('1 ') and
                 lines[i + 1].startswith('2 ')):
             # 没有名称行，用 satnum 作为名称
-            name = lines[i][2:7]
+            name = lines[i][2:7].strip()
             l1, l2 = lines[i], lines[i + 1]
             i += 2
         elif (i + 1 < len(lines) and i + 2 < len(lines) and
               not lines[i].startswith('1 ') and lines[i + 1].startswith('1 ') and
               lines[i + 2].startswith('2 ')):
-            name = lines[i]
+            name = lines[i].strip()
             l1, l2 = lines[i + 1], lines[i + 2]
             i += 3
         else:
