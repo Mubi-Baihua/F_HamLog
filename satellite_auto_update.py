@@ -51,12 +51,17 @@ def _load_settings():
 
 def _save_last_fetch(epoch):
     try:
-        s = _load_settings()
+        try:
+            s = _load_settings()
+        except Exception:
+            # 读取失败（如文件损坏）：不要覆盖，避免清空用户设置
+            print('[卫星星历] 警告：读取设置失败，跳过时间戳写入，保留原设置文件。')
+            return
         s[_LAST_FETCH_KEY] = epoch
         with open(SETTINGS_PATH, 'w', encoding='utf-8') as f:
             f.write(str(s))
-    except Exception:
-        pass
+    except Exception as e:
+        print('[卫星星历] 警告：时间戳写入失败：%s' % e)
 
 
 def should_update_now(settings=None, now=None):
@@ -129,6 +134,9 @@ class AutoTleUpdater:
 
     def start(self):
         self._timer.start()
+        # 启动后立即检查一次：首次运行（无 sat_last_update）或已过期时立即刷新，
+        # 不再需要等待 1 小时巡检才首次触发，避免“开着几分钟就关、永远不写入”的问题。
+        self._tick()
 
     def stop(self):
         self._timer.stop()
@@ -149,8 +157,10 @@ class AutoTleUpdater:
     def _on_done(self, ok, msg):
         self._busy = False
         if ok:
-            _save_last_fetch(time.time())
+            epoch = time.time()
+            _save_last_fetch(epoch)
             print('[卫星星历] 自动更新成功：TLE 已刷新到 %s。' % TLE_CACHE)
+            print('[卫星星历] 时间戳已写入 sat_last_update=%s' % epoch)
         else:
             # 失败不更新 sat_last_update，下一小时巡检会重试；
             # 同时记录日志便于排查（多为离线 / 网络受限）。
