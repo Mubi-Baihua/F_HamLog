@@ -114,7 +114,7 @@ def main():
     def _style_btn(btn, primary=False):
         if primary:
             btn.setMinimumHeight(BTN_H)
-            btn.setCursor(Qt.PointingHandCursor)
+            #btn.setCursor(Qt.PointingHandCursor)
             btn.setStyleSheet(
                 "QPushButton{background:%s;color:#ffffff;border:none;"
                 "border-radius:6px;font-size:13px;font-weight:bold;}"

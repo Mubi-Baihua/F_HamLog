@@ -79,6 +79,14 @@ def main(window):
                     shutil.copyfile(os.path.join(file_path, 'main.fhl'), 'file/main.fhl')
                     back_item += '、通联日志文件'
 
+                if os.path.exists(os.path.join(file_path, 'sat_radio_dict.txt')):
+                    shutil.copyfile(os.path.join(file_path, 'sat_radio_dict.txt'), 'file/sat_radio_dict.txt')
+                    back_item += '、卫星转发器表(sat_radio_dict.txt)'
+
+                if os.path.exists(os.path.join(file_path, 'tqsl_dict.txt')):
+                    shutil.copyfile(os.path.join(file_path, 'tqsl_dict.txt'), 'file/tqsl_dict.txt')
+                    back_item += '、TQSL映射表(tqsl_dict.txt)'
+
                 QMessageBox.information(window, "从之前版本导入数据", f"成功导入{back_item}\n（目前不支持从之前版本中导入插件）")
                 window.close()
             else:

@@ -689,7 +689,7 @@ SAT_RADIO_DICT_PATH = _resolve_data_path("file/sat_radio_dict.txt")
 
 
 def load_sat_radio_dict(path=SAT_RADIO_DICT_PATH):
-    """读取卫星转发器数据表，用于“快速记录”预填收发频率与模式。
+    """读取卫星转发器数据表，用于"快速记录"预填收发频率与模式。
 
     文件为纯文本，每行 `卫星名=下行频率,上行频率,模式`；以 # 开头为注释，空行忽略。
     例如：
@@ -697,10 +697,10 @@ def load_sat_radio_dict(path=SAT_RADIO_DICT_PATH):
         SO-50=436.795,145.850,FM
     键（卫星名）需与 TLE 中的名称一致（如 ISS (ZARYA)、SO-50、AO-91）。
 
-    找不到文件或文件为空时，回退到内置的 SATE_BANDS 常量；文件中的条目会覆盖同名内置条目。
+    找不到文件或文件为空时返回空 dict；文件中的条目会覆盖同名条目。
     每次调用都重新读取，便于用户随时编辑后即时生效。
     """
-    d = {k: dict(v) for k, v in SATE_BANDS.items()}  # 内置作兜底/基础
+    d = {}
     if not os.path.exists(path):
         return d
     try:
