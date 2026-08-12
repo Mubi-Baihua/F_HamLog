@@ -1129,7 +1129,7 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
         satellite_window.main(window, quick_log_callback=quick_log)
 
     sat_predict_action = QAction('卫星过境预测', window)
-    sat_predict_action.setShortcut('Ctrl+Shift+W')
+    sat_predict_action.setShortcut('Ctrl+W')
     sat_predict_action.triggered.connect(open_satellite_window)
     sat_menu.addAction(sat_predict_action)
     # 通联预测入口统一收归「卫星过境预测」窗口内的「通联预测」按钮，
