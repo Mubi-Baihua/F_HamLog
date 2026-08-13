@@ -1,4 +1,4 @@
-XML:{'describe':'删除Unknown、Antenna等文本','pack version':'1.0','available fhl version':['1.8.0','1.9.0','2.0.0'],'producer':'木比白桦'}
+XML:{'describe':'删除Unknown、Antenna等文本','pack version':'1.0','available fhl version':['1.8.0','1.9.0','2.0.0','2.1.0','2.2.0'],'producer':'木比白桦'}
 python:
 import json
 from pathlib import Path

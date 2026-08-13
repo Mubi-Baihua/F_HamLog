@@ -28,6 +28,7 @@
 远程日志服务端请下载 [F HamLog Remote Log Server 1.1.0.exe](https://github.com/Mubi-Baihua/F_HamLog/blob/main/F_HamLog_Remote_Log_Server_1.1.0/F%20HamLog%20Remote%20Log%20Server%201.1.0.exe)。
 
 ---
+
 ## 重要提示
 2.2.0以上版本支持覆盖安装，自动保留原有数据。但仍建议在安装前手动备份默认通联日志。
 
