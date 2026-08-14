@@ -3,7 +3,7 @@
 ; Non‑commercial use only
 
 #define MyAppName "F HamLog 2"
-#define MyAppVersion "2.2.0"
+#define MyAppVersion "2.3.0"
 #define MyAppPublisher "木比白桦 BI8SQL"
 #define MyAppURL "https://mubi‑baihua.github.io/f_hamlog.html"
 #define MyAppExeName "F HamLog 2.2.exe"

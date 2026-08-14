@@ -819,6 +819,7 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
         global research_window
         # 弹出高级搜索对话：选择字段 + 关键词 + 匹配方式
         dlg = QDialog(window)
+        dlg.resize(320, 180)
         dlg.setWindowTitle('搜索')
         dlg_layout = QVBoxLayout(dlg)
 
@@ -860,6 +861,13 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
         h3.addWidget(match_combo)
         dlg_layout.addLayout(h3)
 
+        h_scope = QHBoxLayout()
+        h_scope.addWidget(QLabel('范围：'))
+        scope_combo = QComboBox()
+        scope_combo.addItems(['全部匹配记录', '仅选中的行'])
+        h_scope.addWidget(scope_combo)
+        dlg_layout.addLayout(h_scope)
+
         btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         btns.accepted.connect(dlg.accept)
         btns.rejected.connect(dlg.reject)
@@ -874,12 +882,18 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
             QMessageBox.information(window, '搜索', '请输入关键词。')
             return
         exact = (match_combo.currentText() == '完全匹配')
+        scope = scope_combo.currentText()
 
         matches = []
         for i, rec in enumerate(file):
             val = str(rec.get(field, '')).lower()
             if (exact and val == q) or (not exact and q in val):
                 matches.append((i, rec))
+
+        # 范围：仅选中的行 → 仅保留主页面勾选（或当前选中）的记录
+        if scope == '仅选中的行':
+            selected = set(get_selected_row_indexes())
+            matches = [(i, rec) for i, rec in matches if i in selected]
 
         if not matches:
             QMessageBox.information(window, "搜索结果", "未找到任何匹配记录。")
@@ -1000,6 +1014,136 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
 
         research_window.show()
 
+    def find_replace():
+        # 按字段查找替换：选择字段 + 查找文本 + 替换文本 + 匹配方式 + 范围，批量替换
+        dlg = QDialog(window)
+        dlg.setWindowTitle('查找替换')
+        dlg.resize(300, 200)
+        dlg_layout = QVBoxLayout(dlg)
+
+        h1 = QHBoxLayout()
+        h1.addWidget(QLabel('字段：'))
+        combo = QComboBox()
+        choices = [
+            ('o_call', '对方呼号'),
+            ('m_call', '己方呼号'),
+            ('date', '日期'),
+            ('time', '时间'),
+            ('freq', '频率'),
+            ('mode', '调制模式'),
+            ('prop_mode', '传播方式'),
+            ('sat_name', '卫星名称'),
+            ('m_dig', '己方设备'),
+            ('o_dig', '对方设备'),
+            ('m_qth', '己方QTH'),
+            ('o_qth', '对方QTH'),
+            ('m_ant', '己方天线'),
+            ('o_ant', '对方天线'),
+            ('m_pow', '己方功率'),
+            ('o_pow', '对方功率'),
+            ('notes', '备注')
+        ]
+        for k, v in choices:
+            combo.addItem(v, k)
+        h1.addWidget(combo)
+        dlg_layout.addLayout(h1)
+
+        h2 = QHBoxLayout()
+        h2.addWidget(QLabel('查找：'))
+        find_edit = QLineEdit()
+        h2.addWidget(find_edit)
+        dlg_layout.addLayout(h2)
+
+        h3 = QHBoxLayout()
+        h3.addWidget(QLabel('替换为：'))
+        replace_edit = QLineEdit()
+        h3.addWidget(replace_edit)
+        dlg_layout.addLayout(h3)
+
+        h4 = QHBoxLayout()
+        h4.addWidget(QLabel('匹配方式：'))
+        match_combo = QComboBox()
+        match_combo.addItems(['包含', '完全匹配'])
+        h4.addWidget(match_combo)
+        dlg_layout.addLayout(h4)
+
+        h5 = QHBoxLayout()
+        h5.addWidget(QLabel('范围：'))
+        scope_combo = QComboBox()
+        scope_combo.addItems(['全部匹配记录', '仅选中的行'])
+        h5.addWidget(scope_combo)
+        dlg_layout.addLayout(h5)
+
+        def compute_matches():
+            # 返回 (匹配行索引列表, 预计替换处数)；匹配不区分大小写，与“搜索”一致
+            field = combo.currentData()
+            q = find_edit.text()
+            exact = (match_combo.currentText() == '完全匹配')
+            scope = scope_combo.currentText()
+            if q == '':
+                return [], 0
+            qlow = q.lower()
+            matches = []
+            for i, rec in enumerate(file):
+                val = str(rec.get(field, ''))
+                if (exact and val.lower() == qlow) or (not exact and qlow in val.lower()):
+                    matches.append(i)
+            if scope == '仅选中的行':
+                selected = set(get_selected_row_indexes())
+                matches = [i for i in matches if i in selected]
+            change_count = 0
+            for i in matches:
+                val = str(file[i].get(field, ''))
+                change_count += 1 if exact else len(re.findall(re.escape(q), val, re.IGNORECASE))
+            return matches, change_count
+
+        btns = QDialogButtonBox()
+        replace_btn = QPushButton('替换')
+        replace_btn.setDefault(True)
+        replace_btn.clicked.connect(dlg.accept)
+        btns.addButton(replace_btn, QDialogButtonBox.AcceptRole)
+        cancel_btn = QPushButton('取消')
+        cancel_btn.clicked.connect(dlg.reject)
+        btns.addButton(cancel_btn, QDialogButtonBox.RejectRole)
+        dlg_layout.addWidget(btns)
+
+        if dlg.exec() != QDialog.Accepted:
+            return
+
+        field = combo.currentData()
+        q = find_edit.text()
+        rep = replace_edit.text()
+        exact = (match_combo.currentText() == '完全匹配')
+        scope = scope_combo.currentText()
+
+        if q == '':
+            QMessageBox.information(window, '查找替换', '请输入查找内容。')
+            return
+
+        matches, change_count = compute_matches()
+        if not matches:
+            QMessageBox.information(window, '查找替换', '没有找到匹配的记录。')
+            return
+
+        snapshot_before()
+        affected = 0
+        total = 0
+        for i in matches:
+            val = str(file[i].get(field, ''))
+            if exact:
+                if val.lower() == q.lower():
+                    file[i][field] = rep
+                    affected += 1
+                    total += 1
+            else:
+                if q.lower() in val.lower():
+                    file[i][field] = re.sub(re.escape(q), rep, val, flags=re.IGNORECASE)
+                    affected += 1
+                    total += len(re.findall(re.escape(q), val, re.IGNORECASE))
+        table_update()
+        QMessageBox.information(window, '查找替换',
+                                f'替换完成：影响 {affected} 条记录，共 {total} 处替换。')
+
     def show_statistics():
         global file
         dlg = QDialog(window)
@@ -1102,6 +1246,11 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
     research_call_action.setShortcut('Ctrl+R')
     research_call_action.triggered.connect(lambda: research_call(file))
     tool_menu.addAction(research_call_action)
+
+    find_replace_action = QAction('查找替换', window)
+    find_replace_action.setShortcut('Ctrl+H')
+    find_replace_action.triggered.connect(lambda: find_replace())
+    tool_menu.addAction(find_replace_action)
 
 
     # ---------- 卫星功能菜单 ----------
