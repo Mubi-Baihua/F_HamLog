@@ -1,6 +1,7 @@
 from PySide6.QtWidgets import *
 from PySide6.QtCore import Qt  # 新增导入 Qt
 from functools import partial
+import call_upper
 import time as time_
 import sys
 import re
@@ -42,7 +43,7 @@ def main(window, preset=None, on_saved=None):
     app_list = {
                 'date': date,
                 'time': time,
-                'm_call': xml_dict['m_call'],
+                'm_call': xml_dict['m_call'].upper(),
                 'o_call': '',
                 'freq': '',
                 'freq_rx': '',
@@ -90,6 +91,11 @@ def main(window, preset=None, on_saved=None):
         item2 = QTableWidgetItem(app_list[i])  # 第2列可以编辑
         table_others.setItem(row, 1, item2)
         row += 1
+    # 己方呼号(行2)与对方呼号(行3)单元格编辑时实时转大写
+    _call_del = call_upper.UpperCallDelegate()
+    table_others.setItemDelegateForRow(2, _call_del)
+    table_others.setItemDelegateForRow(3, _call_del)
+    table_others._upper_call_delegate = _call_del  # 保持引用，防止被回收
     central_widget = QWidget()
     window.setCentralWidget(central_widget)
 
@@ -168,6 +174,12 @@ def main(window, preset=None, on_saved=None):
             item2 = QTableWidgetItem(this_app_list[i])  # 第2列可以编辑
             table_others_page.setItem(row, 1, item2)
             row += 1
+
+        # 己方呼号(行2)与对方呼号(行3)单元格编辑时实时转大写
+        _call_del_p = call_upper.UpperCallDelegate()
+        table_others_page.setItemDelegateForRow(2, _call_del_p)
+        table_others_page.setItemDelegateForRow(3, _call_del_p)
+        table_others_page._upper_call_delegate = _call_del_p  # 保持引用，防止被回收
 
         layout_page.addWidget(table_others_page)
 

@@ -35,3 +35,9 @@
 - 沙箱 venv 已装 PySide6-Essentials+cryptography+skyfield+numpy，可 `QT_QPA_PLATFORM=offscreen` 做真实 GUI 冒烟（建窗/后台线程/读表/点按钮）。
 - **`project.py` 主窗口在 offscreen 下硬崩溃（无回溯、exit 1）**——环境限制非代码问题；`main/satellite_window/mutual_window/batch_project` 均可正常离屏。
 - 离屏测 GUI 完毕务必核对并还原 `file/m_xml.txt`（测试脚本可能写入坐标残留）。
+
+## 呼号输入统一大写（call_upper 模块）
+- 新增 `call_upper.py`（统一方案）：`UpperCallDelegate`（QTableWidget 呼号行单元格编辑实时转大写）+ `connect_callsign_upper(edit, field_getter)`（QLineEdit，仅当字段为 `m_call`/`o_call` 时实时转大写；恒定字段用 `lambda: 'm_call'`）。
+- 接入点：① `project.main()` 打开项目时遍历 `file` 把每条 `m_call`/`o_call` 转大写（仅当 `filee` 为 list）；② `project.py` 的 `new()`/`project_others()` 表格行2(己方)/行3(对方) 挂委托；③ `research_call()` 搜索关键词、④ `find_replace()` 查找/替换框（按字段联动）；⑤ `set.py` 的「我的呼号」固定转大写；⑥ `batch_project.py` 模板表与翻页表（行2/3）挂委托，且 `app_list['m_call']` 取自设置即转大写。
+- 委托引用须保留：挂完 `setItemDelegateForRow` 后务必要 `table._upper_call_delegate = delegate`，否则 Python 端 delegate 被回收导致编辑异常。
+- 逻辑核心 `_upper_in_place` 用 `setText`+`setCursorPosition` 保光标；`text.upper()` 幂等，无需判空。

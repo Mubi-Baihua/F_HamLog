@@ -11,6 +11,7 @@ import webbrowser
 import urllib.parse
 import fhl_rw
 import copy
+import call_upper
 
 # 复制/粘贴使用的字段顺序（与表格列对应，英文键名作为剪贴板表头，便于跨窗口/跨软件解析）
 COPY_FIELDS = ['date', 'time', 'm_call', 'o_call', 'freq', 'freq_rx', 'mode',
@@ -49,6 +50,12 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
     if isinstance(filee, list):
         file = filee
         _upgrade_file_records(file)
+        # 打开项目时自动校验所有呼号（己方 m_call 与对方 o_call），统一转为大写
+        for _rec in file:
+            if 'm_call' in _rec:
+                _rec['m_call'] = _rec['m_call'].upper()
+            if 'o_call' in _rec:
+                _rec['o_call'] = _rec['o_call'].upper()
     else:
         file = []
     table = None
@@ -256,7 +263,7 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
             file_app = {
                 'date': date,
                 'time': time,
-                'm_call': xml_dict.get('m_call', ''),
+                'm_call': xml_dict.get('m_call', '').upper(),
                 'o_call': '',
                 'freq': '',
                 'freq_rx': '',
@@ -316,6 +323,11 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
                 item2 = QTableWidgetItem(file_app[i])  # 第2列可以编辑
                 table_others.setItem(row, 1, item2)
                 row += 1
+            # 己方呼号(行2)与对方呼号(行3)单元格编辑时实时转大写
+            _call_del = call_upper.UpperCallDelegate()
+            table_others.setItemDelegateForRow(2, _call_del)
+            table_others.setItemDelegateForRow(3, _call_del)
+            table_others._upper_call_delegate = _call_del  # 保持引用，防止被回收
             central_widget = QWidget()
             project_others_window.setCentralWidget(central_widget)
             layout_others = QVBoxLayout(central_widget)
@@ -390,6 +402,11 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
             item2 = QTableWidgetItem(file[index][i])  # 第2列可以编辑
             table_others.setItem(row, 1, item2)
             row += 1
+        # 己方呼号(行2)与对方呼号(行3)单元格编辑时实时转大写
+        _call_del = call_upper.UpperCallDelegate()
+        table_others.setItemDelegateForRow(2, _call_del)
+        table_others.setItemDelegateForRow(3, _call_del)
+        table_others._upper_call_delegate = _call_del  # 保持引用，防止被回收
         central_widget = QWidget()
         project_others_window.setCentralWidget(central_widget)
         layout_others = QVBoxLayout(central_widget)
@@ -867,6 +884,8 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
         h2 = QHBoxLayout()
         h2.addWidget(QLabel('关键词：'))
         edit = QLineEdit()
+        # 选中的字段为己方/对方呼号时，关键词输入实时转大写
+        call_upper.connect_callsign_upper(edit, lambda: combo.currentData())
         h2.addWidget(edit)
         dlg_layout.addLayout(h2)
 
@@ -1165,12 +1184,15 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
         h2 = QHBoxLayout()
         h2.addWidget(QLabel('查找：'))
         find_edit = QLineEdit()
+        # 选中的字段为己方/对方呼号时，查找与替换输入实时转大写
+        call_upper.connect_callsign_upper(find_edit, lambda: combo.currentData())
         h2.addWidget(find_edit)
         dlg_layout.addLayout(h2)
 
         h3 = QHBoxLayout()
         h3.addWidget(QLabel('替换为：'))
         replace_edit = QLineEdit()
+        call_upper.connect_callsign_upper(replace_edit, lambda: combo.currentData())
         h3.addWidget(replace_edit)
         dlg_layout.addLayout(h3)
 

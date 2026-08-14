@@ -1,4 +1,5 @@
 from PySide6.QtWidgets import *
+import call_upper
 def main(window):
     import satellite_pred as sp
     with open('file/m_xml.txt', 'r', encoding='utf-8') as f:
@@ -102,6 +103,8 @@ def main(window):
     m_call_label = QLabel("我的呼号:", central_widget)
     m_call_input = QLineEdit(central_widget)
     m_call_input.setText(m_call)
+    # 我的呼号始终实时转大写
+    call_upper.connect_callsign_upper(m_call_input, lambda: 'm_call')
     m_qth_label = QLabel("我的QTH:", central_widget)
     m_qth_input = QLineEdit(central_widget)
     m_qth_input.setText(m_qth)
@@ -120,7 +123,7 @@ def main(window):
     grid_input = QLineEdit(central_widget)
     grid_input.setFixedWidth(110)
     try:
-        grid_input.setPlaceholderText('梅登黑格网格，如 %s' % sp.latlon_to_maidenhead(m_lat, m_lon))
+        grid_input.setPlaceholderText('梅登黑格网格')
     except Exception:
         grid_input.setPlaceholderText('梅登黑格网格，如 PM84')
     grid_to_coord = QPushButton('网格→坐标', central_widget)
