@@ -685,6 +685,22 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
 
     file_menu.addSeparator()
 
+    def open_main_page():
+        # 打开主页面：启动 main.py 启动器窗口（与程序入口一致）
+        import subprocess, sys, os
+        main_py = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'main.py')
+        try:
+            subprocess.Popen([sys.executable, main_py])
+        except Exception as e:
+            QMessageBox.warning(window, '打开主页面失败', str(e))
+
+    open_main_action = QAction('打开主页面', window)
+    open_main_action.setShortcut('Ctrl+Shift+M')
+    open_main_action.triggered.connect(open_main_page)
+    file_menu.addAction(open_main_action)
+
+    file_menu.addSeparator()
+
     sexit_action = QAction('保存并退出', window)
     sexit_action.triggered.connect(lambda: esave())
     file_menu.addAction(sexit_action)
@@ -864,7 +880,7 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
         h_scope = QHBoxLayout()
         h_scope.addWidget(QLabel('范围：'))
         scope_combo = QComboBox()
-        scope_combo.addItems(['全部匹配记录', '仅选中的行'])
+        scope_combo.addItems(['全部通联记录', '仅选中的行'])
         h_scope.addWidget(scope_combo)
         dlg_layout.addLayout(h_scope)
 
@@ -906,28 +922,125 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
         research_window.setCentralWidget(central)
         lay = QVBoxLayout(central)
 
-        # 顶部工具栏：提示 + 全选/取消全选
         search_checkboxes = []  # [(checkbox, orig_index), ...]
-        top_row = QHBoxLayout()
-        hint = QLabel('勾选下方记录，选择结果会自动同步到主页面的选择框')
-        hint.setStyleSheet('color: gray;')
-        top_row.addWidget(hint)
-        top_row.addStretch(1)
-        select_all_btn = QPushButton('全选')
-        clear_all_btn = QPushButton('取消全选')
 
-        def _select_all():
+        # 选择逻辑：与 project.py 主窗口一致（全选 / 反选 / 取消选择）
+        def _search_select_all():
             for cb, _ in search_checkboxes:
                 cb.setChecked(True)
 
-        def _clear_all():
+        def _search_select_none():
             for cb, _ in search_checkboxes:
                 cb.setChecked(False)
 
-        select_all_btn.clicked.connect(_select_all)
-        clear_all_btn.clicked.connect(_clear_all)
-        top_row.addWidget(select_all_btn)
-        top_row.addWidget(clear_all_btn)
+        def _search_invert():
+            for cb, _ in search_checkboxes:
+                cb.setChecked(not cb.isChecked())
+
+        # 仅针对当前搜索结果（matches）的统计与导出
+        def _search_records():
+            return [rec for _, rec in matches]
+
+        # 搜索结果统计的范围解析：全部通联记录 / 全部搜索结果 / 仅选中的行（搜索窗口勾选的行）
+        def _stat_scope_resolver(scope):
+            if scope == '全部通联记录':
+                return file
+            if scope == '仅选中的行':
+                return [file[orig_index] for cb, orig_index in search_checkboxes if cb.isChecked()]
+            return [rec for _, rec in matches]  # 全部搜索结果
+
+        def _export_search_fhl():
+            recs = _search_records()
+            if not recs:
+                QMessageBox.warning(research_window, "导出失败", "没有可导出的搜索结果。")
+                return
+            save_path, _ = QFileDialog.getSaveFileName(
+                research_window, "导出搜索结果为FHL文件", "", "F HamLog项目 (*.fhl)")
+            if not save_path:
+                return
+            fhl_rw.write_fhl_file(save_path, recs, key)
+            QMessageBox.information(research_window, "导出成功", "导出成功！")
+
+        def _export_search_adi():
+            recs = _search_records()
+            if not recs:
+                return
+            import output_adi
+            if output_adi.main(recs):
+                QMessageBox.information(research_window, "导出成功", "导出成功！")
+
+        def _export_search_excel():
+            recs = _search_records()
+            if not recs:
+                return
+            import output_excel
+            if output_excel.main(recs):
+                QMessageBox.information(research_window, "导出成功", "导出成功！")
+
+        # 菜单栏“选择”：快捷键与主窗口一致（Ctrl+A 全选 / Ctrl+I 反选 / Ctrl+D 取消选择）
+        _mb = research_window.menuBar()
+        _sel_menu = _mb.addMenu('选择')
+        _sel_all = QAction('全选', research_window)
+        _sel_all.setShortcut('Ctrl+A')
+        _sel_all.triggered.connect(_search_select_all)
+        _sel_menu.addAction(_sel_all)
+        _sel_inv = QAction('反选', research_window)
+        _sel_inv.setShortcut('Ctrl+I')
+        _sel_inv.triggered.connect(_search_invert)
+        _sel_menu.addAction(_sel_inv)
+        _sel_none = QAction('取消选择', research_window)
+        _sel_none.setShortcut('Ctrl+D')
+        _sel_none.triggered.connect(_search_select_none)
+        _sel_menu.addAction(_sel_none)
+
+        # 功能：统计图（仅统计当前搜索结果），与主窗口“功能”菜单一致
+        _func_menu = _mb.addMenu('功能')
+        _stat_act = QAction('统计图', research_window)
+        _stat_act.setShortcut('Ctrl+Shift+P')
+        _stat_act.triggered.connect(lambda: show_statistics(
+            parent=research_window,
+            scope_labels=['全部通联记录', '全部搜索结果', '仅选中的行'],
+            scope_resolver=_stat_scope_resolver,
+            default_scope='全部搜索结果'))
+        _func_menu.addAction(_stat_act)
+
+        # 导入/导出：与主窗口“导入/导出”菜单完全一致
+        # 导入项复用主窗口函数（导入进主项目）；导出项仅限当前搜索结果
+        _imp_menu = _mb.addMenu('导入/导出')
+        _imp_adi = QAction('从ADI导入日志', research_window)
+        _imp_adi.triggered.connect(lambda: import_from_ADI())
+        _imp_menu.addAction(_imp_adi)
+        _imp_fhl = QAction('从 F HamLog 导入日志', research_window)
+        _imp_fhl.triggered.connect(lambda: input_fhl())
+        _imp_menu.addAction(_imp_fhl)
+        _imp_ham = QAction('从 旧版 HAM个人工具 导入日志', research_window)
+        _imp_ham.triggered.connect(lambda: input_HAM_tolls_())
+        _imp_menu.addAction(_imp_ham)
+        _imp_menu.addSeparator()
+        _exp_adi = QAction('导出ADI文件', research_window)
+        _exp_adi.triggered.connect(_export_search_adi)
+        _imp_menu.addAction(_exp_adi)
+        _exp_xls = QAction('导出为表格', research_window)
+        _exp_xls.triggered.connect(_export_search_excel)
+        _imp_menu.addAction(_exp_xls)
+        _imp_menu.addSeparator()
+        _exp_sel_menu = _imp_menu.addMenu('导出选中的日志')
+        _exp_sel_adi = QAction('导出选中的日志为ADI', research_window)
+        _exp_sel_adi.triggered.connect(_export_search_adi)
+        _exp_sel_menu.addAction(_exp_sel_adi)
+        _exp_sel_xls = QAction('导出选中的日志为表格', research_window)
+        _exp_sel_xls.triggered.connect(_export_search_excel)
+        _exp_sel_menu.addAction(_exp_sel_xls)
+        _exp_sel_fhl = QAction('导出选中的日志为 F HamLog 项目文件', research_window)
+        _exp_sel_fhl.triggered.connect(_export_search_fhl)
+        _exp_sel_menu.addAction(_exp_sel_fhl)
+
+        # 顶部提示栏（已取消 全选 / 全不选 按钮）
+        top_row = QHBoxLayout()
+        hint = QLabel('勾选下方记录，选择结果会自动同步到主页面的选择框（Ctrl+A 全选 / Ctrl+I 反选 / Ctrl+D 取消选择）')
+        hint.setStyleSheet('color: gray;')
+        top_row.addWidget(hint)
+        top_row.addStretch(1)
         lay.addLayout(top_row)
 
         # 新增"选择"列（列0），其余列整体右移一列
@@ -985,7 +1098,7 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
         lay.addWidget(table_r)
         table_r.scrollToBottom()
 
-        # 搜索结果表格右键菜单：复制选中行 / 全选 / 取消全选（复制的记录可粘贴到主窗口或 Excel）
+        # 搜索结果表格右键菜单：复制选中行 / 全选 / 反选 / 取消选择（复制的记录可粘贴到主窗口或 Excel）
         def _search_context_menu(pos):
             menu = QMenu(window)
             act_copy = QAction('复制选中行', window)
@@ -1005,8 +1118,9 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
             act_copy.triggered.connect(do_copy)
             menu.addAction(act_copy)
             menu.addSeparator()
-            act_all = QAction('全选', window); act_all.triggered.connect(_select_all); menu.addAction(act_all)
-            act_none = QAction('取消全选', window); act_none.triggered.connect(_clear_all); menu.addAction(act_none)
+            act_all = QAction('全选', window); act_all.triggered.connect(_search_select_all); menu.addAction(act_all)
+            act_inv = QAction('反选', window); act_inv.triggered.connect(_search_invert); menu.addAction(act_inv)
+            act_none = QAction('取消选择', window); act_none.triggered.connect(_search_select_none); menu.addAction(act_none)
             menu.exec(table_r.viewport().mapToGlobal(pos))
 
         table_r.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -1070,7 +1184,7 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
         h5 = QHBoxLayout()
         h5.addWidget(QLabel('范围：'))
         scope_combo = QComboBox()
-        scope_combo.addItems(['全部匹配记录', '仅选中的行'])
+        scope_combo.addItems(['全部通联记录', '仅选中的行'])
         h5.addWidget(scope_combo)
         dlg_layout.addLayout(h5)
 
@@ -1144,10 +1258,12 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
         QMessageBox.information(window, '查找替换',
                                 f'替换完成：影响 {affected} 条记录，共 {total} 处替换。')
 
-    def show_statistics():
+    def show_statistics(records=None, parent=None, scope_labels=None, scope_resolver=None, default_scope=None):
         global file
-        dlg = QDialog(window)
-        dlg.setWindowTitle('统计图表')  # 窗口标题
+        owner = parent if parent is not None else window
+        dlg = QDialog(owner)
+        dlg.setWindowTitle('统计图')  # 窗口标题
+        dlg.resize(320,100)
         dlg_layout = QVBoxLayout(dlg)
 
         h1 = QHBoxLayout()
@@ -1177,6 +1293,23 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
         h2.addWidget(chart_combo)
         dlg_layout.addLayout(h2)
 
+        # 范围：自定义（如搜索结果按 全部搜索结果/仅选中的行）或默认（主窗口 全部通联记录/仅选中的行）
+        if scope_labels is not None:
+            label_list = scope_labels
+        elif records is None:
+            label_list = ['全部通联记录', '仅选中的行']
+        else:
+            label_list = None
+        if label_list is not None:
+            h_scope = QHBoxLayout()
+            h_scope.addWidget(QLabel('范围：'))
+            scope_combo = QComboBox()
+            scope_combo.addItems(label_list)
+            if default_scope is not None:
+                scope_combo.setCurrentText(default_scope)
+            h_scope.addWidget(scope_combo)
+            dlg_layout.addLayout(h_scope)
+
         btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         btns.accepted.connect(dlg.accept)
         btns.rejected.connect(dlg.reject)
@@ -1188,16 +1321,29 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
         field = combo_stat.currentData()
         chart_type = chart_combo.currentText()
 
+        # 数据来源
+        if scope_labels is not None:
+            data = scope_resolver(scope_combo.currentText())
+        elif records is not None:
+            data = records
+        else:
+            scope = scope_combo.currentText()
+            if scope == '仅选中的行':
+                selected = set(get_selected_row_indexes())
+                data = [file[i] for i in selected]
+            else:
+                data = file
+
         # 统计各项出现次数
         counts = {}
-        for rec in file:
+        for rec in data:
             val = str(rec.get(field, '')).strip()
             if val == '':
                 val = '<空>'
             counts[val] = counts.get(val, 0) + 1
 
         if not counts:
-            QMessageBox.information(window, '统计', '没有可统计的数据。')
+            QMessageBox.information(owner, '统计', '没有可统计的数据。')
             return
 
         # 绘图
@@ -1208,7 +1354,7 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
             matplotlib.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'DejaVu Sans']
             matplotlib.rcParams['axes.unicode_minus'] = False  # 正常显示负号
         except Exception:
-            QMessageBox.warning(window, '缺少依赖', '未安装 matplotlib，请运行: pip install matplotlib')
+            QMessageBox.warning(owner, '缺少依赖', '未安装 matplotlib，请运行: pip install matplotlib')
             return
 
         labels = list(counts.keys())
@@ -1237,7 +1383,7 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
 
     tool_menu.addSeparator()
 
-    stats_action = QAction('统计图表', window)
+    stats_action = QAction('统计图', window)
     stats_action.setShortcut('Ctrl+Shift+P')
     stats_action.triggered.connect(lambda: show_statistics())
     tool_menu.addAction(stats_action)

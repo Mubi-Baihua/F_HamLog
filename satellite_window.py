@@ -1012,7 +1012,7 @@ def main(parent_window, quick_log_callback=None):
             win, '设置观测站',
             '尚未设置观测站位置。\n请在弹出的对话框中填写你的 QTH 经纬度与海拔，'
             '否则过境预测不准确。')
-        dlg = ObserverDialog(win, 39.9042, 116.4074, 50.0)  # 默认北京，供参考
+        dlg = ObserverDialog(win, 0.0, 0.0, 0.0)  # 默认 0,0
         if dlg.exec() == QDialog.Accepted:
             vals = dlg.get_values()
             if vals:
