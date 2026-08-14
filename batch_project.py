@@ -1,11 +1,9 @@
 from PySide6.QtWidgets import *
-from PySide6.QtCore import Qt  # 新增导入 Qt
-from functools import partial
+from PySide6.QtCore import Qt
 import call_upper
 import time as time_
 import sys
 import re
-import json
 import os
 import fhl_rw
 
@@ -27,19 +25,25 @@ translation_dict = {
                 'notes': '备注'
             }
 
-page_index = 0
-fhl_list= []
+# 行顺序（即字段键顺序）
+KEYS = list(translation_dict.keys())
+# 每条日志必须满足的必填字段
+REQUIRED_KEYS = ('m_call', 'o_call', 'freq', 'mode', 'm_rst', 'o_rst')
+
+DATE_RE = re.compile(r'^\d{4}-\d{2}-\d{2}$')
+TIME_RE = re.compile(r'^\d{2}:\d{2}$')
+
 
 def main(window, preset=None, on_saved=None):
-    window.resize(410, 660)
+    window.resize(1000, 750)
     window.setWindowTitle('批量记录')
-    
+
     with open('file/m_xml.txt', 'r', encoding='utf-8') as f:
         xml_dict = eval(f.read())
 
     date = time_.strftime("%Y-%m-%d", time_.localtime())
     time = time_.strftime("%H:%M", time_.localtime())
-    
+
     app_list = {
                 'date': date,
                 'time': time,
@@ -63,11 +67,6 @@ def main(window, preset=None, on_saved=None):
                 'notes': ''
             }
 
-    # 重置模块级全局，避免上次批量记录的残留数据
-    global fhl_list, page_index
-    fhl_list = []
-    page_index = 0
-
     # 若由卫星窗口等外部调用并传入预填数据，则用其覆盖对应字段
     # （其余字段如 m_call/o_call/m_qth 仍取自设置，保持默认）
     if preset:
@@ -77,324 +76,239 @@ def main(window, preset=None, on_saved=None):
             if v not in (None, ''):
                 app_list[k] = v
 
-    rows = len(translation_dict)
-    table_others = QTableWidget(rows, 2)
-    table_others.setColumnWidth(0, 100)  # 设置第1列宽度为100
-    table_others.setColumnWidth(1, 250)
-    table_others.setHorizontalHeaderLabels(["项目", "内容"])
-    row = 0
-    for i in translation_dict.keys():
-        item = QTableWidgetItem(translation_dict[i])
-        item.setFlags(item.flags() & ~Qt.ItemIsEditable)  # 禁止编辑
-        table_others.setItem(row, 0, item)
-                
-        item2 = QTableWidgetItem(app_list[i])  # 第2列可以编辑
-        table_others.setItem(row, 1, item2)
-        row += 1
-    # 己方呼号(行2)与对方呼号(行3)单元格编辑时实时转大写
-    _call_del = call_upper.UpperCallDelegate()
-    table_others.setItemDelegateForRow(2, _call_del)
-    table_others.setItemDelegateForRow(3, _call_del)
-    table_others._upper_call_delegate = _call_del  # 保持引用，防止被回收
     central_widget = QWidget()
     window.setCentralWidget(central_widget)
+    layout = QVBoxLayout(central_widget)
 
-    def save_changes(app_list):
-        global fhl_list,window_page,page_index,fhl_list
-
-        keys_list = list(translation_dict.keys())
-        for row in range(len(keys_list)):
-            key = keys_list[row]
-
-            if key == 'date':
-                if not (re.search(r'^\d{4}-\d{2}-\d{2}$', table_others.item(row, 1).text()) or table_others.item(row, 1).text() == ''):
-                        QMessageBox.warning(window, "格式错误", f"日期格式错误，应为YYYY-MM-DD")
-                        return
-            elif key == 'time':
-                if not (re.search(r'^\d{2}:\d{2}$', table_others.item(row, 1).text()) or table_others.item(row, 1).text() == ''):
-                    QMessageBox.warning(window, "格式错误", f"时间格式错误，应为HH:MM")
-                    return
-
-        for row in range(table_others.rowCount()):
-            key = list(translation_dict.keys())[row]
-            value = table_others.item(row, 1).text()
-            app_list[key] = value
-
-        
-        print("填充的内容:", app_list)
-        window.close()
-
-        fhl_list= []
-
-        page_index = 0
-
-        show_page(app_list)
-
-        
-    def show_page(app_list):
-        global fhl_list,window_page,page_index,fhl_list
-        page_sum = len(fhl_list)
-
-        if page_index+1 > page_sum:
-            page_sum = page_index+1
-            this_app_list = app_list
-        else:
-            this_app_list = fhl_list[page_index]
-
-        window_page = QMainWindow() 
-        window_page.resize(410, 660)
-        window_page.setWindowTitle('批量记录')
-
-        page_widget = QWidget()
-        window_page.setCentralWidget(page_widget)
-
-        layout_page = QVBoxLayout(page_widget)
-
-        label_page = QLabel(f"第 {page_index + 1} 条  共 {page_sum} 条")
-        label_page.setAlignment(Qt.AlignCenter)
-
-        if app_list['date'] == '':
-            this_app_list['date'] = time_.strftime("%Y-%m-%d", time_.localtime())
-        if app_list['time'] == '':
-            this_app_list['time'] = time_.strftime("%H:%M", time_.localtime())
-
-        layout_page.addWidget(label_page)
-
-        rows = len(translation_dict)
-        table_others_page = QTableWidget(rows, 2)
-        table_others_page.setColumnWidth(0, 100)  # 设置第1列宽度为100
-        table_others_page.setColumnWidth(1, 250)
-        table_others_page.setHorizontalHeaderLabels(["项目", "内容"])
-        row = 0
-        for i in translation_dict.keys():
-            item = QTableWidgetItem(translation_dict[i])
-            item.setFlags(item.flags() & ~Qt.ItemIsEditable)  # 禁止编辑
-            table_others_page.setItem(row, 0, item)
-                        
-            item2 = QTableWidgetItem(this_app_list[i])  # 第2列可以编辑
-            table_others_page.setItem(row, 1, item2)
-            row += 1
-
-        # 己方呼号(行2)与对方呼号(行3)单元格编辑时实时转大写
-        _call_del_p = call_upper.UpperCallDelegate()
-        table_others_page.setItemDelegateForRow(2, _call_del_p)
-        table_others_page.setItemDelegateForRow(3, _call_del_p)
-        table_others_page._upper_call_delegate = _call_del_p  # 保持引用，防止被回收
-
-        layout_page.addWidget(table_others_page)
-
-        def navigate_page(window,direction, app_list,table_others_page):
-            global fhl_list,page_index
-
-            app_dict_now = {}
-
-            for row in range(table_others_page.rowCount()):
-                key = list(translation_dict.keys())[row]
-                value = table_others_page.item(row, 1).text()
-                app_dict_now[key] = value
-            
-            keys_list = list(translation_dict.keys())
-            for row in range(len(keys_list)):
-                key = keys_list[row]
-
-                if key == 'date':
-                    if not re.search(r'^\d{4}-\d{2}-\d{2}$', table_others_page.item(row, 1).text()):
-                            QMessageBox.warning(window, "格式错误", f"日期格式错误，应为YYYY-MM-DD")
-                            return
-                elif key == 'time':
-                    if not re.search(r'^\d{2}:\d{2}$', table_others_page.item(row, 1).text()):
-                        QMessageBox.warning(window, "格式错误", f"时间格式错误，应为HH:MM")
-                        return
-                elif key == 'm_call' or key == 'o_call' or key == 'freq' or key == 'mode'or key == 'm_rst' or key == 'o_rst':
-                    if table_others_page.item(row, 1).text() == '':
-                        QMessageBox.warning(window, "格式错误", f"缺少 {translation_dict[key]} (必填)")
-                        return
-
-            if page_index+1 > len(fhl_list):
-                fhl_list.append(app_dict_now)
-            else:
-                fhl_list[page_index] = app_dict_now
-
-            page_index += direction
-
-            show_page(app_list)
-
-        def save_page_changes(window,table_others_page):
-            global fhl_list,page_index
-            app_dict_now = {}
-
-            for row in range(table_others_page.rowCount()):
-                key = list(translation_dict.keys())[row]
-                value = table_others_page.item(row, 1).text()
-                app_dict_now[key] = value
-            
-            keys_list = list(translation_dict.keys())
-            for row in range(len(keys_list)):
-                key = keys_list[row]
-
-                if key == 'date':
-                    if not re.search(r'^\d{4}-\d{2}-\d{2}$', table_others_page.item(row, 1).text()):
-                            QMessageBox.warning(window, "格式错误", f"日期格式错误，应为YYYY-MM-DD")
-                            return
-                elif key == 'time':
-                    if not re.search(r'^\d{2}:\d{2}$', table_others_page.item(row, 1).text()):
-                        QMessageBox.warning(window, "格式错误", f"时间格式错误，应为HH:MM")
-                        return
-                elif key == 'm_call' or key == 'o_call' or key == 'freq' or key == 'mode'or key == 'm_rst' or key == 'o_rst':
-                    if table_others_page.item(row, 1).text() == '':
-                        QMessageBox.warning(window, "格式错误", f"缺少 {translation_dict[key]} (必填)")
-                        return
-
-            if page_index+1 > len(fhl_list):
-                fhl_list.append(app_dict_now)
-            else:
-                fhl_list[page_index] = app_dict_now
-
-            # 若由卫星窗口（项目界面）传入 on_saved，则直接追加到项目文件，不弹保存方式选择
-            if on_saved is not None:
-                try:
-                    on_saved(fhl_list)
-                    QMessageBox.information(window, '完成',
-                                            f'已添加 {len(fhl_list)} 条记录到当前项目。')
-                except Exception as e:
-                    QMessageBox.warning(window, '保存失败',
-                                        f'添加到项目失败：\n{e}')
-                window_page.close()
-                return
-
-            if not fhl_list:
-                QMessageBox.warning(window, "提示", "没有可保存的记录。")
-                return
-
-            def save_records_to_path(records, save_path,key = None):
-                fhl_rw.write_fhl_file(save_path, records,key)
-
-            def load_records_from_path(load_path):
-                if not os.path.exists(load_path):
-                    return []
-                data,key = fhl_rw.read_fhl_file(load_path)
-                return data,key
-
-            finish_dialog = QDialog(window)
-            finish_dialog.setWindowTitle('批量记录完成')
-            finish_dialog.resize(520, 120)
-            finish_dialog.setFixedSize(520, 120)
-            finish_dialog.setModal(True)
-
-            finish_layout = QVBoxLayout(finish_dialog)
-            finish_layout.setSpacing(12)
-
-            title_label = QLabel('请选择保存方式：')
-            title_label.setAlignment(Qt.AlignCenter)
-            title_label.setStyleSheet('font-size: 12pt; font-weight: bold;')
-            finish_layout.addWidget(title_label)
-
-            action_row = QHBoxLayout()
-            action_row.setSpacing(10)
-            action_row.setContentsMargins(0, 0, 0, 0)
-
-            def add_to_project():
-                project_path, _ = QFileDialog.getOpenFileName(
-                    finish_dialog,
-                    '添加到 F HamLog项目',
-                    '',
-                    'F HamLog项目 (*.fhl)'
-                )
-                if project_path == '':
-                    return
-                records,key = load_records_from_path(project_path)
-                records.extend(fhl_list)
-                save_records_to_path(records, project_path,key)
-                QMessageBox.information(finish_dialog, '完成', f'已添加 {len(fhl_list)} 条记录到项目。')
-                finish_dialog.accept()
-
-            def save_as_project():
-                save_path, _ = QFileDialog.getSaveFileName(
-                    finish_dialog,
-                    '另存为 F HamLog项目',
-                    '',
-                    'F HamLog项目 (*.fhl)'
-                )
-                if save_path == '':
-                    return
-                save_records_to_path(fhl_list, save_path)
-                QMessageBox.information(finish_dialog, '完成', f'已另存为项目文件：{save_path}')
-                finish_dialog.accept()
-
-            def add_to_default_log():
-                default_path = os.path.join('file', 'main.fhl')
-                records,key = load_records_from_path(default_path)
-                records.extend(fhl_list)
-                save_records_to_path(records, default_path,key)
-                QMessageBox.information(finish_dialog, '完成', f'已添加到 {len(fhl_list)} 条记录到默认通联日志')
-                finish_dialog.accept()
-
-            btn_project = QPushButton('添加到 F HamLog 项目')
-            btn_project.setMinimumHeight(36)
-            btn_project.clicked.connect(add_to_project)
-            action_row.addWidget(btn_project)
-
-            btn_save_as = QPushButton('另存为 F HamLog 项目')
-            btn_save_as.setMinimumHeight(36)
-            btn_save_as.clicked.connect(save_as_project)
-            action_row.addWidget(btn_save_as)
-
-            btn_default = QPushButton('添加到默认通联日志')
-            btn_default.setMinimumHeight(36)
-            btn_default.clicked.connect(add_to_default_log)
-            action_row.addWidget(btn_default)
-
-            finish_layout.addLayout(action_row)
-
-            cancel_button = QPushButton('取消')
-            cancel_button.clicked.connect(finish_dialog.reject)
-            finish_layout.addWidget(cancel_button, alignment=Qt.AlignRight)
-
-            finish_dialog.exec()
-
-        button_layout = QVBoxLayout()
-        button_layout.setSpacing(10)
-        button_layout.setContentsMargins(0, 0, 0, 0)
-
-        nav_layout = QHBoxLayout()
-        nav_layout.setSpacing(10)
-        nav_layout.setContentsMargins(0, 0, 0, 0)
-
-        button_last = QPushButton('上一条')
-        button_last.clicked.connect(lambda: navigate_page(window,-1, app_list,table_others_page))
-        if page_index == 0:
-            button_last.setEnabled(False)
-        button_next = QPushButton('下一条')
-        button_next.clicked.connect(lambda: navigate_page(window,1, app_list,table_others_page))
-        button_save = QPushButton('完成')
-        button_save.clicked.connect(lambda: save_page_changes(window,table_others_page))
-
-        nav_layout.addWidget(button_last)
-        nav_layout.addStretch(1)
-        nav_layout.addWidget(button_next)
-        nav_layout.addWidget(button_save)
-
-        button_layout.addLayout(nav_layout)
-
-        layout_page.addLayout(button_layout)
-
-        window_page.show()
-
-
-    label = QLabel("请输入批量记录的模板（日期与时间为空则自动填充）")
+    label = QLabel('第一列为模板（默认值），后续每列为一条日志；日期/时间为空时自动填充当前时间。')
     label.setAlignment(Qt.AlignCenter)
+    layout.addWidget(label)
 
-    save_button = QPushButton("下一步")
-    save_button.clicked.connect(lambda: save_changes(app_list))
-    
-    
-    layout_others = QVBoxLayout(central_widget)
-    layout_others.addWidget(label)
-    layout_others.addWidget(table_others)
-    layout_others.addWidget(save_button)
+    # 表格：行=字段，列0=模板，初始无日志列（默认不要日志）
+    table = QTableWidget(len(KEYS), 1)
+    table.setVerticalHeaderLabels(list(translation_dict.values()))
+    # 行高与 project.py 主表一致：使用 Qt 默认行高，不设自定义值
+
+    def refresh_headers():
+        headers = ['模板'] + [f'第{i}条' for i in range(1, table.columnCount())]
+        table.setHorizontalHeaderLabels(headers)
+
+    # 初始填充：仅模板列（默认值）
+    for r in range(len(KEYS)):
+        table.setItem(r, 0, QTableWidgetItem(app_list[KEYS[r]]))
+    refresh_headers()
+    # 默认选中最后一列（初始即模板列）
+    table.setCurrentCell(0, table.columnCount() - 1)
+
+    # 列宽
+    table.setColumnWidth(0, 150)
+
+    # 己方呼号(行2)与对方呼号(行3)单元格编辑时实时转大写
+    _call_del = call_upper.UpperCallDelegate()
+    table.setItemDelegateForRow(2, _call_del)
+    table.setItemDelegateForRow(3, _call_del)
+    table._upper_call_delegate = _call_del  # 保持引用，防止被回收
+
+    layout.addWidget(table)
+
+    def add_log_column():
+        """在末尾新增一条日志列，内容复制当前模板列的值，并跳转到该列。"""
+        c = table.columnCount()
+        table.insertColumn(c)
+        for r in range(table.rowCount()):
+            v = table.item(r, 0).text() if table.item(r, 0) is not None else ''
+            table.setItem(r, c, QTableWidgetItem(v))
+        table.setColumnWidth(c, 120)
+        refresh_headers()
+        # 默认回到最后一列（新增加的日志列）
+        table.setCurrentCell(0, c)
+
+    def delete_current_column():
+        """删除当前选中的日志列（模板列不可删）。"""
+        c = table.currentColumn()
+        if c < 1:
+            QMessageBox.warning(window, '提示', '请先选中要删除的日志列（模板列不可删除）。')
+            return
+        col_label = (table.horizontalHeaderItem(c).text()
+                     if table.horizontalHeaderItem(c) is not None else f'第{c}条')
+        reply = QMessageBox.question(window, '确认删除',
+                                    f'确定要删除「{col_label}」吗？该列内容将丢失。',
+                                    QMessageBox.Yes | QMessageBox.No,
+                                    QMessageBox.No)
+        if reply != QMessageBox.Yes:
+            return
+        table.removeColumn(c)
+        refresh_headers()
+
+    def collect_and_validate():
+        """从日志列（列>=1）收集记录，返回 (records, error_msg)。"""
+        records = []
+        for c in range(1, table.columnCount()):
+            col_label = (table.horizontalHeaderItem(c).text()
+                         if table.horizontalHeaderItem(c) is not None else f'第{c}条')
+            rec = {}
+            empty = True
+            for r in range(table.rowCount()):
+                v = table.item(r, c).text() if table.item(r, c) is not None else ''
+                rec[KEYS[r]] = v
+                if v != '':
+                    empty = False
+            if empty:
+                continue  # 整列空白视为未填写，跳过
+            # 日期/时间为空则自动填充当前时间
+            if rec['date'] == '':
+                rec['date'] = time_.strftime("%Y-%m-%d", time_.localtime())
+            if rec['time'] == '':
+                rec['time'] = time_.strftime("%H:%M", time_.localtime())
+            # 校验
+            if rec['date'] != '' and not DATE_RE.search(rec['date']):
+                return None, f'{col_label} 日期格式错误，应为YYYY-MM-DD'
+            if rec['time'] != '' and not TIME_RE.search(rec['time']):
+                return None, f'{col_label} 时间格式错误，应为HH:MM'
+            for k in REQUIRED_KEYS:
+                if rec[k] == '':
+                    return None, f'{col_label} 缺少 {translation_dict[k]} (必填)'
+            records.append(rec)
+        return records, ''
+
+    def save_all():
+        records, err = collect_and_validate()
+        if err:
+            QMessageBox.warning(window, '格式错误', err)
+            return
+        if not records:
+            QMessageBox.warning(window, '提示', '没有可保存的记录（日志列均为空）。')
+            return
+
+        fhl_list = records  # 供下方保存逻辑使用（与旧逻辑保持一致）
+
+        # 若由卫星窗口（项目界面）传入 on_saved，则直接追加到项目文件，不弹保存方式选择
+        if on_saved is not None:
+            try:
+                on_saved(fhl_list)
+                QMessageBox.information(window, '完成',
+                                        f'已添加 {len(fhl_list)} 条记录到当前项目。')
+            except Exception as e:
+                QMessageBox.warning(window, '保存失败',
+                                    f'添加到项目失败：\n{e}')
+            window.close()
+            return
+
+        if not fhl_list:
+            QMessageBox.warning(window, "提示", "没有可保存的记录。")
+            return
+
+        def save_records_to_path(records, save_path, key=None):
+            fhl_rw.write_fhl_file(save_path, records, key)
+
+        def load_records_from_path(load_path):
+            if not os.path.exists(load_path):
+                return [], None
+            data, key = fhl_rw.read_fhl_file(load_path)
+            return data, key
+
+        finish_dialog = QDialog(window)
+        finish_dialog.setWindowTitle('批量记录完成')
+        finish_dialog.resize(520, 120)
+        finish_dialog.setFixedSize(520, 120)
+        finish_dialog.setModal(True)
+
+        finish_layout = QVBoxLayout(finish_dialog)
+        finish_layout.setSpacing(12)
+
+        title_label = QLabel('请选择保存方式：')
+        title_label.setAlignment(Qt.AlignCenter)
+        title_label.setStyleSheet('font-size: 12pt; font-weight: bold;')
+        finish_layout.addWidget(title_label)
+
+        action_row = QHBoxLayout()
+        action_row.setSpacing(10)
+        action_row.setContentsMargins(0, 0, 0, 0)
+
+        def add_to_project():
+            project_path, _ = QFileDialog.getOpenFileName(
+                finish_dialog,
+                '添加到 F HamLog项目',
+                '',
+                'F HamLog项目 (*.fhl)'
+            )
+            if project_path == '':
+                return
+            records, key = load_records_from_path(project_path)
+            records.extend(fhl_list)
+            save_records_to_path(records, project_path, key)
+            QMessageBox.information(finish_dialog, '完成', f'已添加 {len(fhl_list)} 条记录到项目。')
+            finish_dialog.accept()
+
+        def save_as_project():
+            save_path, _ = QFileDialog.getSaveFileName(
+                finish_dialog,
+                '另存为 F HamLog项目',
+                '',
+                'F HamLog项目 (*.fhl)'
+            )
+            if save_path == '':
+                return
+            save_records_to_path(fhl_list, save_path)
+            QMessageBox.information(finish_dialog, '完成', f'已另存为项目文件：{save_path}')
+            finish_dialog.accept()
+
+        def add_to_default_log():
+            default_path = os.path.join('file', 'main.fhl')
+            records, key = load_records_from_path(default_path)
+            records.extend(fhl_list)
+            save_records_to_path(records, default_path, key)
+            QMessageBox.information(finish_dialog, '完成', f'已添加 {len(fhl_list)} 条记录到默认通联日志')
+            finish_dialog.accept()
+
+        btn_project = QPushButton('添加到 F HamLog 项目')
+        btn_project.setMinimumHeight(36)
+        btn_project.clicked.connect(add_to_project)
+        action_row.addWidget(btn_project)
+
+        btn_save_as = QPushButton('另存为 F HamLog 项目')
+        btn_save_as.setMinimumHeight(36)
+        btn_save_as.clicked.connect(save_as_project)
+        action_row.addWidget(btn_save_as)
+
+        btn_default = QPushButton('添加到默认通联日志')
+        btn_default.setMinimumHeight(36)
+        btn_default.clicked.connect(add_to_default_log)
+        action_row.addWidget(btn_default)
+
+        finish_layout.addLayout(action_row)
+
+        cancel_button = QPushButton('取消')
+        cancel_button.clicked.connect(finish_dialog.reject)
+        finish_layout.addWidget(cancel_button, alignment=Qt.AlignRight)
+
+        finish_dialog.exec()
+
+    # 按钮区
+    btn_row = QHBoxLayout()
+    btn_row.setSpacing(10)
+
+    button_add = QPushButton('添加日志列')
+    button_add.setMinimumHeight(34)
+    button_add.clicked.connect(add_log_column)
+
+    button_del = QPushButton('删除当前列')
+    button_del.setMinimumHeight(34)
+    button_del.clicked.connect(delete_current_column)
+
+    button_save = QPushButton('完成')
+    button_save.setMinimumHeight(34)
+    button_save.clicked.connect(save_all)
+
+    btn_row.addWidget(button_add)
+    btn_row.addWidget(button_del)
+    btn_row.addStretch(1)
+    btn_row.addWidget(button_save)
+
+    layout.addLayout(btn_row)
 
     window.show()
-    
+
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
