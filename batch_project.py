@@ -34,6 +34,77 @@ DATE_RE = re.compile(r'^\d{4}-\d{2}-\d{2}$')
 TIME_RE = re.compile(r'^\d{2}:\d{2}$')
 
 
+class FrozenTableWidget(QTableWidget):
+    """第一列（模板列）冻结在左侧，类似 Excel 的冻结窗格。"""
+
+    def __init__(self, rows, cols, parent=None):
+        super().__init__(rows, cols, parent)
+        # 冻结层：用 QTableView 共享主表 model，仅显示第 0 列
+        self._frozen = QTableView(self)
+        self._frozen.setModel(self.model())
+        self._frozen.verticalHeader().hide()
+        self._frozen.horizontalHeader().setSectionResizeMode(QHeaderView.Fixed)
+        self._frozen.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._frozen.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._frozen.setFocusPolicy(Qt.NoFocus)
+        self._frozen.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self._frozen.setStyleSheet("QTableView{ border:none; background-color:#f3f3f3; }")
+        self.viewport().stackUnder(self._frozen)
+        self._frozen.raise_()
+        self._frozen.show()
+        # 第 0 列宽度跟随主表
+        self.horizontalHeader().sectionResized.connect(
+            lambda i, _, w: self._frozen.setColumnWidth(0, w) if i == 0 else None)
+        self.sync_frozen_columns()
+        # 垂直滚动同步（双向，带防抖）
+        self._syncing = False
+        self.verticalScrollBar().valueChanged.connect(self._sync_from_main)
+        self._frozen.verticalScrollBar().valueChanged.connect(self._sync_from_frozen)
+
+    def sync_frozen_columns(self):
+        """冻结层只显示第 0 列，并同步其宽度（横向表头标签由共享 model 提供）。"""
+        for c in range(self.columnCount()):
+            self._frozen.setColumnHidden(c, c != 0)
+        self._frozen.setColumnWidth(0, self.columnWidth(0))
+
+    def updateFrozenGeometry(self):
+        hh = self.horizontalHeader().height()
+        vhw = self.verticalHeader().width()
+        # 冻结层从窗口顶部(y=0)开始，高度覆盖「表头+视口」，
+        # 使其横向表头与各行都与主表精确对齐（类似 Excel 冻结首列）。
+        self._frozen.setGeometry(vhw, 0, self.columnWidth(0), hh + self.viewport().height())
+        self.sync_frozen_columns()
+
+    def set_frozen(self, on):
+        self._frozen.setVisible(on)
+        if on:
+            self.updateFrozenGeometry()
+            # 重新显示后需置顶，否则会落到主表视口后面导致"失效"
+            self._frozen.raise_()
+
+    def _sync_from_main(self, val):
+        if self._syncing:
+            return
+        self._syncing = True
+        self._frozen.verticalScrollBar().setValue(val)
+        self._syncing = False
+
+    def _sync_from_frozen(self, val):
+        if self._syncing:
+            return
+        self._syncing = True
+        self.verticalScrollBar().setValue(val)
+        self._syncing = False
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.updateFrozenGeometry()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.updateFrozenGeometry()
+
+
 def main(window, preset=None, on_saved=None):
     window.resize(1000, 750)
     window.setWindowTitle('批量记录')
@@ -84,10 +155,22 @@ def main(window, preset=None, on_saved=None):
     label.setAlignment(Qt.AlignCenter)
     layout.addWidget(label)
 
+    # 选项区：冻结模板列开关（默认开启，类似 Excel 冻结首列）
+    opt_row = QHBoxLayout()
+    opt_row.setSpacing(10)
+    cb_freeze = QCheckBox('固定模板列')
+    cb_freeze.setChecked(True)
+    opt_row.addWidget(cb_freeze)
+    opt_row.addStretch(1)
+    layout.addLayout(opt_row)
+
     # 表格：行=字段，列0=模板，初始无日志列（默认不要日志）
-    table = QTableWidget(len(KEYS), 1)
+    table = FrozenTableWidget(len(KEYS), 1)
     table.setVerticalHeaderLabels(list(translation_dict.values()))
     # 行高与 project.py 主表一致：使用 Qt 默认行高，不设自定义值
+
+    # 冻结模板列开关（默认开启）；在 table 创建后再连接
+    cb_freeze.toggled.connect(table.set_frozen)
 
     def refresh_headers():
         headers = ['模板'] + [f'第{i}条' for i in range(1, table.columnCount())]
@@ -108,6 +191,10 @@ def main(window, preset=None, on_saved=None):
     table.setItemDelegateForRow(2, _call_del)
     table.setItemDelegateForRow(3, _call_del)
     table._upper_call_delegate = _call_del  # 保持引用，防止被回收
+    # 冻结层同样挂委托（共享 model，模板列在此编辑）
+    table._frozen.setItemDelegateForRow(2, _call_del)
+    table._frozen.setItemDelegateForRow(3, _call_del)
+    table._frozen._upper_call_delegate = _call_del
 
     layout.addWidget(table)
 
@@ -120,6 +207,7 @@ def main(window, preset=None, on_saved=None):
             table.setItem(r, c, QTableWidgetItem(v))
         table.setColumnWidth(c, 120)
         refresh_headers()
+        table.updateFrozenGeometry()
         # 默认回到最后一列（新增加的日志列）
         table.setCurrentCell(0, c)
 
@@ -139,6 +227,7 @@ def main(window, preset=None, on_saved=None):
             return
         table.removeColumn(c)
         refresh_headers()
+        table.updateFrozenGeometry()
 
     def collect_and_validate():
         """从日志列（列>=1）收集记录，返回 (records, error_msg)。"""
