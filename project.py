@@ -12,11 +12,12 @@ import urllib.parse
 import fhl_rw
 import copy
 import call_upper
+import qso_rec
 
 # 复制/粘贴使用的字段顺序（与表格列对应，英文键名作为剪贴板表头，便于跨窗口/跨软件解析）
 COPY_FIELDS = ['date', 'time', 'm_call', 'o_call', 'freq', 'freq_rx', 'mode',
                'prop_mode', 'sat_name', 'm_rst', 'o_rst', 'm_qth', 'o_qth',
-               'm_dig', 'o_dig', 'm_ant', 'o_ant', 'm_pow', 'o_pow', 'notes']
+               'm_dig', 'o_dig', 'm_ant', 'o_ant', 'm_pow', 'o_pow', 'notes', 'record']
 # 字段 -> 中文表头（粘贴时兼容中文表头）
 FIELD_LABELS = {
     'date': '日期', 'time': '时间', 'm_call': '己方呼号', 'o_call': '对方呼号',
@@ -24,7 +25,7 @@ FIELD_LABELS = {
     'sat_name': '卫星名称', 'm_rst': '己方接收信号', 'o_rst': '对方接收信号',
     'm_qth': '己方QTH', 'o_qth': '对方QTH', 'm_dig': '己方设备', 'o_dig': '对方设备',
     'm_ant': '己方天线', 'o_ant': '对方天线', 'm_pow': '己方功率', 'o_pow': '对方功率',
-    'notes': '备注'
+    'notes': '备注', 'record': '通联录音'
 }
 
 file = None
@@ -33,7 +34,7 @@ _open_windows = []  # 保持由本模块打开的卫星批量记录窗口引用�
 
 def _ensure_log_keys(entry):
     # 确保单条记录包含新加的字段
-    for k in ['freq_rx', 'prop_mode', 'sat_name']:
+    for k in ['freq_rx', 'prop_mode', 'sat_name', 'record']:
         if k not in entry:
             entry[k] = ''
 
@@ -157,6 +158,84 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
         table_update()
         QMessageBox.information(window, "粘贴", f"已粘贴 {len(new_records)} 条日志。")
 
+    # ---------- 通联录音（record 字段：base64 编码的音频二进制） ----------
+    def silent_save():
+        # 强制静默写入磁盘（不受“自动保存”开关影响），用于录音增删后即时落盘
+        global key
+        fhl_rw.write_fhl_file(save_path, file, key)
+
+    def attach_recording(rec_dict, after=None):
+        # 选择音频文件并写入 rec_dict['record']
+        path, _ = QFileDialog.getOpenFileName(
+            window, '选择通联录音', '',
+            '音频文件 (*.wav *.mp3 *.m4a *.ogg *.flac *.aac);;所有文件 (*)')
+        if not path:
+            return
+        try:
+            with open(path, 'rb') as f:
+                data = f.read()
+        except Exception as e:
+            QMessageBox.warning(window, '添加失败', f'读取音频文件失败：{e}')
+            return
+        if len(data) == 0:
+            QMessageBox.warning(window, '添加失败', '音频文件为空。')
+            return
+        snapshot_before()
+        rec_dict['record'] = qso_rec.encode_record(data)
+        silent_save()           # 添加后自动保存
+        if after:
+            after()
+        QMessageBox.information(window, '添加成功', '通联录音已添加。')
+
+    def delete_recording(rec_dict, after=None):
+        if not rec_dict.get('record', ''):
+            return
+        if QMessageBox.question(window, '删除录音',
+                                '确定要删除这条通联录音吗？') == QMessageBox.Yes:
+            snapshot_before()
+            rec_dict['record'] = ''
+            silent_save()       # 删除后自动保存
+            if after:
+                after()
+
+    def play_recording(rec_dict):
+        b64 = rec_dict.get('record', '')
+        if not b64:
+            QMessageBox.information(window, '播放', '该日志还没有通联录音。')
+            return
+        data = qso_rec.decode_record(b64)
+        ok, msg = qso_rec.play_audio_bytes(data)
+        if ok:
+            date = rec_dict.get('date', '')
+            t = rec_dict.get('time', '')
+            o_call = rec_dict.get('o_call', '')
+            QMessageBox.information(
+                window, '正在播放',
+                f'时间：{date} {t}\n对方呼号：{o_call}\n（已调用系统默认播放器）')
+        else:
+            QMessageBox.warning(window, '播放失败', msg)
+
+    def build_record_cell(target, after=None):
+        # 根据是否存在录音返回对应按钮组合（添加 / 播放+删除）
+        # target：承载 record 字段的字典（主页为 file[row]，详情/新建为对应 dict）
+        # after：操作完成后用于刷新界面的回调（如重建表格）
+        w = QWidget()
+        h = QHBoxLayout(w)
+        h.setContentsMargins(2, 0, 2, 0)
+        h.setSpacing(2)
+        if target.get('record', ''):
+            play_btn = QPushButton('▶播放')
+            play_btn.clicked.connect(partial(play_recording, target))
+            del_btn = QPushButton('删除')
+            del_btn.clicked.connect(partial(delete_recording, target, after))
+            h.addWidget(play_btn)
+            h.addWidget(del_btn)
+        else:
+            add_btn = QPushButton('添加')
+            add_btn.clicked.connect(partial(attach_recording, target, after))
+            h.addWidget(add_btn)
+        return w
+
     def table_context_menu(pos):
         menu = QMenu(window)
         a1 = QAction('全选', window); a1.triggered.connect(lambda: set_all_rows_checked(True)); menu.addAction(a1)
@@ -181,9 +260,9 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
             
 
         file_length = len(file)
-        # 创建表格部件，增加到14列以容纳“选择”复选框
-        table = QTableWidget(file_length, 14)
-        table.setHorizontalHeaderLabels(["选择","日期","时间","己方呼号","对方呼号","频率","调制模式","传播模式","卫星名称", "己方接收信号", "对方接收信号", "己方QTH", "对方QTH","更多"])
+        # 创建表格部件，增加到15列（含“选择”复选框与“通联录音”列）
+        table = QTableWidget(file_length, 15)
+        table.setHorizontalHeaderLabels(["选择","日期","时间","己方呼号","对方呼号","频率","调制模式","传播模式","卫星名称", "己方接收信号", "对方接收信号", "己方QTH", "对方QTH","通联录音","更多"])
         table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         table.setSelectionBehavior(QAbstractItemView.SelectRows)
         table.setSelectionMode(QAbstractItemView.ExtendedSelection)
@@ -230,8 +309,11 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
             o_qth = QTableWidgetItem(file[i]['o_qth'])
             table.setItem(i, 12, o_qth)
             other_button = QPushButton("更多")
-            table.setCellWidget(i, 13, other_button)
+            table.setCellWidget(i, 14, other_button)
             other_button.clicked.connect(partial(project_others, i))
+
+            # 通联录音列（第13列，位于“更多”列之前）：无录音显示“添加”，有录音显示“播放/删除”
+            table.setCellWidget(i, 13, build_record_cell(file[i], table_update))
 
         table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         table.setColumnWidth(0, 45)
@@ -247,7 +329,8 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
         table.setColumnWidth(10, 80)
         table.setColumnWidth(11, 120)
         table.setColumnWidth(12, 120)
-        table.setColumnWidth(13, 80)
+        table.setColumnWidth(13, 120)
+        table.setColumnWidth(14, 80)
         #table.verticalHeader().setDefaultSectionSize(24)
         layout.addWidget(table)
 
@@ -280,7 +363,8 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
                 'o_ant': '',
                 'm_pow': '',
                 'o_pow': '',
-                'notes': ''
+                'notes': '',
+                'record': ''
             }
             if preset:
                 for k in ('date', 'time', 'm_call', 'o_call', 'freq', 'freq_rx',
@@ -290,7 +374,7 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
                         file_app[k] = v
             
             project_others_window = QMainWindow()
-            project_others_window.resize(410, 650)
+            project_others_window.resize(410, 680)
             project_others_window.setWindowTitle('新建日志')
             translation_dict = {
                 'date': '日期',
@@ -307,6 +391,7 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
                 "m_dig": '己方设备','o_dig': '对方设备',
                 'm_ant': '己方天线','o_ant': '对方天线',
                 'm_pow': '己方功率','o_pow': '对方功率',
+                'record': '通联录音',
                 'notes': '备注'
             }
             rows = len(translation_dict)
@@ -314,14 +399,30 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
             table_others.setColumnWidth(0, 100)  # 设置第1列宽度为100
             table_others.setColumnWidth(1, 250)
             table_others.setHorizontalHeaderLabels(["项目", "内容"])
+
+            # 通联录音行：作为独立项目，置于“备注”之前
+            rec_row = [None]
+
+            def refresh_new_rec():
+                r = rec_row[0]
+                if r is None:
+                    return
+                old = table_others.cellWidget(r, 1)
+                if old:
+                    old.deleteLater()
+                table_others.setCellWidget(r, 1, build_record_cell(file_app, refresh_new_rec))
+
             row = 0
             for i in translation_dict.keys():
                 item = QTableWidgetItem(translation_dict[i])
                 item.setFlags(item.flags() & ~Qt.ItemIsEditable)  # 禁止编辑
                 table_others.setItem(row, 0, item)
-                
-                item2 = QTableWidgetItem(file_app[i])  # 第2列可以编辑
-                table_others.setItem(row, 1, item2)
+                if i == 'record':
+                    rec_row[0] = row
+                    table_others.setCellWidget(row, 1, build_record_cell(file_app, refresh_new_rec))
+                else:
+                    item2 = QTableWidgetItem(file_app[i])  # 第2列可以编辑
+                    table_others.setItem(row, 1, item2)
                 row += 1
             # 己方呼号(行2)与对方呼号(行3)单元格编辑时实时转大写
             _call_del = call_upper.UpperCallDelegate()
@@ -332,6 +433,7 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
             project_others_window.setCentralWidget(central_widget)
             layout_others = QVBoxLayout(central_widget)
             layout_others.addWidget(table_others)
+
             def save_changes():
                 # 获取表格数据并更新到 file 结构
                 keys_list = list(translation_dict.keys())
@@ -369,7 +471,7 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
     def project_others(index):
         global project_others_window,file
         project_others_window = QMainWindow()
-        project_others_window.resize(410, 660)
+        project_others_window.resize(410, 690)
         project_others_window.setWindowTitle('更多信息')
         translation_dict = {
             'date': '日期',
@@ -386,6 +488,7 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
             "m_dig": '己方设备','o_dig': '对方设备',
             'm_ant': '己方天线','o_ant': '对方天线',
             'm_pow': '己方功率','o_pow': '对方功率',
+            'record': '通联录音',
             'notes': '备注'
         }
         rows = len(translation_dict)
@@ -393,14 +496,34 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
         table_others.setColumnWidth(0, 100)  # 设置第1列宽度为100
         table_others.setColumnWidth(1, 250)
         table_others.setHorizontalHeaderLabels(["项目", "内容"])
+
+        # 通联录音行：作为独立项目，置于“备注”之前
+        rec_row = [None]
+
+        def refresh_rec_cell():
+            r = rec_row[0]
+            if r is None:
+                return
+            old = table_others.cellWidget(r, 1)
+            if old:
+                old.deleteLater()
+            table_others.setCellWidget(r, 1, build_record_cell(file[index], after_rec))
+
+        def after_rec():
+            refresh_rec_cell()
+            table_update()
+
         row = 0
         for i in translation_dict.keys():
             item = QTableWidgetItem(translation_dict[i])
             item.setFlags(item.flags() & ~Qt.ItemIsEditable)  # 禁止编辑
             table_others.setItem(row, 0, item)
-            
-            item2 = QTableWidgetItem(file[index][i])  # 第2列可以编辑
-            table_others.setItem(row, 1, item2)
+            if i == 'record':
+                rec_row[0] = row
+                table_others.setCellWidget(row, 1, build_record_cell(file[index], after_rec))
+            else:
+                item2 = QTableWidgetItem(file[index][i])  # 第2列可以编辑
+                table_others.setItem(row, 1, item2)
             row += 1
         # 己方呼号(行2)与对方呼号(行3)单元格编辑时实时转大写
         _call_del = call_upper.UpperCallDelegate()
@@ -417,7 +540,10 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
             # 先校验所有字段，校验不通过则不记录撤销点
             for row in range(len(keys_list)):
                 key = keys_list[row]
-                text = table_others.item(row, 1).text()
+                cell = table_others.item(row, 1)
+                if cell is None:
+                    continue  # 通联录音行使用 cell widget，跳过
+                text = cell.text()
                 if key == 'date':
                     if not re.search(r'^\d{4}-\d{2}-\d{2}$', text):
                         QMessageBox.warning(project_others_window, "格式错误", f"日期格式错误，应为YYYY-MM-DD")
@@ -645,7 +771,7 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
         if save_path == '':
             return
     print(save_path)
-    window.resize(1250, 700)
+    window.resize(1350, 700)
     if quick_poject:
         window.setWindowTitle(f'F HamLog 2 - 通联日志')
     else:
@@ -1063,8 +1189,8 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
         lay.addLayout(top_row)
 
         # 新增"选择"列（列0），其余列整体右移一列
-        table_r = QTableWidget(len(matches), 14)
-        table_r.setHorizontalHeaderLabels(["选择","日期","时间","己方呼号","对方呼号","频率","调制模式","传播模式","卫星名称", "己方接收信号", "对方接收信号", "己方QTH", "对方QTH","更多"])
+        table_r = QTableWidget(len(matches), 15)
+        table_r.setHorizontalHeaderLabels(["选择","日期","时间","己方呼号","对方呼号","频率","调制模式","传播模式","卫星名称", "己方接收信号", "对方接收信号", "己方QTH", "对方QTH","通联录音","更多"])
         table_r.setEditTriggers(QAbstractItemView.NoEditTriggers)
         for row, (orig_index, rec) in enumerate(matches):
             # 选择复选框：初始状态与主页面当前勾选保持一致
@@ -1096,7 +1222,10 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
             table_r.setItem(row, 12, QTableWidgetItem(rec.get('o_qth', '')))
             more_btn = QPushButton("更多")
             more_btn.clicked.connect(partial(project_others, orig_index))
-            table_r.setCellWidget(row, 13, more_btn)
+            table_r.setCellWidget(row, 14, more_btn)
+
+            # 通联录音列（第13列，位于“更多”列之前）：操作直接作用于主项目 file[orig_index]
+            table_r.setCellWidget(row, 13, build_record_cell(file[orig_index], table_update))
 
         table_r.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         table_r.setColumnWidth(0, 45)
@@ -1112,7 +1241,8 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
         table_r.setColumnWidth(10, 80)
         table_r.setColumnWidth(11, 120)
         table_r.setColumnWidth(12, 120)
-        table_r.setColumnWidth(13, 80)
+        table_r.setColumnWidth(13, 150)
+        table_r.setColumnWidth(14, 80)
 
         lay.addWidget(table_r)
         table_r.scrollToBottom()

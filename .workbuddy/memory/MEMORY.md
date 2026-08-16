@@ -2,7 +2,7 @@
 
 ## 技术栈与约定
 - 桌面应用，PySide6（Qt for Python）。入口 `main.py` → `project.py`（主日志窗口）。
-- 日志数据：内存中 `file` 为 list，每条是 dict，字段含 date/time/m_call/o_call/freq/freq_rx/mode/prop_mode/sat_name/m_rst/o_rst/m_qth/o_qth/m_dig/o_dig/m_ant/o_ant/m_pow/o_pow/notes。
+- 日志数据：内存中 `file` 为 list，每条是 dict，字段含 date/time/m_call/o_call/freq/freq_rx/mode/prop_mode/sat_name/m_rst/o_rst/m_qth/o_qth/m_dig/o_dig/m_ant/o_ant/m_pow/o_pow/notes + **record（通联录音，base64 编码的音频二进制，空串表示无录音）**。
 - 持久化：`.fhl` 文件（utf-8 JSON，可选 AES-GCM 加密），读写走 `fhl_rw.py`。
 - 设置文件：`file/m_xml.txt`，内容为 Python `eval` 可解析的 dict。键：`m_call/m_qth/m_dig/aouto_save/aouto_list` + 卫星功能新增 `m_lat/m_lon/m_alt`（观测站纬度/经度/海拔，单位°/°/m）+ 星历自动更新 `sat_auto_update`(bool)/`sat_update_hours`(int, 1–168)/`sat_last_update`(epoch 秒)。读写该文件一律用 `.get` 避免 KeyError。
 - 当前版本 2.2，Nuitka 打包为独立 exe。
@@ -41,3 +41,12 @@
 - 接入点：① `project.main()` 打开项目时遍历 `file` 把每条 `m_call`/`o_call` 转大写（仅当 `filee` 为 list）；② `project.py` 的 `new()`/`project_others()` 表格行2(己方)/行3(对方) 挂委托；③ `research_call()` 搜索关键词、④ `find_replace()` 查找/替换框（按字段联动）；⑤ `set.py` 的「我的呼号」固定转大写；⑥ `batch_project.py` 模板表与翻页表（行2/3）挂委托，且 `app_list['m_call']` 取自设置即转大写。
 - 委托引用须保留：挂完 `setItemDelegateForRow` 后务必要 `table._upper_call_delegate = delegate`，否则 Python 端 delegate 被回收导致编辑异常。
 - 逻辑核心 `_upper_in_place` 用 `setText`+`setCursorPosition` 保光标；`text.upper()` 幂等，无需判空。
+
+## 通联录音（record 字段）
+- 新增 `qso_rec.py`：音频字节 ↔ base64（`encode_record`/`decode_record`），`detect_audio_ext` 按文件头魔数猜扩展名（wav/mp3/ogg/flac/m4a），`play_audio_bytes` 写到临时文件后用系统默认播放器打开（`os.startfile`/open/xdg-open）。
+- 主页表格「通联录音」列为**第 13 列、位于「更多」列（第 14 列）之前**；按钮用默认 QPushButton 样式（与「更多」一致）：无录音显示「添加」，有录音显示「▶播放 / 删除」。搜索结果表格 `table_r` 同步同样布局，操作直接作用于 `file[orig_index]`。
+- **「更多信息」(`project_others`) 与「新建日志」(`new`) 窗口也内置录音控件**（添加/播放/删除），操作 `file[index]['record']` / `file_app['record']`；新建窗口的录音随「新建日志」一并落盘。该控件以**独立表格行「通联录音」呈现，位于「备注」行之前**（把 `'record': '通联录音'` 插入两窗口的 `translation_dict` 并置于 `'notes'` 前，构建循环对 `record` 键用 `setCellWidget` 放 `build_record_cell` 而非文本单元格；`project_others.save_changes` 校验循环对 `cell is None` 的录音行 `continue` 跳过），不再作为表格下方的悬浮布局。
+- 新增 `silent_save()`：强制静默 `fhl_rw.write_fhl_file` 写盘，**不受「自动保存」开关影响**——`attach_recording`/`delete_recording` 增删后即时落盘（用户要求“添加后自动保存”）。
+- `play_recording` 播放时弹窗显示该日志的「时间 + 对方呼号」（`date`/`time`/`o_call`）。
+- 数据模型：`record` 默认 `''`（无录音）；`_ensure_log_keys`、`new()` 模板、`input_fhl._ensure_log_keys` 均补默认，保证字段一致。该字段已加入 `COPY_FIELDS` / `FIELD_LABELS`（中文表头「通联录音」），剪贴板复制/粘贴可往返携带录音 base64；但仍不进 Excel / ADI 导出白名单（避免超大 base64 写入表格/ADI 文件）。
+- 不依赖 `QtMultimedia`（PySide6-Essentials 不含），播放走系统默认播放器；加密模式下 base64 字符串随 JSON 一起 AES-GCM 加密。

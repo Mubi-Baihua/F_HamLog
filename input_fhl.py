@@ -26,7 +26,8 @@ def _ensure_log_keys(entry):
         'o_ant': '',
         'm_pow': '',
         'o_pow': '',
-        'notes': ''
+        'notes': '',
+        'record': ''
     }
     if not isinstance(entry, dict):
         return defaults.copy()
