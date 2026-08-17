@@ -348,7 +348,7 @@ class DictEditorDialog(QDialog):
                 else:
                     if self._delim is not None:
                         f.write('# 卫星转发器数据（格式：卫星名=下行频率,上行频率,模式）\n'
-                                '# 下行频率=接收频率(freq)，上行频率=发射频率(freq_rx)\n'
+                                '# 下行频率=接收频率(freq_rx)，上行频率=发射频率(freq)\n'
                                 '# 可由“卫星过境预测”窗口的“编辑转发器”维护\n')
                     else:
                         f.write('# TQSL / LoTW 卫星名称映射表（格式：卫星显示名=TQSL认可名）\n'
@@ -413,9 +413,10 @@ class PredictWorker(QThread):
         }
         if band:
             # FM 转发器（或线性转发器）的模式与收发频率
+            # 记录时：freq=上行频率(本端发射)，freq_rx=下行频率(本端接收)
             preset['mode'] = band.get('mode', 'FM')
-            preset['freq'] = band.get('downlink', '')
-            preset['freq_rx'] = band.get('uplink', '')
+            preset['freq'] = band.get('uplink', '')
+            preset['freq_rx'] = band.get('downlink', '')
         return {
             'name': name,
             'aos_str': _utc_to_local_str(p['aos'], obs_tz),
@@ -910,14 +911,24 @@ def main(parent_window, quick_log_callback=None):
             on_min_elev_change=on_el_change)
         win._map_window = mw
 
-    def _on_table_sel(*_args):
-        """表格行选择 / 点击时，把选中的卫星名实时同步到已打开的地图窗口；
-        若地图尚未打开（或已关闭），则直接打开并聚焦该卫星——保证「点列表即聚焦」。
+    def _sync_map_if_open():
+        """地图已打开时，把选中的卫星名实时同步到地图（聚焦该卫星）。
 
-        接受可选参数（cellClicked 会传入 row/col），以便同时挂到
-        itemSelectionChanged 与 cellClicked 两个信号上——后者能覆盖
-        “点击已选中的同一行”这种 itemSelectionChanged 不触发的情况。
+        注意：此函数**不会**主动打开地图——打开动作只由「单击非记录列」
+        （_focus_or_open_map）触发，避免点击「记录」按钮时因行选择变化而误开地图。
         """
+        rows = table.selectedIndexes()
+        if not rows:
+            return
+        mw = getattr(win, '_map_window', None)
+        if mw is not None and mw.isVisible():
+            mw.set_satellite(table.item(rows[0].row(), 0).text())
+
+    def _focus_or_open_map():
+        """单击「非记录列」单元格时调用：地图未打开则打开并聚焦该卫星，已打开则仅聚焦。
+
+        覆盖「点击已选中的同一行」这种 itemSelectionChanged 不触发的情况——
+        因为单击一定会触发 cellClicked。"""
         rows = table.selectedIndexes()
         if not rows:
             return
@@ -973,10 +984,10 @@ def main(parent_window, quick_log_callback=None):
     edit_tqsl_btn.clicked.connect(edit_tqsl_dict)
     mutual_btn.clicked.connect(open_mutual)
     map_btn.clicked.connect(open_map)
-    table.itemSelectionChanged.connect(_on_table_sel)
-    # 点击单元格也触发聚焦（覆盖「点已选中的同一行」itemSelectionChanged 不触发的情况）；
-    # 第 6 列是「记录」按钮，点击它不应弹出/聚焦地图。
-    table.cellClicked.connect(lambda r, c: _on_table_sel() if c != 6 else None)
+    # 行选择变化：仅同步已打开的地图（不开图）；点记录按钮导致行选中也不会误开地图
+    table.itemSelectionChanged.connect(_sync_map_if_open)
+    # 点击「非记录列」单元格：打开/聚焦地图；第 6 列是「记录」按钮，点它只记录、不开地图
+    table.cellClicked.connect(lambda r, c: _focus_or_open_map() if c != 6 else None)
     auto_cb.toggled.connect(on_auto_toggled)
     dur_spin.valueChanged.connect(lambda: (run_prediction() if sats else None, _persist()))
     el_spin.valueChanged.connect(

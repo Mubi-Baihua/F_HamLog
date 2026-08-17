@@ -198,9 +198,10 @@ class MutualWorker(QThread):
             'time': local_start.strftime('%H:%M'),
         }
         if band:
+            # 记录时：freq=上行频率(本端发射)，freq_rx=下行频率(本端接收)
             preset['mode'] = band.get('mode', 'FM')
-            preset['freq'] = band.get('downlink', '')
-            preset['freq_rx'] = band.get('uplink', '')
+            preset['freq'] = band.get('uplink', '')
+            preset['freq_rx'] = band.get('downlink', '')
         return {
             'name': name,
             'start_str': _utc_to_local_str(w['start'], LOCAL_TZ),
@@ -602,14 +603,24 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
             min_elev_b=box_b.min_elev(), on_min_elev_change=on_el_change)
         win._map_window = mw
 
-    def _on_table_sel(*_args):
-        """表格行选择 / 点击时，把选中的卫星名实时同步到已打开的地图窗口；
-        若地图尚未打开（或已关闭），则直接打开并聚焦该卫星——保证「点列表即聚焦」。
+    def _sync_map_if_open():
+        """地图已打开时，把选中的卫星名实时同步到地图（聚焦该卫星）。
 
-        接受可选参数（cellClicked 会传入 row/col），以便同时挂到
-        itemSelectionChanged 与 cellClicked 两个信号上——后者能覆盖
-        “点击已选中的同一行”这种 itemSelectionChanged 不触发的情况。
+        注意：此函数**不会**主动打开地图——打开动作只由「单击非记录列」
+        （_focus_or_open_map）触发，避免点击「记录」按钮时因行选择变化而误开地图。
         """
+        rows = table.selectedIndexes()
+        if not rows:
+            return
+        mw = getattr(win, '_map_window', None)
+        if mw is not None and mw.isVisible():
+            mw.set_satellite(table.item(rows[0].row(), 0).text())
+
+    def _focus_or_open_map():
+        """单击「非记录列」单元格时调用：地图未打开则打开并聚焦该卫星，已打开则仅聚焦。
+
+        覆盖「点击已选中的同一行」这种 itemSelectionChanged 不触发的情况——
+        因为单击一定会触发 cellClicked。"""
         rows = table.selectedIndexes()
         if not rows:
             return
@@ -655,10 +666,10 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
     refresh_btn.clicked.connect(lambda: refresh_tle(force=True))
     sel_btn.clicked.connect(open_select)
     map_btn.clicked.connect(open_map)
-    table.itemSelectionChanged.connect(_on_table_sel)
-    # 点击单元格也触发聚焦（覆盖「点已选中的同一行」itemSelectionChanged 不触发的情况）；
-    # 第 7 列是「记录」按钮，点击它不应弹出/聚焦地图。
-    table.cellClicked.connect(lambda r, c: _on_table_sel() if c != 7 else None)
+    # 行选择变化：仅同步已打开的地图（不开图）；点记录按钮导致行选中也不会误开地图
+    table.itemSelectionChanged.connect(_sync_map_if_open)
+    # 点击「非记录列」单元格：打开/聚焦地图；第 7 列是「记录」按钮，点它只记录、不开地图
+    table.cellClicked.connect(lambda r, c: _focus_or_open_map() if c != 7 else None)
     filter_combo.currentIndexChanged.connect(lambda: on_filter_changed())
     # 任何数据变化都自动重新预测（不再有“开始预测”按钮）
     dur_spin.valueChanged.connect(lambda: run_prediction() if sats else None)
