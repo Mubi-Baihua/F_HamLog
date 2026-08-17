@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QSpinBox, QComboBox, QDialog, QLineEdit,
     QDialogButtonBox, QMessageBox, QFrame, QCheckBox, QApplication,
     QAbstractItemView, QHeaderView, QScrollArea, QGroupBox, QFileDialog,
+    QSizePolicy,
 )
 from PySide6.QtCore import Qt, QThread, Signal
 
@@ -240,7 +241,8 @@ class DictEditorDialog(QDialog):
             QAbstractItemView.AnyKeyPressed)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
-        lay.addWidget(self.table)
+        self.table.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
+        lay.addWidget(self.table, 1)   # 拉伸因子 1：表格纵列填满窗口
 
         btn_row = QHBoxLayout()
         add_btn = QPushButton('添加')

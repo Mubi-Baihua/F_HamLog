@@ -27,10 +27,14 @@ sat_map_hours，关窗后仍然记住；「卫星过境预测」与「通联预�
 import json
 import math
 import datetime
+import os
+import sys
 
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QComboBox, QSpinBox, QCheckBox, QFrame, QSizePolicy,
+    QComboBox, QSpinBox, QCheckBox, QFrame, QSizePolicy, QDialog,
+    QTableWidget, QTableWidgetItem, QLineEdit, QHeaderView,
+    QAbstractItemView, QPlainTextEdit, QMessageBox,
 )
 from PySide6.QtCore import Qt, QTimer, QThread, Signal, QPointF, QRectF
 from PySide6.QtGui import (
@@ -157,6 +161,167 @@ _PALETTE = [
 def _color_for(index):
     r, g, b = _PALETTE[index % len(_PALETTE)]
     return QColor(r, g, b)
+
+
+MAP_MARKERS_KEY = 'sat_map_markers'
+MAP_TWILIGHT_KEY = 'sat_map_show_twilight'
+DEFAULT_TWILIGHT_VISIBLE = True
+MARKERS_PATH = sp.app_path('file/sat_map_markers.txt')
+
+
+def _marker_color(index):
+    return _color_for(index)
+
+
+def _normalize_marker(marker, index=0):
+    if not isinstance(marker, dict):
+        return {'name': f'标记点 {index + 1}', 'lat': 0.0, 'lon': 0.0, 'color': _marker_color(index).name()}
+    try:
+        lat = float(marker.get('lat', 0.0) or 0.0)
+        lon = float(marker.get('lon', 0.0) or 0.0)
+    except Exception:
+        lat, lon = 0.0, 0.0
+    name = str(marker.get('name') or f'标记点 {index + 1}')
+    color = str(marker.get('color') or '').strip()
+    if not color:
+        color = _marker_color(index).name()
+    try:
+        QColor(color)
+    except Exception:
+        color = _marker_color(index).name()
+    return {'name': name, 'lat': lat, 'lon': lon, 'color': color}
+
+
+def load_map_markers():
+    """读取地图标记点列表（独立文件 file/sat_map_markers.txt）。"""
+    try:
+        if not os.path.exists(MARKERS_PATH):
+            return []
+        with open(MARKERS_PATH, 'r', encoding='utf-8') as f:
+            lines = f.read().splitlines()
+        out = []
+        for idx, line in enumerate(lines):
+            s = line.strip()
+            if not s or s.startswith('#'):
+                continue
+            if '=' not in s:
+                continue
+            key, rest = s.split('=', 1)
+            key = key.strip()
+            if not key:
+                continue
+            parts = [p.strip() for p in rest.split(',')]
+            if len(parts) < 2:
+                continue
+            try:
+                lat = float(parts[0])
+                lon = float(parts[1])
+            except ValueError:
+                continue
+            color = parts[2].strip() if len(parts) >= 3 and parts[2].strip() else _marker_color(len(out)).name()
+            out.append({'name': key, 'lat': lat, 'lon': lon, 'color': color})
+        return out
+    except Exception:
+        return []
+
+
+def save_map_markers(markers):
+    """保存地图标记点列表到独立的文本文件，不写入 m_xml.txt。"""
+    try:
+        items = []
+        for idx, m in enumerate(markers or []):
+            items.append(_normalize_marker(m, idx))
+        os.makedirs(os.path.dirname(MARKERS_PATH) or '.', exist_ok=True)
+        with open(MARKERS_PATH, 'w', encoding='utf-8') as f:
+            f.write('# 地图标记点（格式：名称=纬度,经度,颜色）\n')
+            for item in items:
+                color = item['color']
+                if not color:
+                    color = _marker_color(len(items)).name()
+                f.write(f"{item['name']}={item['lat']},{item['lon']},{color}\n")
+        return items
+    except Exception:
+        return []
+
+
+def _solar_declination_and_subsolar_lon(now_utc):
+    """返回太阳赤纬与地理子太阳点经度，用于计算晨昏线。
+
+    经度通过 黄道视黄经 → 赤道坐标赤经 → 格林尼治恒星时(GMST) 路径
+    求得，避免直接把黄经当作地理经度导致东西翻转约 180° 的错误。
+    """
+    if now_utc is None:
+        now_utc = datetime.datetime.now(datetime.timezone.utc)
+    if now_utc.tzinfo is None:
+        now_utc = now_utc.replace(tzinfo=datetime.timezone.utc)
+
+    # Julian Date (JD)
+    jd = (now_utc - datetime.datetime(1970, 1, 1, tzinfo=datetime.timezone.utc)).total_seconds() / 86400.0 + 2440587.5
+    T = (jd - 2451545.0) / 36525.0          # J2000 起算的儒略世纪数
+
+    # 太阳几何平黄经 (°)
+    L0 = (280.46646 + T * (36000.76983 + T * 0.0003032)) % 360.0
+    # 太阳平近点角 (°)
+    M = 357.52911 + T * (35999.05029 - T * 0.0001537)
+    M_r = math.radians(M)
+    # 地球轨道偏心率
+    e = 0.016708634 - T * (0.000042037 + T * 0.0000001267)
+    # 中心差方程 (°)
+    C = (math.sin(M_r) * (1.914602 - T * (0.004817 + 0.000014 * T))
+         + math.sin(2 * M_r) * (0.019993 - 0.000101 * T)
+         + math.sin(3 * M_r) * 0.000289)
+    # 太阳真黄经 (°)
+    sun_true_long = L0 + C
+    # 近日点黄经 (°)
+    omega = 125.04 - 1934.136 * T
+    # 视黄经 (°) —— 章动与光行差修正
+    lam = sun_true_long - 0.00569 - 0.00478 * math.sin(math.radians(omega))
+    lam_r = math.radians(lam)
+
+    # 黄赤交角 (°)
+    eps0 = 23.439291 - 0.0130042 * T
+    eps = eps0 + 0.00256 * math.cos(math.radians(omega))   # 章动修正
+    eps_r = math.radians(eps)
+
+    # 赤纬 (°)
+    decl = math.degrees(math.asin(math.sin(eps_r) * math.sin(lam_r)))
+
+    # 赤经 (°) —— 从黄道坐标转赤道坐标
+    y = math.sin(lam_r) * math.cos(eps_r)
+    x = math.cos(lam_r)
+    ra_deg = math.degrees(math.atan2(y, x)) % 360.0
+
+    # 格林尼治平恒星时 GMST (°)
+    gmst = (280.46061837
+            + 360.98564736629 * (jd - 2451545.0)
+            + 0.000387933 * T * T
+            - T * T * T / 38710000.0) % 360.0
+
+    # 地理子太阳点经度 (°, -180~180)
+    # 当地恒星时 = GMST + 经度(东正)，令时角 H = 本地恒星时 - RA = 0 得
+    # 子太阳点经度 = RA - GMST（东正）。注意符号，写反会导致晨昏线东西翻转。
+    sun_lon = (ra_deg - gmst) % 360.0
+    if sun_lon > 180.0:
+        sun_lon -= 360.0
+
+    return float(decl), float(sun_lon)
+
+
+def compute_twilight_points(now_utc):
+    """按当前日期与时刻计算晨昏线（太阳高度 0°）经纬度点列。"""
+    decl, sun_lon = _solar_declination_and_subsolar_lon(now_utc)
+    dec_r = math.radians(decl)
+    pts = []
+    for lon_deg in range(-180, 181):
+        h = math.radians(lon_deg - sun_lon)
+        denom = math.cos(dec_r) * math.cos(h)
+        if abs(denom) < 1e-12:
+            lat = 0.0 if abs(math.sin(dec_r)) < 1e-12 else math.copysign(90.0, math.sin(dec_r))
+        else:
+            tan_phi = -math.cos(h) / math.tan(dec_r)
+            lat = math.degrees(math.atan(tan_phi))
+        pts.append((float(lon_deg), float(lat)))
+    return pts
 
 
 def _load_land():
@@ -423,6 +588,8 @@ class MapCanvas(QWidget):
 
         self.entries = []
         self.stations = []     # [(lat, lon, label, (r,g,b)), ...]
+        self.markers = load_map_markers()
+        self.twilight_points = compute_twilight_points(datetime.datetime.now(datetime.timezone.utc))
         self.home_known = False
         self.b_known = False
         self.min_elev = 0.0
@@ -430,6 +597,7 @@ class MapCanvas(QWidget):
         self.show_track = True
         self.show_footprint = True
         self.show_labels = True
+        self.show_twilight = bool(_load_settings().get(MAP_TWILIGHT_KEY, DEFAULT_TWILIGHT_VISIBLE))
         self._hot = []          # 可点击命中目标：[(name, x, y, radius), ...]
         self.on_pick = None     # 点击命中卫星时的回调 (name) -> None
         self.setMinimumSize(380, 220)
@@ -616,6 +784,79 @@ class MapCanvas(QWidget):
             f.setBold(False)
             p.setFont(f)
 
+    def _draw_twilight(self, p):
+        if not self.twilight_points:
+            return
+        pen = QPen(QColor(130, 123, 110, 200), 1.4)
+        pen.setStyle(Qt.DashLine)
+        p.setPen(pen)
+        p.setBrush(Qt.NoBrush)
+        for seg in _split_dateline(self.twilight_points):
+            p.drawPath(self._poly_path(seg))
+
+    def _draw_night_shade(self, p):
+        if not self.twilight_points:
+            return
+        pts = self.twilight_points
+        # 夜区所在半球：赤纬 ≥ 0 时太阳偏向北半球，夜区在南；否则在北。
+        decl, _ = _solar_declination_and_subsolar_lon(
+            datetime.datetime.now(datetime.timezone.utc))
+        night_is_south = decl >= 0.0
+
+        # 平滑夜区多边形：沿晨昏线（1° 间隔，连续单值）闭合到极边，
+        # 用抗锯齿填充，边缘自然平滑（替代原先 6° 网格的锯齿）。
+        poly = [(lon, lat) for lon, lat in pts]
+        if night_is_south:
+            poly.append((180.0, -90.0))
+            poly.append((-180.0, -90.0))
+        else:
+            poly.append((180.0, 90.0))
+            poly.append((-180.0, 90.0))
+        night_path = QPainterPath()
+        for i, (lon, lat) in enumerate(poly):
+            x, y = self._xy(lon, lat)
+            if i == 0:
+                night_path.moveTo(x, y)
+            else:
+                night_path.lineTo(x, y)
+        night_path.closeSubpath()
+        p.setPen(Qt.NoPen)
+        p.setBrush(QBrush(QColor(27, 32, 48, 88)))
+        p.drawPath(night_path)
+
+        # 羽化晨昏线边缘：沿界线多遍半透明描边，向昼侧做出柔和过渡，
+        # 避免夜区与昼区之间出现生硬分界。
+        term_path = QPainterPath()
+        for i, (lon, lat) in enumerate(pts):
+            x, y = self._xy(lon, lat)
+            if i == 0:
+                term_path.moveTo(x, y)
+            else:
+                term_path.lineTo(x, y)
+        for width, alpha in ((7.0, 20), (4.5, 28), (2.0, 38)):
+            pen = QPen(QColor(27, 32, 48, alpha))
+            pen.setWidthF(width)
+            pen.setStyle(Qt.SolidLine)
+            pen.setCapStyle(Qt.RoundCap)
+            p.setPen(pen)
+            p.setBrush(Qt.NoBrush)
+            p.drawPath(term_path)
+
+    def _draw_markers(self, p):
+        for idx, m in enumerate(self.markers):
+            try:
+                lat = float(m.get('lat', 0.0) or 0.0)
+                lon = float(m.get('lon', 0.0) or 0.0)
+                color = QColor(str(m.get('color') or _marker_color(idx).name()))
+            except Exception:
+                continue
+            x, y = self._xy(lon, lat)
+            p.setPen(QPen(QColor(255, 255, 255), 2))
+            p.setBrush(QBrush(color))
+            p.drawEllipse(QPointF(x, y), 5.5, 5.5)
+            p.setPen(QPen(QColor(30, 30, 30), 1))
+            p.drawText(QPointF(x + 10, y - 6), str(m.get('name', f'标记点 {idx + 1}')))
+
     def _draw_station(self, p, st):
         lat, lon, label, rgb = st
         x, y = self._xy(lon, lat)
@@ -683,6 +924,9 @@ class MapCanvas(QWidget):
             for e in self.entries:          # 聚焦卫星画在最上层
                 if e['focus'] and e['track']:
                     self._draw_track(p, e)
+        if self.show_twilight:
+            self._draw_night_shade(p)
+            self._draw_twilight(p)
         if self.show_footprint:
             for e in self.entries:
                 if e['footprint']:
@@ -690,6 +934,7 @@ class MapCanvas(QWidget):
                     self._hot.append((e['name'], fx, fy,
                                       max(10.0, e['footprint'][2] / 180.0 * mapH)))
                     self._draw_footprint(p, e)
+        self._draw_markers(p)
         for st in self.stations:
             self._draw_station(p, st)
         for e in self.entries:
@@ -741,6 +986,180 @@ class MapCanvas(QWidget):
             self.setCursor(Qt.PointingHandCursor)
         else:
             self.setCursor(Qt.ArrowCursor)
+
+
+class MaidenheadImportDialog(QDialog):
+    """从梅登黑格网格坐标批量导入标记点。"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle('从梅登黑格坐标导入')
+        self.resize(440, 340)
+        self.result_rows = []
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel(
+            '每行一个梅登黑格坐标（4 / 6 / 8 位均可，大小写不限），如：\n'
+            '  PM84\n  EM12ab\n'
+            '也可写「名称 坐标」（空格分隔），如：\n'
+            '  北京 PM84'))
+
+        self._edit = QPlainTextEdit()
+        font = self._edit.font()
+        font.setFamily('Consolas' if sys.platform == 'win32' else 'monospace')
+        self._edit.setFont(font)
+        layout.addWidget(self._edit, 1)
+
+        btn_row = QHBoxLayout()
+        import_btn = QPushButton('导入')
+        cancel_btn = QPushButton('取消')
+        import_btn.clicked.connect(self._do_import)
+        cancel_btn.clicked.connect(self.reject)
+        btn_row.addStretch(1)
+        btn_row.addWidget(import_btn)
+        btn_row.addWidget(cancel_btn)
+        layout.addLayout(btn_row)
+
+    def _do_import(self):
+        rows = []
+        errors = []
+        for raw in self._edit.toPlainText().strip().splitlines():
+            line = raw.strip()
+            if not line:
+                continue
+            name, grid = self._split_line(line)
+            try:
+                lat, lon = sp.maidenhead_to_latlon(grid)
+            except ValueError as e:
+                errors.append(f'{grid}: {e}')
+                continue
+            if not (-90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0):
+                errors.append(f'{grid}: 坐标超出地球范围（经纬度无效）')
+                continue
+            rows.append((name or grid, lat, lon, ''))
+        if errors:
+            QMessageBox.warning(self, '部分坐标无效',
+                                '以下行无法解析，已跳过：\n' + '\n'.join(errors))
+        if not rows:
+            return
+        self.result_rows = rows
+        self.accept()
+
+    @staticmethod
+    def _split_line(line):
+        """解析一行：支持 名称=网格 或 名称 网格（网格取末段），以及纯网格。"""
+        if '=' in line:
+            a, b = line.split('=', 1)
+            return a.strip(), b.strip()
+        parts = line.split()
+        if len(parts) >= 2:
+            return ' '.join(parts[:-1]), parts[-1]
+        return '', parts[0] if parts else ''
+
+
+class MarkerManageDialog(QDialog):
+    """管理地图标记点（名称 / 纬度 / 经度 / 颜色）。
+
+    与 TQSL 映射、转发器设置风格一致：表格纵向填满窗口，并支持从
+    梅登黑格网格坐标批量导入标记点。
+    """
+
+    def __init__(self, parent, markers=None):
+        super().__init__(parent)
+        self.setWindowTitle('标记点管理')
+        self.resize(680, 520)
+        self._rows = []
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel(
+            '双击单元格可编辑；「纬度 / 经度」为十进制（°）。\n'
+            '也可点击「从梅登黑格导入」按网格坐标批量添加标记点。'))
+
+        # 表格（与 TQSL 映射 / 转发器设置一致：纵向填满窗口）
+        self.table = QTableWidget(0, 4)
+        self.table.setHorizontalHeaderLabels(['名称', '纬度', '经度', '颜色'])
+        self.table.setEditTriggers(
+            QAbstractItemView.DoubleClicked | QAbstractItemView.EditKeyPressed |
+            QAbstractItemView.AnyKeyPressed)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        layout.addWidget(self.table, 1)
+
+        # 按钮行（与 TQSL / 转发器一致的表格 + 按钮布局）
+        btn_row = QHBoxLayout()
+        add_btn = QPushButton('添加')
+        del_btn = QPushButton('删除选中')
+        mh_btn = QPushButton('从梅登黑格导入')
+        save_btn = QPushButton('保存')
+        close_btn = QPushButton('关闭')
+        add_btn.clicked.connect(self._add_row)
+        del_btn.clicked.connect(self._del_row)
+        mh_btn.clicked.connect(self._import_from_maidenhead)
+        save_btn.clicked.connect(self._save_and_close)
+        close_btn.clicked.connect(self.reject)
+        btn_row.addWidget(add_btn)
+        btn_row.addWidget(del_btn)
+        btn_row.addWidget(mh_btn)
+        btn_row.addStretch(1)
+        btn_row.addWidget(save_btn)
+        btn_row.addWidget(close_btn)
+        layout.addLayout(btn_row)
+
+        self._load(markers or load_map_markers())
+
+    # ---- 从梅登黑格坐标导入 ----
+
+    def _import_from_maidenhead(self):
+        """打开梅登黑格导入对话框，将解析出的标记点追加到表格。"""
+        dlg = MaidenheadImportDialog(self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            self._rows.extend(dlg.result_rows)
+            self._render()
+
+    # ---- 原有表格操作 ----
+
+    def _load(self, markers):
+        self._rows = []
+        for idx, m in enumerate(markers):
+            mm = _normalize_marker(m, idx)
+            self._rows.append((mm['name'], mm['lat'], mm['lon'], mm['color']))
+        self._render()
+
+    def _render(self):
+        self.table.setRowCount(len(self._rows))
+        for i, row in enumerate(self._rows):
+            name, lat, lon, color = row
+            self.table.setItem(i, 0, QTableWidgetItem(str(name)))
+            self.table.setItem(i, 1, QTableWidgetItem(f'{lat}'))
+            self.table.setItem(i, 2, QTableWidgetItem(f'{lon}'))
+            self.table.setItem(i, 3, QTableWidgetItem(str(color)))
+
+    def _add_row(self):
+        self._rows.append((f'标记点 {len(self._rows) + 1}', 0.0, 0.0, ''))
+        self._render()
+
+    def _del_row(self):
+        rows = sorted({idx.row() for idx in self.table.selectedIndexes()}, reverse=True)
+        for r in rows:
+            if 0 <= r < len(self._rows):
+                del self._rows[r]
+        self._render()
+
+    def _save_and_close(self):
+        items = []
+        for row in self._rows:
+            name, lat, lon, color = row
+            try:
+                lat_v = float(lat)
+                lon_v = float(lon)
+            except (TypeError, ValueError):
+                continue
+            color_v = str(color or '').strip() or _marker_color(len(items)).name()
+            items.append({'name': str(name).strip() or f'标记点 {len(items) + 1}',
+                          'lat': lat_v, 'lon': lon_v, 'color': color_v})
+        save_map_markers(items)
+        self.accept()
 
 
 class MapWindow(QMainWindow):
@@ -852,6 +1271,15 @@ class MapWindow(QMainWindow):
         self._chk_label.setChecked(True)
         self._chk_label.toggled.connect(self._on_chk_label)
         ctl.addWidget(self._chk_label)
+
+        self._chk_twilight = QCheckBox('晨昏线')
+        self._chk_twilight.setChecked(bool(_load_settings().get(MAP_TWILIGHT_KEY, DEFAULT_TWILIGHT_VISIBLE)))
+        self._chk_twilight.toggled.connect(self._on_chk_twilight)
+        ctl.addWidget(self._chk_twilight)
+
+        self._marker_mgr_btn = QPushButton('标记点管理')
+        self._marker_mgr_btn.clicked.connect(self._open_marker_manager)
+        ctl.addWidget(self._marker_mgr_btn)
 
         ctl.addStretch(1)
         layout.addLayout(ctl)
@@ -1107,6 +1535,22 @@ class MapWindow(QMainWindow):
         self.canvas.show_labels = checked
         self.canvas.update()
 
+    def _on_chk_twilight(self, checked):
+        self.canvas.show_twilight = bool(checked)
+        try:
+            s = _load_settings()
+            s[MAP_TWILIGHT_KEY] = bool(checked)
+            _save_settings(s)
+        except Exception:
+            pass
+        self.canvas.update()
+
+    def _open_marker_manager(self):
+        dlg = MarkerManageDialog(self, self.canvas.markers)
+        if dlg.exec() == QDialog.Accepted:
+            self.canvas.markers = load_map_markers()
+            self.canvas.update()
+
     def _home_valid(self):
         return (self._home is not None
                 and not (self._home[0] == 0.0 and self._home[1] == 0.0))
@@ -1257,6 +1701,7 @@ class MapWindow(QMainWindow):
         if self._need_track_recalc(now, names):
             self._track_key = (tuple(names), self._track_hours, self._observer())
             self._start_track_calc(now, names)
+        self.canvas.twilight_points = compute_twilight_points(now)
         self._refresh_entries(now)
         self._update_info(now, hidden)
         self.canvas.update()
