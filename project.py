@@ -1412,35 +1412,53 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
     tool_menu.addAction(find_replace_action)
 
 
-    # ---------- 卫星功能菜单 ----------
-    sat_menu = menu_bar.addMenu('卫星')
+    # ---------- 记录功能菜单 ----------
+    sat_menu = menu_bar.addMenu('记录')
+
+    def append_to_project(records):
+        """复用卫星过境窗口“记录”按钮的保存逻辑：把记录（一条或多条）直接追加到
+        当前打开的项目文件并落盘（不再弹出保存方式选择）。"""
+        snapshot_before()
+        for rec in records:
+            file.append(rec)
+        table_update()
+        # 直接落盘到当前项目文件（不依赖自动保存开关，也不弹“保存成功”）
+        global key
+        fhl_rw.write_fhl_file(save_path, file, key)
 
     def quick_log(preset):
-        """由卫星过境窗口“记录”按钮回调：打开批量记录窗口并预填卫星信息；
-        保存时直接追加到当前打开的项目文件（不再弹出保存方式选择）。"""
+        """由卫星过境窗口“记录”按钮回调：打开批量记录窗口并预填卫星信息。"""
         import batch_project
-        def append_to_project(records):
-            snapshot_before()
-            for rec in records:
-                file.append(rec)
-            table_update()
-            # 直接落盘到当前项目文件（不依赖自动保存开关，也不弹“保存成功”）
-            global key
-            fhl_rw.write_fhl_file(save_path, file, key)
         bw = QMainWindow()
         bw.setWindowTitle('批量记录 - ' + str(preset.get('sat_name', '')))
         batch_project.main(bw, preset=preset, on_saved=append_to_project)
+        _open_windows.append(bw)
+
+    def open_batch_record():
+        """菜单“批量记录”：直接打开批量记录窗口（不预填卫星信息），
+        保存逻辑与卫星过境预测中的“记录”按钮完全一致。"""
+        import batch_project
+        bw = QMainWindow()
+        bw.setWindowTitle('批量记录')
+        batch_project.main(bw, preset=None, on_saved=append_to_project)
         _open_windows.append(bw)
 
     def open_satellite_window():
         import satellite_window
         satellite_window.main(window, quick_log_callback=quick_log)
 
-    sat_predict_action = QAction('卫星过境预测', window)
+    sat_predict_action = QAction('卫星通联记录', window)
     sat_predict_action.setShortcut('Ctrl+W')
     sat_predict_action.triggered.connect(open_satellite_window)
     sat_menu.addAction(sat_predict_action)
-    # 通联预测入口统一收归「卫星过境预测」窗口内的「通联预测」按钮，
+
+    sat_menu.addSeparator()
+
+    batch_action = QAction('批量记录', window)
+    batch_action.setShortcut('Ctrl+B')
+    batch_action.triggered.connect(open_batch_record)
+    sat_menu.addAction(batch_action)
+    # 通联预测入口统一收归「卫星通联记录」窗口内的「通联预测」按钮，
     # 不再在菜单单独列出。
 
 

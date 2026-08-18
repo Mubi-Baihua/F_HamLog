@@ -2,7 +2,7 @@
 """
 satellite_window.py —— 业余卫星过境预测界面（PySide6）
 
-由 project.py 的“卫星”菜单调用。提供：
+由 project.py 的“记录”菜单调用。提供：
   - 业余卫星未来过境列表（升起/落下时间、最大仰角、方位、时长）
   - 刷新 TLE（从 Celestrak 下载并本地缓存）
   - 设置观测站位置（纬度/经度/海拔）
@@ -352,10 +352,10 @@ class DictEditorDialog(QDialog):
                     if self._delim is not None:
                         f.write('# 卫星转发器数据（格式：卫星名=下行频率,上行频率,模式）\n'
                                 '# 下行频率=接收频率(freq_rx)，上行频率=发射频率(freq)\n'
-                                '# 可由“卫星过境预测”窗口的“编辑转发器”维护\n')
+                                '# 可由“卫星通联记录”窗口的“编辑转发器”维护\n')
                     else:
                         f.write('# TQSL / LoTW 卫星名称映射表（格式：卫星显示名=TQSL认可名）\n'
-                                '# 可由“卫星过境预测”窗口的“TQSL映射”维护\n')
+                                '# 可由“卫星通联记录”窗口的“TQSL映射”维护\n')
                 for key, vals in self._rows:
                     if self._delim is not None:
                         line = '%s=%s' % (key, self._delim.join(vals))
@@ -477,7 +477,7 @@ def main(parent_window, quick_log_callback=None):
 
     win = QMainWindow()
     win.resize(940, 620)
-    win.setWindowTitle('卫星过境预测')
+    win.setWindowTitle('卫星通联记录')
     win._map_window = None  # 卫星地图窗口引用（由“地图”按钮打开）
     central = QWidget()
     win.setCentralWidget(central)
