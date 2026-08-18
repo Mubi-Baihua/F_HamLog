@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QThread, Signal
 
 import satellite_pred as sp
+from dialog_defaults import desktop_dir
 
 SETTINGS_PATH = sp.app_path('file/m_xml.txt')
 TLE_CACHE = sp.app_path('file/amateur.tle')
@@ -809,7 +810,7 @@ def main(parent_window, quick_log_callback=None):
     def import_tle():
         """从用户选择的 txt 或 tle 文件导入卫星星历数据，追加到现有卫星列表。"""
         path, _ = QFileDialog.getOpenFileName(
-            win, '导入卫星星历数据', '',
+            win, '导入卫星星历数据', desktop_dir(),
             '星历文件 (*.tle *.txt);;TLE 文件 (*.tle);;文本文件 (*.txt)')
         if not path:
             return

@@ -6,6 +6,7 @@ import json
 import webbrowser
 import urllib.parse
 import fhl_rw
+from dialog_defaults import desktop_dir
 
 def main():
     def quick_project():
@@ -35,7 +36,7 @@ def main():
         save_path, _ = QFileDialog.getOpenFileName(
             window,  # 父窗口
             "打开项目",  # 对话框标题
-            "",  # 初始目录
+            desktop_dir(),  # 初始目录：桌面
             "F HamLog项目 (*.fhl)"  # 文件过滤器
         )
         if save_path == '':

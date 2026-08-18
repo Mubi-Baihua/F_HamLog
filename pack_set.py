@@ -3,6 +3,7 @@ import sys
 from PySide6.QtWidgets import *
 import os
 import ast
+from dialog_defaults import desktop_dir
 import shutil
 
 def is_python_installed():
@@ -231,7 +232,7 @@ def main(window):
         populate_table()
 
     def install_plugin():
-        file_path, _ = QFileDialog.getOpenFileName(window, '选择插件包', '', 'F HamLog插件包 (*.fhlpypack *.txt);;All Files (*)')
+        file_path, _ = QFileDialog.getOpenFileName(window, '选择插件包', desktop_dir(), 'F HamLog插件包 (*.fhlpypack *.txt);;All Files (*)')
         if not file_path:
             return
         try:

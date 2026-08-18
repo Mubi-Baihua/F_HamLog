@@ -2,6 +2,7 @@ from PySide6.QtWidgets import *
 from PySide6.QtGui import QUndoStack, QUndoCommand
 from PySide6.QtCore import Qt, QTimer, QObject, QEvent, qInstallMessageHandler
 import call_upper
+from dialog_defaults import desktop_dir
 import time as time_
 import sys
 import re
@@ -669,7 +670,7 @@ def main(window, preset=None, on_saved=None):
             project_path, _ = QFileDialog.getOpenFileName(
                 finish_dialog,
                 '添加到 F HamLog项目',
-                '',
+                desktop_dir(),
                 'F HamLog项目 (*.fhl)'
             )
             if project_path == '':
@@ -684,7 +685,7 @@ def main(window, preset=None, on_saved=None):
             save_path, _ = QFileDialog.getSaveFileName(
                 finish_dialog,
                 '另存为 F HamLog项目',
-                '',
+                desktop_dir(),
                 'F HamLog项目 (*.fhl)'
             )
             if save_path == '':

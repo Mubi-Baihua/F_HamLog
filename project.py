@@ -1,6 +1,7 @@
 from PySide6.QtWidgets import *
 from PySide6.QtGui import QAction
 from PySide6.QtCore import Qt  # 新增导入 Qt
+from dialog_defaults import desktop_dir
 from functools import partial
 import time as time_
 import sys
@@ -496,7 +497,7 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
         save_path, _ = QFileDialog.getSaveFileName(
             window,  # 父窗口，可以是None或者您的主窗口
             "另存为文件",  # 对话框标题
-            "",  # 初始目录，空字符串表示使用系统默认
+            desktop_dir(),  # 初始目录：桌面，默认文件名为空
             "F HamLog项目 (*.fhl)"  # 文件过滤器，只显示.fos文件
         )
         if save_path == '':
@@ -603,7 +604,7 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
         save_path, _ = QFileDialog.getSaveFileName(
             window,
             "导出选中日志为FHL文件",
-            "",
+            desktop_dir(),
             "F HamLog项目 (*.fhl)"
         )
         if not save_path:
@@ -632,7 +633,7 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
         save_path, _ = QFileDialog.getSaveFileName(
             window,  # 父窗口，可以是None或者您的主窗口
             "新建文件",  # 对话框标题
-            "",  # 初始目录，空字符串表示使用系统默认
+            desktop_dir(),  # 初始目录：桌面，默认文件名为空
             "F HamLog项目 (*.fhl)"  # 文件过滤器，只显示.fos文件
         )
         if save_path == '':
@@ -967,7 +968,7 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
                 QMessageBox.warning(research_window, "导出失败", "没有可导出的搜索结果。")
                 return
             save_path, _ = QFileDialog.getSaveFileName(
-                research_window, "导出搜索结果为FHL文件", "", "F HamLog项目 (*.fhl)")
+                research_window, "导出搜索结果为FHL文件", desktop_dir(), "F HamLog项目 (*.fhl)")
             if not save_path:
                 return
             fhl_rw.write_fhl_file(save_path, recs, key)

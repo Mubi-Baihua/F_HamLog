@@ -1,5 +1,6 @@
 from PySide6.QtWidgets import *
 import call_upper
+from dialog_defaults import desktop_dir
 def main(window):
     import satellite_pred as sp
     with open('file/m_xml.txt', 'r', encoding='utf-8') as f:
@@ -60,7 +61,7 @@ def main(window):
         import os
         import shutil
         print("从之前版本导入数据")  # 保持引用，防止被回收
-        folder = QFileDialog.getExistingDirectory(window, "选择之前版本 F HamLog.exe 所在的文件夹", "")
+        folder = QFileDialog.getExistingDirectory(window, "选择之前版本 F HamLog.exe 所在的文件夹", desktop_dir())
         if folder:
             print(f"选择的文件夹: {folder}")
             file_path = os.path.join(folder, 'file')

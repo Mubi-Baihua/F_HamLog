@@ -16,6 +16,7 @@ import os
 import re
 from datetime import datetime, timezone
 from PySide6.QtWidgets import QFileDialog, QMessageBox
+from dialog_defaults import desktop_dir
 
 # 频段范围（MHz）-> ADIF BAND 名称（小写，符合规范）
 _BAND_RANGES = [
@@ -134,13 +135,13 @@ def records_to_adif(records):
     return '\n'.join(lines) + '\n'
 
 
-def export_adif_dialog(records, parent=None, default_name='FHamLog_export'):
+def export_adif_dialog(records, parent=None):
     """弹出保存对话框，将记录导出为 ADIF 文件（供 TQSL 签名）。"""
     if not records:
         QMessageBox.warning(parent, '提示', '没有可导出的记录。')
         return
     path, _ = QFileDialog.getSaveFileName(
-        parent, '导出 ADIF (TQSL/LoTW)', default_name + '.adi',
+        parent, '导出 ADIF (TQSL/LoTW)', desktop_dir(),
         'ADIF 文件 (*.adi);;All Files (*)')
     if not path:
         return

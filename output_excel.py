@@ -1,17 +1,23 @@
 def main(file):
     from PySide6.QtWidgets import QFileDialog, QMessageBox, QApplication
+    from dialog_defaults import desktop_dir
     import os
     from openpyxl import Workbook
     from openpyxl.utils import get_column_letter
 
-    # 获取当前活动窗口作为父窗口
+    # 获取父窗口：优先用当前活动窗口（用户正在操作的那一个），
+    # 避免导出对话框把主窗口强行提到最前层（例如从“搜索结果”窗口导出时）。
     parent_window = None
     app = QApplication.instance()
     if app:
-        for window in app.topLevelWidgets():
-            if window.isVisible() and window.windowTitle().startswith('F HamLog'):
-                parent_window = window
-                break
+        active = app.activeWindow()
+        if active is not None and active.isVisible():
+            parent_window = active
+        else:
+            for window in app.topLevelWidgets():
+                if window.isVisible() and window.windowTitle().startswith('F HamLog'):
+                    parent_window = window
+                    break
 
     # 已知字段的中文列名（按常用顺序；不含 record，避免超大 base64 写入表格）
     translation_dict = {
@@ -56,7 +62,7 @@ def main(file):
     save_path, _ = QFileDialog.getSaveFileName(
         parent_window,
         "导出为Excel文件",
-        "",
+        desktop_dir(),
         "Excel文件 (*.xlsx);;所有文件 (*)"
     )
     if not save_path:

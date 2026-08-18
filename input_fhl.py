@@ -1,6 +1,7 @@
 import json
 from PySide6.QtWidgets import *
 from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
+from dialog_defaults import desktop_dir
 import fhl_rw
 
 
@@ -67,7 +68,7 @@ def main(file_list):
     file_path, _ = QFileDialog.getOpenFileName(
         None,
         "选择 F HamLog 项目文件",
-        "",
+        desktop_dir(),
         "F HamLog项目 (*.fhl);;All Files (*)"
     )
     if not file_path:
