@@ -720,7 +720,53 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
     zexit_action.triggered.connect(lambda: sys.exit())
     file_menu.addAction(zexit_action)
 
-    # 创建"编辑"菜单（撤销/重做/复制/粘贴）
+    def delete_selected_logs():
+        '''删除主表格中选中的日志：优先删除“选择”列已勾选的行；
+        若未勾选任何行，则回退删除当前高亮选中的行。删除前二次确认，
+        并记入撤销点（Ctrl+Z 可恢复），删除后自动重建表格并落盘。'''
+        if table is None:
+            QMessageBox.warning(window, "删除失败", "当前未加载日志表。")
+            return
+        # 1) 优先收集“选择”列（第0列）中已勾选的行
+        checked_rows = []
+        for row in range(table.rowCount()):
+            cell_w = table.cellWidget(row, 0)
+            cb = cell_w.findChild(QCheckBox) if cell_w is not None else None
+            if cb is None:
+                item = table.item(row, 0)
+                if item is not None and item.checkState() == Qt.Checked:
+                    checked_rows.append(row)
+                continue
+            if cb.isChecked():
+                checked_rows.append(row)
+        # 2) 若未勾选任何行，回退到当前高亮选中的行
+        if not checked_rows:
+            rows = set()
+            for rng in table.selectedRanges():
+                for r in range(rng.topRow(), rng.bottomRow() + 1):
+                    rows.add(r)
+            checked_rows = sorted(rows)
+        if not checked_rows:
+            QMessageBox.warning(window, "删除失败",
+                "没有可删除的日志：请先在“选择”列勾选要删除的行，或直接选中（高亮）这些行。")
+            return
+        # 二次确认（破坏性操作）
+        count = len(checked_rows)
+        reply = QMessageBox.question(
+            window, "确认删除",
+            f"确定要删除选中的 {count} 条日志吗？",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+        if reply != QMessageBox.Yes:
+            return
+        # 记撤销点，随后按行号从大到小删除，避免索引错位
+        snapshot_before()
+        for row in sorted(checked_rows, reverse=True):
+            del file[row]
+        table_update()
+
+    # 创建"编辑"菜单（撤销/重做/复制/粘贴/删除选中）
     edit_menu = menu_bar.addMenu('编辑')
 
     undo_action = QAction('撤销', window)
@@ -744,6 +790,13 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
     paste_action.setShortcut('Ctrl+V')
     paste_action.triggered.connect(paste_to_main)
     edit_menu.addAction(paste_action)
+
+    edit_menu.addSeparator()
+
+    delete_selected_action = QAction('删除选中的日志', window)
+    delete_selected_action.setShortcut('Ctrl+D')
+    delete_selected_action.triggered.connect(delete_selected_logs)
+    edit_menu.addAction(delete_selected_action)
 
     def set_all_rows_checked(checked):
         # 遍历主表格“选择”列（第0列）的复选框，统一设置勾选状态
@@ -780,7 +833,7 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
     select_menu.addAction(invert_action)
 
     deselect_action = QAction('取消选择', window)
-    deselect_action.setShortcut('Ctrl+D')
+    deselect_action.setShortcut('Ctrl+Shift+A')
     deselect_action.triggered.connect(lambda: set_all_rows_checked(False))
     select_menu.addAction(deselect_action)
 
@@ -1000,7 +1053,7 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
         _sel_inv.triggered.connect(_search_invert)
         _sel_menu.addAction(_sel_inv)
         _sel_none = QAction('取消选择', research_window)
-        _sel_none.setShortcut('Ctrl+D')
+        _sel_none.setShortcut('Ctrl+Shift+A')
         _sel_none.triggered.connect(_search_select_none)
         _sel_menu.addAction(_sel_none)
 
