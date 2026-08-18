@@ -521,10 +521,7 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
         table_update()
         if file == old_file:  # 如果没有导入任何内容，则不保存
             return
-        if QMessageBox.question(window, "导入日志", "应用导入吗？") == QMessageBox.No:
-            file = old_file
-            table_update()  # 确保界面更新
-    
+
     def import_from_ADI():
         global file
         old_file = file.copy()
@@ -538,10 +535,7 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
         if file == old_file:  # 如果没有导入任何内容，则不保存
             return
         table_update()
-        if QMessageBox.question(window, "导入日志", "应用导入吗？") == QMessageBox.No:
-            file = old_file
-            table_update()
-    
+
     def input_fhl():
         global file
         old_file = file.copy()  # 使用copy()确保是深拷贝
@@ -551,20 +545,15 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
         table_update()
         if file == old_file:  # 如果没有导入任何内容，则不保存
             return
-        if QMessageBox.question(window, "导入日志", "应用导入吗？") == QMessageBox.No:
-            file = old_file
-            table_update()
-    
+
     def output_adi(file):
         import output_adi
 
-        if output_adi.main(file):
-            QMessageBox.information(window, "导出成功", "导出成功！")
+        output_adi.main(file)
 
     def output_excel(file):
         import output_excel
-        if output_excel.main(file):
-            QMessageBox.information(window, "导出成功", "导出成功！")
+        output_excel.main(file)
 
     def get_selected_records():
         if table is None:
@@ -623,23 +612,21 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
         fhl_rw.write_fhl_file(save_path,selected_records,key)
 
             
-        QMessageBox.information(window, "导出成功", "导出成功！")
+        QMessageBox.information(window, "导出成功", f"已导出 {len(selected_records)} 条记录到：\n{save_path}")
 
     def output_selected_adi():
         selected_records = get_selected_records()
         if not selected_records:
             return
         import output_adi
-        if output_adi.main(selected_records):
-            QMessageBox.information(window, "导出成功", "导出成功！")
+        output_adi.main(selected_records)
 
     def output_selected_excel():
         selected_records = get_selected_records()
         if not selected_records:
             return
         import output_excel
-        if output_excel.main(selected_records):
-            QMessageBox.information(window, "导出成功", "导出成功！")
+        output_excel.main(selected_records)
 
     if save_path == '':
         save_path, _ = QFileDialog.getSaveFileName(
@@ -984,23 +971,21 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
             if not save_path:
                 return
             fhl_rw.write_fhl_file(save_path, recs, key)
-            QMessageBox.information(research_window, "导出成功", "导出成功！")
+            QMessageBox.information(research_window, "导出成功", f"已导出 {len(recs)} 条记录到：\n{save_path}")
 
         def _export_search_adi():
             recs = _search_records()
             if not recs:
                 return
             import output_adi
-            if output_adi.main(recs):
-                QMessageBox.information(research_window, "导出成功", "导出成功！")
+            output_adi.main(recs)
 
         def _export_search_excel():
             recs = _search_records()
             if not recs:
                 return
             import output_excel
-            if output_excel.main(recs):
-                QMessageBox.information(research_window, "导出成功", "导出成功！")
+            output_excel.main(recs)
 
         # 菜单栏“选择”：快捷键与主窗口一致（Ctrl+A 全选 / Ctrl+I 反选 / Ctrl+D 取消选择）
         _mb = research_window.menuBar()
