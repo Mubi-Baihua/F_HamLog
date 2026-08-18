@@ -5,8 +5,8 @@
 #define MyAppName "F HamLog 2"
 #define MyAppVersion "2.3.0"
 #define MyAppPublisher "木比白桦 BI8SQL"
-#define MyAppURL "https://mubi‑baihua.github.io/f_hamlog.html"
-#define MyAppExeName "F HamLog 2.2.exe"
+#define MyAppURL "https://mubi-baihua.github.io/f_hamlog.html"
+#define MyAppExeName "F HamLog 2.exe"
 
 [Setup]
 AppId={{9C87FCB8‑00FD‑4889‑8E7B‑02B5789015C0}
@@ -22,7 +22,7 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 DisableProgramGroupPage=yes
 OutputDir=D:\F-Dev\BIG\F_HamLog\F HamLog 2 Inno Setup
-OutputBaseFilename=F HamLog 2.2 setup
+OutputBaseFilename=F HamLog 2.3 setup
 SetupIconFile=D:\F-Dev\BIG\F_HamLog\file\F_HamLog.ico
 SolidCompression=yes
 WizardStyle=modern dynamic windows11

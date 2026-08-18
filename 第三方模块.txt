@@ -1,1 +1,8 @@
-pyside6 pandas openpyxl nuitka skyfield numpy cryptography matplotlib
+pyside6
+pandas
+openpyxl
+nuitka
+skyfield
+numpy
+cryptography
+matplotlib
