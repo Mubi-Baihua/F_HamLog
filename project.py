@@ -959,16 +959,20 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
             return
 
         field = combo.currentData()
-        q = edit.text().strip().lower()
+        q = edit.text().strip().casefold()
         if q == '':
             QMessageBox.information(window, '搜索', '请输入关键词。')
             return
         exact = (match_combo.currentText() == '完全匹配')
         scope = scope_combo.currentText()
 
+        def record_text(record, name):
+            value = record.get(name, '')
+            return '' if value is None else str(value)
+
         matches = []
         for i, rec in enumerate(file):
-            val = str(rec.get(field, '')).lower()
+            val = record_text(rec, field).casefold()
             if (exact and val == q) or (not exact and q in val):
                 matches.append((i, rec))
 
@@ -1127,18 +1131,18 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
             checkbox.toggled.connect(partial(set_main_checkbox, orig_index))
             search_checkboxes.append((checkbox, orig_index))
 
-            table_r.setItem(row, 1, QTableWidgetItem(rec.get('date', '')))
-            table_r.setItem(row, 2, QTableWidgetItem(rec.get('time', '')))
-            table_r.setItem(row, 3, QTableWidgetItem(rec.get('m_call', '')))
-            table_r.setItem(row, 4, QTableWidgetItem(rec.get('o_call', '')))
-            table_r.setItem(row, 5, QTableWidgetItem(rec.get('freq', '')))
-            table_r.setItem(row, 6, QTableWidgetItem(rec.get('mode', '')))
-            table_r.setItem(row, 7, QTableWidgetItem(rec.get('prop_mode', '')))
-            table_r.setItem(row, 8, QTableWidgetItem(rec.get('sat_name', '')))
-            table_r.setItem(row, 9, QTableWidgetItem(rec.get('m_rst', '')))
-            table_r.setItem(row, 10, QTableWidgetItem(rec.get('o_rst', '')))
-            table_r.setItem(row, 11, QTableWidgetItem(rec.get('m_qth', '')))
-            table_r.setItem(row, 12, QTableWidgetItem(rec.get('o_qth', '')))
+            table_r.setItem(row, 1, QTableWidgetItem(record_text(rec, 'date')))
+            table_r.setItem(row, 2, QTableWidgetItem(record_text(rec, 'time')))
+            table_r.setItem(row, 3, QTableWidgetItem(record_text(rec, 'm_call')))
+            table_r.setItem(row, 4, QTableWidgetItem(record_text(rec, 'o_call')))
+            table_r.setItem(row, 5, QTableWidgetItem(record_text(rec, 'freq')))
+            table_r.setItem(row, 6, QTableWidgetItem(record_text(rec, 'mode')))
+            table_r.setItem(row, 7, QTableWidgetItem(record_text(rec, 'prop_mode')))
+            table_r.setItem(row, 8, QTableWidgetItem(record_text(rec, 'sat_name')))
+            table_r.setItem(row, 9, QTableWidgetItem(record_text(rec, 'm_rst')))
+            table_r.setItem(row, 10, QTableWidgetItem(record_text(rec, 'o_rst')))
+            table_r.setItem(row, 11, QTableWidgetItem(record_text(rec, 'm_qth')))
+            table_r.setItem(row, 12, QTableWidgetItem(record_text(rec, 'o_qth')))
             more_btn = QPushButton("更多")
             more_btn.setFixedHeight(26)
             more_btn.clicked.connect(partial(project_others, orig_index))
@@ -1159,6 +1163,7 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
         table_r.setColumnWidth(11, 120)
         table_r.setColumnWidth(12, 120)
         table_r.setColumnWidth(13, 80)
+        lay.addWidget(table_r)
         table_r.scrollToBottom()
 
         # 搜索结果表格右键菜单：复制选中行 / 全选 / 反选 / 取消选择（复制的记录可粘贴到主窗口或 Excel）
