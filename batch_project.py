@@ -272,7 +272,7 @@ class _NavFilter(QObject):
 
 def main(window, preset=None, on_saved=None):
     _install_qt_msg_filter()  # 过滤冻结列良性 Qt 警告
-    window.resize(1200, 780)
+    window.resize(1200, 790)
     window.setWindowTitle('批量记录')
 
     with open('file/m_xml.txt', 'r', encoding='utf-8') as f:
