@@ -21,7 +21,7 @@ import datetime
 
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
-    QPushButton, QTableWidget, QTableWidgetItem, QSpinBox, QComboBox,
+    QPushButton, QTableWidget, QTableWidgetItem, QSpinBox,
     QLineEdit, QMessageBox, QFrame, QGroupBox, QAbstractItemView,
     QHeaderView, QDialog,
 )
@@ -237,10 +237,6 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
 
     # 默认预测时长与「卫星过境预测」窗口保持一致（共用 sat_dur 设置）
     mu_dur = int(sp.clamp_predict_hours(settings.get('sat_dur', 24) or 24))
-    # 与「卫星过境预测」共享“范围”设置与自选卫星列表（sat_filter / sat_sats）
-    mu_filter = settings.get('sat_filter', '全部卫星')
-    if mu_filter not in ('全部卫星', '自选卫星'):
-        mu_filter = '全部卫星'
     # 自选卫星列表共用 sat_sats；兼容旧版 sat_mu_sats
     mu_sats_raw = settings.get('sat_sats', None)
     if mu_sats_raw is None:
@@ -279,11 +275,7 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
     dur_spin.setToolTip('预测时间跨度，最长 %d 小时（10 天）。'
                         % sp.MAX_PREDICT_HOURS)
 
-    filter_combo = QComboBox()
-    filter_combo.addItems(['全部卫星', '自选卫星'])
-    filter_combo.setCurrentText(mu_filter)
     sel_btn = QPushButton('选择卫星…')
-    sel_btn.setEnabled(filter_combo.currentText() == '自选卫星')
 
     refresh_btn = QPushButton('刷新TLE')
 
@@ -293,8 +285,6 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
     par.addWidget(QLabel('预测时长(小时):'))
     par.addWidget(dur_spin)
     par.addSpacing(10)
-    par.addWidget(QLabel('范围:'))
-    par.addWidget(filter_combo)
     par.addWidget(sel_btn)
     par.addStretch(1)
     par.addWidget(refresh_btn)
@@ -329,7 +319,9 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
 
     sats = []
     last_rows = []
-    selected_names = set(mu_sats_raw) if isinstance(mu_sats_raw, list) else None
+    selected_names = (set(mu_sats_raw)
+                      if isinstance(mu_sats_raw, list) and mu_sats_raw
+                      else None)
 
     # ---------- 逻辑 ----------
     def _persist():
@@ -342,8 +334,7 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
         s['sat_mu_el_b'] = box_b.min_elev()
         # 预测时长与「卫星过境预测」共用 sat_dur，保证两者默认一致
         s['sat_dur'] = int(sp.clamp_predict_hours(dur_spin.value()))
-        # 范围模式与自选卫星列表与「卫星过境预测」共享（sat_filter / sat_sats）
-        s['sat_filter'] = filter_combo.currentText()
+        s['sat_filter'] = '自选卫星'
         s['sat_sats'] = sorted(selected_names) if selected_names is not None else None
         _save_settings(s)
 
@@ -358,14 +349,10 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
                       + (txt or '（空）'))
 
     def active_sats_list():
-        """当前「已选择的卫星」= 范围 / 自选卫星生效后的卫星列表。
-
-        预测与地图共用同一份，保证地图上显示的卫星与预测范围始终一致。
-        selected_names 为 None 表示「尚未手动选择」，按全部处理。
-        """
-        if filter_combo.currentText() == '自选卫星' and selected_names is not None:
-            return [(n, s) for (n, s) in sats if n in selected_names]
-        return list(sats)
+        """返回当前自选卫星列表，预测与地图共用同一份。"""
+        if selected_names is None:
+            return []
+        return [(n, s) for (n, s) in sats if n in selected_names]
 
     def _push_sats_to_map():
         """把当前「已选卫星」与台站 A / B 最低仰角同步给已打开的地图窗口。"""
@@ -436,9 +423,8 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
             dur_spin.setValue(int(hours))
             dur_spin.blockSignals(False)
 
-        mode = filter_combo.currentText()
         active_sats = active_sats_list()
-        if mode == '自选卫星' and selected_names is not None and not selected_names:
+        if not selected_names:
             status.setText('尚未选择卫星，请点击“选择卫星…”勾选。')
             table.setRowCount(0)
             _push_sats_to_map()
@@ -496,10 +482,14 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
         win._tle_worker = worker
 
         def on_fetched(s):
-            nonlocal sats
+            nonlocal sats, selected_names
             if getattr(win, '_tle_worker', None) is worker:
                 win._tle_worker = None
             sats = s
+            if selected_names is None:
+                open_select()
+                if selected_names is None:
+                    selected_names = set()
             refresh_btn.setEnabled(True)
             status.setText('已载入 TLE，共 %d 颗卫星。' % len(sats))
             # 若地图窗口已打开，同步最新的「已选卫星」列表（名称/轨道根数）
@@ -542,17 +532,13 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
             _push_sats_to_map()   # 自选卫星变化 → 地图同步显示新的一批卫星
             # 把选择实时同步回卫星过境预测窗口（若该窗口仍打开）
             if on_selection_change is not None:
-                on_selection_change(filter_combo.currentText(), selected_names)
+                on_selection_change('自选卫星', selected_names)
 
     def apply_remote_selection(filter_mode, sel):
         """由「卫星过境预测」窗口反向同步：更新范围/自选卫星并重新预测。
 
         刻意不调用 on_selection_change 回弹，避免两个窗口互相触发形成循环。"""
         nonlocal selected_names
-        filter_combo.blockSignals(True)
-        filter_combo.setCurrentText(filter_mode)
-        filter_combo.blockSignals(False)
-        sel_btn.setEnabled(filter_combo.currentText() == '自选卫星')
         selected_names = sel
         if sats:
             run_prediction()
@@ -648,16 +634,6 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
         else:
             QMessageBox.information(win, '记录', '未设置记录回调，无法自动添加到项目。')
 
-    def on_filter_changed():
-        sel_btn.setEnabled(filter_combo.currentText() == '自选卫星')
-        _persist()
-        if sats:
-            run_prediction()
-        _push_sats_to_map()   # 范围（全部/自选）变化 → 地图同步
-        # 范围（全部卫星 / 自选卫星）切换也同步回卫星过境预测窗口
-        if on_selection_change is not None:
-            on_selection_change(filter_combo.currentText(), selected_names)
-
     def _on_start_text(_txt):
         _, err = _parse_start()
         if err and sats:
@@ -670,7 +646,6 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
     table.itemSelectionChanged.connect(_sync_map_if_open)
     # 点击「非记录列」单元格：打开/聚焦地图；第 7 列是「记录」按钮，点它只记录、不开地图
     table.cellClicked.connect(lambda r, c: _focus_or_open_map() if c != 7 else None)
-    filter_combo.currentIndexChanged.connect(lambda: on_filter_changed())
     # 任何数据变化都自动重新预测（不再有“开始预测”按钮）
     dur_spin.valueChanged.connect(lambda: run_prediction() if sats else None)
     box_a.el_spin.valueChanged.connect(lambda: run_prediction() if sats else None)

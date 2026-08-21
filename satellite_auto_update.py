@@ -4,7 +4,7 @@ satellite_auto_update.py —— 卫星星历（TLE）自动定时更新
 
 功能：
   在应用程序生命周期内，按用户在“设置”中指定的间隔，自动从 Celestrak
-  下载业余卫星 TLE 并刷新本地缓存 file/amateur.tle。
+    下载全部卫星 TLE 并刷新本地缓存 file/amateur.tle。
 
   设计要点：
     - 不依赖任何界面：由 main.py 在启动时调用 AutoTleUpdater(parent).start()
@@ -106,7 +106,9 @@ class _FetchThread(QThread):
 
     def run(self):
         try:
-            sp.fetch_amateur_tle(cache_path=TLE_CACHE, force=True, timeout=30)
+            sp.fetch_amateur_tle(
+                cache_path=TLE_CACHE, force=True, timeout=30,
+                progress=lambda message: print('[卫星星历] %s' % message))
             self.done.emit(True, '')
         except Exception as e:  # 网络失败等
             self.done.emit(False, str(e))

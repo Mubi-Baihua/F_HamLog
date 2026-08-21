@@ -13,12 +13,12 @@ import os
 import datetime
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QTableWidget, QTableWidgetItem, QSpinBox, QComboBox, QDialog, QLineEdit,
+    QTableWidget, QTableWidgetItem, QSpinBox, QDialog, QLineEdit,
     QDialogButtonBox, QMessageBox, QFrame, QCheckBox, QApplication,
     QAbstractItemView, QHeaderView, QScrollArea, QGroupBox, QFileDialog,
-    QSizePolicy,
+    QSizePolicy, QListWidget, QListWidgetItem, QGridLayout, QProgressBar,
 )
-from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtCore import Qt, QThread, Signal, QTimer
 
 import satellite_pred as sp
 from dialog_defaults import desktop_dir
@@ -150,29 +150,20 @@ class SatelliteSelectDialog(QDialog):
         top.addWidget(self._mk_btn('全不选', self._select_none))
         lay.addLayout(top)
 
-        area = QScrollArea()
-        area.setWidgetResizable(True)
-        self.list_widget = QWidget()
-        self.list_lay = QVBoxLayout(self.list_widget)
-        self.list_lay.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self.list_widget = QListWidget()
+        self.list_widget.setUniformItemSizes(True)
+        self.list_widget.setUpdatesEnabled(False)
         self.checks = {}
-        self.rows = {}
+        self.items = {}
         init = selected if isinstance(selected, set) else None
         for n in names:
-            row = QWidget()
-            rlay = QHBoxLayout(row)
-            rlay.setContentsMargins(2, 1, 2, 1)
-            cb = QCheckBox()
-            cb.setChecked(True if init is None else (n in init))
-            lbl = QLabel(n)
-            lbl.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
-            rlay.addWidget(cb)
-            rlay.addWidget(lbl, 1)
-            self.checks[n] = cb
-            self.rows[n] = row
-            self.list_lay.addWidget(row)
-        area.setWidget(self.list_widget)
-        lay.addWidget(area)
+            item = QListWidgetItem(n, self.list_widget)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(Qt.CheckState.Checked if init is None or n in init
+                               else Qt.CheckState.Unchecked)
+            self.items[n] = item
+        self.list_widget.setUpdatesEnabled(True)
+        lay.addWidget(self.list_widget)
 
         btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         btns.accepted.connect(self.accept)
@@ -189,25 +180,28 @@ class SatelliteSelectDialog(QDialog):
 
     def _filter(self, text):
         self._search = text.strip().lower()
-        for n, row in self.rows.items():
-            row.setVisible(self._search in n.lower())
+        self.list_widget.setUpdatesEnabled(False)
+        for n, item in self.items.items():
+            item.setHidden(bool(self._search) and self._search not in n.lower())
+        self.list_widget.setUpdatesEnabled(True)
 
     def _visible_names(self):
         """当前搜索条件下可见的卫星名；无搜索时返回全部。"""
         if not self._search:
-            return list(self.rows.keys())
-        return [n for n in self.rows if self._search in n.lower()]
+            return list(self.items.keys())
+        return [n for n in self.items if self._search in n.lower()]
 
     def _select_all(self):
         for n in self._visible_names():
-            self.checks[n].setChecked(True)
+            self.items[n].setCheckState(Qt.CheckState.Checked)
 
     def _select_none(self):
         for n in self._visible_names():
-            self.checks[n].setChecked(False)
+            self.items[n].setCheckState(Qt.CheckState.Unchecked)
 
     def get_selected(self):
-        return {n for n, cb in self.checks.items() if cb.isChecked()}
+        return {n for n, item in self.items.items()
+            if item.checkState() == Qt.CheckState.Checked}
 
 
 class DictEditorDialog(QDialog):
@@ -436,19 +430,34 @@ class PredictWorker(QThread):
 class TleFetchWorker(QThread):
     """后台下载/解析业余卫星 TLE，避免阻塞主线程（加速界面打开）。"""
     fetched = Signal(list)
+    progress = Signal(str)
+    progress_pct = Signal(int)
     warning = Signal(str)
     error = Signal(str)
+    canceled = Signal()  # 用户主动取消下载（非错误）
 
     def __init__(self, force):
         super().__init__()
         self.force = force
+        self.cancel_requested = False  # 由主线程置 True 触发取消
 
     def run(self):
         try:
-            text = sp.fetch_amateur_tle(cache_path=TLE_CACHE, force=self.force, timeout=25)
+            text = sp.fetch_amateur_tle(
+                cache_path=TLE_CACHE, force=self.force, timeout=25,
+                progress=self.progress.emit,
+                progress_pct=self.progress_pct.emit,
+                cancel=lambda: self.cancel_requested)
             sats = sp.parse_tle_text(text)
             self.fetched.emit(sats)
+        except sp.TleFetchCanceled:
+            # 用户取消：不发错误，仅通知界面已取消
+            self.canceled.emit()
+            return
         except Exception as e:
+            if self.force:
+                self.error.emit(f'无法获取全部活动卫星 TLE：\n{e}')
+                return
             # 下载失败，回退到本地缓存
             try:
                 text = sp.fetch_amateur_tle(cache_path=TLE_CACHE, force=False)
@@ -459,7 +468,7 @@ class TleFetchWorker(QThread):
                 self.error.emit(f'无法下载 TLE 且没有本地缓存：\n{e2}')
 
 
-def main(parent_window, quick_log_callback=None):
+def main(parent_window, quick_log_callback=None, title='卫星过境'):
     settings = _load_settings()
     lat = float(settings.get('m_lat', 0.0) or 0.0)
     lon = float(settings.get('m_lon', 0.0) or 0.0)
@@ -470,14 +479,11 @@ def main(parent_window, quick_log_callback=None):
     # 时长统一钳制到 [1, 240] 小时：历史设置里若存有更大的值，这里自动收敛到 240
     sat_dur = int(sp.clamp_predict_hours(settings.get('sat_dur', 24) or 24))
     sat_el = int(settings.get('sat_el', 10) or 10)
-    sat_filter = settings.get('sat_filter', '全部卫星')
-    if sat_filter not in ('全部卫星', '自选卫星'):
-        sat_filter = '全部卫星'
-    sat_sats_raw = settings.get('sat_sats', None)  # None 或卫星名列表
+    sat_sats_raw = settings.get('sat_sats', None)  # None=从未保存；[]=曾显式清空；list=已选卫星名
 
     win = QMainWindow()
     win.resize(940, 620)
-    win.setWindowTitle('卫星通联记录')
+    win.setWindowTitle(title)
     win._map_window = None  # 卫星地图窗口引用（由“地图”按钮打开）
     central = QWidget()
     win.setCentralWidget(central)
@@ -486,7 +492,9 @@ def main(parent_window, quick_log_callback=None):
     # ---------- 工具栏（两行：上方“数据与设置”，下方“预测参数”） ----------
     # 第一行：数据 / 设置类操作
     top_grp = QGroupBox('数据与设置')
-    tool_top = QHBoxLayout(top_grp)
+    top_vlay = QVBoxLayout(top_grp)
+    tool_top = QHBoxLayout()
+    top_vlay.addLayout(tool_top)
     refresh_btn = QPushButton('刷新TLE')
     obs_btn = QPushButton('观测站设置')
     edit_radio_btn = QPushButton('编辑转发器')
@@ -521,6 +529,11 @@ def main(parent_window, quick_log_callback=None):
     tool_top.addWidget(map_btn)
     tool_top.addStretch(1)
     tool_top.addWidget(auto_cb)
+    # 星历最近更新时间：取本地缓存文件 file/amateur.tle 的修改时间（手动刷新或后台
+    # 自动更新写入后均会刷新）。放在「数据与设置」框内，窗口打开即显示，获取完成后再次刷新。
+    tle_time_label = QLabel('星历更新时间：—')
+    tle_time_label.setStyleSheet('color: gray;')
+    top_vlay.addWidget(tle_time_label)
     layout.addWidget(top_grp)
 
     # 分隔线
@@ -548,14 +561,7 @@ def main(parent_window, quick_log_callback=None):
     el_spin.setRange(0, 90)
     el_spin.setValue(sat_el)
     el_spin.setToolTip('本站（观测站）的最低可用仰角：低于该仰角认为天线被遮挡 / 信号不可用，不计入可见过境。')
-    filter_label = QLabel('范围:')
-    filter_combo = QComboBox()
-    filter_combo.addItems(['全部卫星', '自选卫星'])
-    filter_combo.setCurrentText(sat_filter)
     sel_btn = QPushButton('选择卫星…')
-    # 初始可用状态与“范围”下拉框当前选项同步（首开且持久化为“自选卫星”时，
-    # setCurrentText 不会触发 currentIndexChanged，需手动同步，否则按钮一直灰着点不动）
-    sel_btn.setEnabled(filter_combo.currentText() == '自选卫星')
     tool_bottom.addWidget(start_label)
     tool_bottom.addWidget(start_edit)
     tool_bottom.addSpacing(12)
@@ -564,8 +570,6 @@ def main(parent_window, quick_log_callback=None):
     tool_bottom.addWidget(el_label)
     tool_bottom.addWidget(el_spin)
     tool_bottom.addSpacing(12)
-    tool_bottom.addWidget(filter_label)
-    tool_bottom.addWidget(filter_combo)
     tool_bottom.addWidget(sel_btn)
     tool_bottom.addStretch(1)
     layout.addWidget(bot_grp)
@@ -573,6 +577,30 @@ def main(parent_window, quick_log_callback=None):
     status = QLabel('准备中…')
     status.setStyleSheet('color: gray;')
     layout.addWidget(status)
+
+    # 卫星星历下载进度条 + 取消按钮：仅在「刷新TLE」下载期间显示，平时隐藏
+    prog_layout = QHBoxLayout()
+    progress_bar = QProgressBar()
+    progress_bar.setRange(0, 100)
+    progress_bar.setTextVisible(True)
+    progress_bar.setFormat('下载星历 %p%')
+    progress_bar.setVisible(False)
+    prog_layout.addWidget(progress_bar, 1)
+    cancel_dl_btn = QPushButton('取消下载')
+    cancel_dl_btn.setVisible(False)
+    cancel_dl_btn.setToolTip('取消当前正在进行的星历下载')
+
+    def cancel_download():
+        # 置取消标志；后台线程在分块读时检测到后会抛出 TleFetchCanceled
+        cur = getattr(win, '_tle_worker', None)
+        if cur is not None and cur.isRunning():
+            cur.cancel_requested = True
+        cancel_dl_btn.setEnabled(False)
+        cancel_dl_btn.setText('取消中…')
+
+    cancel_dl_btn.clicked.connect(cancel_download)
+    prog_layout.addWidget(cancel_dl_btn)
+    layout.addLayout(prog_layout)
 
     # ---------- 表格 ----------
     table = QTableWidget(0, 8)
@@ -593,7 +621,15 @@ def main(parent_window, quick_log_callback=None):
 
     sats = []
     last_rows = []  # 保存最近一次预测结果，供单行"记录"按钮读取预填数据
-    selected_names = set(sat_sats_raw) if isinstance(sat_sats_raw, list) else None
+    # 默认「全不选」：没有任何已保存的选择时，初始为空集合；
+    # 这样选择对话框里所有卫星都保持未勾选状态（符合需求：选择卫星默认全不选）。
+    selected_names = (set(sat_sats_raw)
+                      if isinstance(sat_sats_raw, list)
+                      else set())
+    # 窗口打开后首次获取 TLE 时：若尚未选择任何卫星（包括曾显式清空的情况），
+    # 自动弹出选择框引导用户；用户关闭对话框后本窗口会话内不再自动弹窗，
+    # 避免每次刷新都打扰。
+    auto_prompt_pending = True
 
     def set_observer(lat_, lon_, alt_):
         nonlocal lat, lon, alt
@@ -604,8 +640,8 @@ def main(parent_window, quick_log_callback=None):
         s = _load_settings()
         s['sat_dur'] = int(sp.clamp_predict_hours(dur_spin.value()))
         s['sat_el'] = el_spin.value()
-        s['sat_filter'] = filter_combo.currentText()
-        s['sat_sats'] = sorted(selected_names) if selected_names is not None else None
+        s['sat_filter'] = '自选卫星'
+        s['sat_sats'] = sorted(selected_names)
         _save_settings(s)
 
     def _parse_start():
@@ -621,14 +657,10 @@ def main(parent_window, quick_log_callback=None):
                      '可带秒；当前输入：' + (txt or '（空）'))
 
     def active_sats_list():
-        """当前「已选择的卫星」= 范围 / 自选卫星生效后的卫星列表。
-
-        预测与地图共用同一份，保证地图上显示的卫星与预测范围始终一致。
-        selected_names 为 None 表示「尚未手动选择」，按全部处理。
-        """
-        if filter_combo.currentText() == '自选卫星' and selected_names is not None:
-            return [(n, s) for (n, s) in sats if n in selected_names]
-        return list(sats)
+        """返回当前自选卫星列表，预测与地图共用同一份。"""
+        # selected_names 现在恒为 set（默认空集合 = 全不选），
+        # 空集合时返回空列表，预测会提示“尚未选择卫星”。
+        return [(n, s) for (n, s) in sats if n in selected_names]
 
     def _push_sats_to_map():
         """把当前「已选卫星」与最低仰角同步给已打开的地图窗口。"""
@@ -638,14 +670,35 @@ def main(parent_window, quick_log_callback=None):
         mw.set_sats(active_sats_list())
         mw.set_min_elev(el_spin.value())
 
+    def _show_tle_time():
+        """在窗口中显示星历（TLE）最近更新时间——取自设置 file/m_xml.txt 的 sat_last_update（epoch 秒）。"""
+        s = _load_settings()
+        epoch = s.get('sat_last_update')
+        if epoch:
+            try:
+                dt = datetime.datetime.fromtimestamp(float(epoch), LOCAL_TZ)
+                tle_time_label.setText(
+                    '星历更新时间：' + dt.strftime('%Y-%m-%d %H:%M:%S'))
+                return
+            except (ValueError, OSError, TypeError):
+                pass
+        tle_time_label.setText('星历更新时间：尚未获取')
+
+    _show_tle_time()  # 窗口打开即显示（若本地已有缓存，则为其修改时间）
+
+    # 后台自动更新会定期刷新本地星历缓存；用定时器让窗口中的更新时间保持最新
+    _tle_time_timer = QTimer(win)
+    _tle_time_timer.setInterval(60000)  # 每 60 秒刷新一次
+    _tle_time_timer.timeout.connect(_show_tle_time)
+    _tle_time_timer.start()
+
     def run_prediction():
         nonlocal sats, selected_names
         if not sats:
             status.setText('没有可用的卫星数据，请先“刷新TLE”。')
             return
-        mode = filter_combo.currentText()
         active_sats = active_sats_list()
-        if mode == '自选卫星' and selected_names is not None and not selected_names:
+        if not selected_names:
             status.setText('尚未选择卫星，请点击“选择卫星…”勾选要跟踪的卫星。')
             table.setRowCount(0)
             _push_sats_to_map()
@@ -691,9 +744,7 @@ def main(parent_window, quick_log_callback=None):
             populate(rows)
             refresh_btn.setEnabled(True)
             obs_info = f'观测站: 纬{lat:.3f}° 经{lon:.3f}° 海拔{alt:.0f}m'
-            sel_info = ''
-            if mode == '自选卫星' and selected_names is not None:
-                sel_info = f' ｜ 已选 {len(selected_names)} 颗'
+            sel_info = f' ｜ 已选 {len(selected_names)} 颗'
             status.setText(
                 f'{obs_info}{sel_info} ｜ 卫星 {len(active_sats)} 颗 ｜ 可见过境 {len(rows)} 次')
 
@@ -725,7 +776,13 @@ def main(parent_window, quick_log_callback=None):
 
     def refresh_tle(force=False):
         nonlocal sats
-        status.setText('正在获取业余卫星 TLE…')
+        status.setText('正在获取全部活动卫星 TLE…')
+        # 显示下载进度条（默认确定进度；若服务器未返回大小则转忙碌动画）
+        progress_bar.setVisible(True)
+        progress_bar.setRange(0, 100)
+        progress_bar.setValue(0)
+        progress_bar.setFormat('下载星历 %p%')
+        cancel_dl_btn.setVisible(True)  # 下载期间显示「取消下载」
         refresh_btn.setEnabled(False)
         # 若上一次获取仍在跑，先中断
         old = getattr(win, '_tle_worker', None)
@@ -736,29 +793,73 @@ def main(parent_window, quick_log_callback=None):
         win._tle_worker = worker
 
         def on_fetched(s):
-            nonlocal sats
+            nonlocal sats, selected_names, auto_prompt_pending
             if getattr(win, '_tle_worker', None) is worker:
                 win._tle_worker = None
+            progress_bar.setVisible(False)
+            cancel_dl_btn.setVisible(False)
+            cancel_dl_btn.setEnabled(True)
+            cancel_dl_btn.setText('取消下载')
             sats = s
             status.setText(f'已更新 TLE，共 {len(sats)} 颗卫星。')
+            _show_tle_time()
             refresh_btn.setEnabled(True)
-            run_prediction()
+            # 窗口打开后首次获取 TLE：若尚未选择任何卫星，自动弹出选择框引导；
+            # 用户关闭对话框后（auto_prompt_pending 置 False）本会话不再自动弹窗。
+            if auto_prompt_pending:
+                auto_prompt_pending = False
+                if not selected_names:
+                    open_select()
+            if selected_names:
+                run_prediction()
             # 若地图窗口已打开，同步最新的「已选卫星」列表（名称/轨道根数）
             _push_sats_to_map()
 
         def on_warning(w):
+            progress_bar.setVisible(False)
+            cancel_dl_btn.setVisible(False)
+            cancel_dl_btn.setEnabled(True)
+            cancel_dl_btn.setText('取消下载')
             status.setText(w)
+            _show_tle_time()
 
         def on_error(e):
             if getattr(win, '_tle_worker', None) is worker:
                 win._tle_worker = None
+            progress_bar.setVisible(False)
+            cancel_dl_btn.setVisible(False)
+            cancel_dl_btn.setEnabled(True)
+            cancel_dl_btn.setText('取消下载')
             refresh_btn.setEnabled(True)
             table.setRowCount(0)
             QMessageBox.warning(win, 'TLE 获取失败', e)
 
+        def on_canceled():
+            # 用户主动取消：清理状态，不弹错误框
+            if getattr(win, '_tle_worker', None) is worker:
+                win._tle_worker = None
+            progress_bar.setVisible(False)
+            cancel_dl_btn.setVisible(False)
+            cancel_dl_btn.setEnabled(True)
+            cancel_dl_btn.setText('取消下载')
+            refresh_btn.setEnabled(True)
+            status.setText('已取消星历下载。')
+
+        def on_progress_pct(pct):
+            # pct < 0：服务器未返回 Content-Length，进度条显示忙碌动画
+            if pct < 0:
+                progress_bar.setRange(0, 0)
+                progress_bar.setFormat('下载星历…')
+            else:
+                progress_bar.setRange(0, 100)
+                progress_bar.setValue(pct)
+
         worker.fetched.connect(on_fetched)
+        worker.progress.connect(status.setText)
+        worker.progress_pct.connect(on_progress_pct)
         worker.warning.connect(on_warning)
         worker.error.connect(on_error)
+        worker.canceled.connect(on_canceled)
         worker.finished.connect(worker.deleteLater)
         worker.start()
 
@@ -791,7 +892,7 @@ def main(parent_window, quick_log_callback=None):
         for w in list(getattr(mutual_window, '_open_windows', [])):
             fn = getattr(w, 'apply_remote_selection', None)
             if callable(fn):
-                fn(filter_combo.currentText(), selected_names)
+                fn('自选卫星', selected_names)
 
     def open_select():
         nonlocal selected_names
@@ -808,6 +909,7 @@ def main(parent_window, quick_log_callback=None):
             _push_sats_to_map()   # 自选卫星变化 → 地图同步显示新的一批卫星
 
     def import_tle():
+        nonlocal selected_names
         """从用户选择的 txt 或 tle 文件导入卫星星历数据，追加到现有卫星列表。"""
         path, _ = QFileDialog.getOpenFileName(
             win, '导入卫星星历数据', desktop_dir(),
@@ -832,8 +934,7 @@ def main(parent_window, quick_log_callback=None):
                 '文件中 %d 颗卫星均已存在，无需更新。' % len(imported))
             return
         sats.extend(new_sats)
-        selected_names = None  # 导入后重置为全部卫星范围
-        filter_combo.setCurrentText('全部卫星')
+        selected_names = set(n for n, _ in sats)
         _persist()
         QMessageBox.information(
             win, '导入完成',
@@ -866,7 +967,6 @@ def main(parent_window, quick_log_callback=None):
             """通联预测里改了自选卫星 / 范围，实时同步回本窗口。"""
             nonlocal selected_names
             selected_names = sel
-            filter_combo.setCurrentText(filter_mode)
             _persist()
             if sats:
                 run_prediction()
@@ -971,14 +1071,6 @@ def main(parent_window, quick_log_callback=None):
                 win, '记录',
                 '未设置记录回调，无法自动添加到项目。')
 
-    def on_filter_changed():
-        sel_btn.setEnabled(filter_combo.currentText() == '自选卫星')
-        if sats:
-            run_prediction()
-        _persist()
-        _push_selection_to_mutual()
-        _push_sats_to_map()   # 范围（全部/自选）变化 → 地图同步
-
     refresh_btn.clicked.connect(lambda: refresh_tle(force=True))
     obs_btn.clicked.connect(edit_observer)
     sel_btn.clicked.connect(open_select)
@@ -1001,7 +1093,6 @@ def main(parent_window, quick_log_callback=None):
             status.setText('开始时间格式无效：' + err)
     start_edit.textChanged.connect(_on_start_text)
     start_edit.editingFinished.connect(lambda: run_prediction() if sats else None)
-    filter_combo.currentIndexChanged.connect(lambda: on_filter_changed())
 
     # 关闭窗口时：先停止后台线程（避免 QThread destroyed while running），再保存设置
     def _on_close(event):

@@ -1,6 +1,12 @@
 import datetime
 
 import satellite_map_window as smw
+import satellite_pred as sp
+
+
+def test_tle_source_contains_all_active_satellites():
+    assert 'GROUP=active' in sp.CELESTRAK_ALL_URL
+    assert 'GROUP=amateur' not in sp.CELESTRAK_ALL_URL
 
 
 def test_marker_roundtrip_load_save():

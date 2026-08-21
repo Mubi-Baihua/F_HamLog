@@ -91,7 +91,8 @@ def main():
                 bw.setWindowTitle('批量记录')
                 batch_project.main(bw, preset=preset)
                 _batch_windows.append(bw)
-            satellite_window.main(None, quick_log_callback=quick_log)
+            satellite_window.main(None, quick_log_callback=quick_log,
+                                  title='卫星过境')
     
     app = QApplication(sys.argv)
     app.setWindowIcon(QIcon("file/F_HamLog.ico"))

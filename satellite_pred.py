@@ -10,7 +10,7 @@ satellite_pred.py —— 业余卫星过境预测核心模块
      仰角/方位求解）都由 skyfield 完成，本模块不再手写任何坐标变换，
      从而保证过境时长、升起/落下时刻与权威结果一致；
   3. 预测未来一段时间内的可见过境（AOS / LOS / 最大仰角 / 方位 / 时长）；
-  4. 从 Celestrak 下载业余卫星 TLE 并本地缓存。
+    4. 从 Celestrak 下载全部活动卫星 TLE 并本地缓存。
 
 依赖：第三方库 skyfield + numpy（pip install skyfield numpy）。
   时标使用 skyfield 内置数据（builtin=True），无需联网即可运行；
@@ -525,10 +525,22 @@ def predict_mutual_passes(satrec, observer_a, observer_b, start_utc,
 #  TLE 下载 / 解析
 # ---------------------------------------------------------------------------
 
-CELESTRAK_AMATEUR_URL = "https://celestrak.org/NORAD/elements/gp.php?GROUP=amateur&FORMAT=tle"
+CELESTRAK_ALL_URL = "https://celestrak.org/NORAD/elements/gp.php?GROUP=active&FORMAT=tle"
+# 保留旧常量名，兼容外部调用方；实际请求使用全部活动卫星数据。
+CELESTRAK_AMATEUR_URL = CELESTRAK_ALL_URL
 
-# 本地 TLE 缓存路径（星历数据）。解析为基于应用根目录的绝对路径，
-# 以保证打包后无论从哪个目录启动都能读到打包进 exe 旁边的 file/amateur.tle。
+# active 接口不可用时，按 Celestrak 分类组分别获取。各组之间可能有重复，
+# _merge_tle_texts() 会按 NORAD 编号去重后合并。
+CELESTRAK_FALLBACK_GROUPS = (
+    'stations', 'visual', 'weather', 'noaa', 'goes', 'resource', 'sarsat',
+    'dmc', 'tdrss', 'argos', 'geo', 'gpz', 'gps-ops', 'glo-ops',
+    'galileo', 'beidou', 'sbas', 'iridium', 'iridium-NEXT', 'starlink',
+    'oneweb', 'globalstar', 'intelsat', 'ses', 'asia-pacific', 'orbcomm',
+    'swarms', 'amateur', 'cubesat', 'education', 'engineering', 'geodetic',
+    'military', 'radar', 'other',
+)
+
+# 本地 TLE 缓存路径（虽然文件名沿用历史名称，但内容包含全部卫星）。
 TLE_CACHE = app_path('file/amateur.tle')
 
 # 常见业余卫星频段/模式参考，用于“快速记录”预填频率与模式
@@ -551,30 +563,140 @@ SATE_BANDS = {
 }
 
 
-def fetch_amateur_tle(cache_path=TLE_CACHE, force=False, timeout=20):
-    """从 Celestrak 下载业余卫星 TLE 并缓存到本地文件。
+class TleFetchCanceled(Exception):
+    """用户主动取消星历下载时抛出（非错误）。"""
+    pass
+
+
+def fetch_amateur_tle(cache_path=TLE_CACHE, force=False, timeout=20,
+                      progress=None, progress_pct=None, cancel=None):
+    """从 Celestrak 下载全部卫星 TLE 并缓存到本地文件。
 
     返回下载得到的 TLE 文本。若 force=False 且缓存存在则直接读缓存。
-    下载失败且缓存存在时回退到缓存。
+    优先请求 active 组；若该接口失败，则分别请求各分类组并合并去重。
+
+    进度反馈（均为可选回调）：
+      - progress(msg)：文本状态提示（沿用旧接口）。
+      - progress_pct(pct)：整数 0..100 的下载百分比；传入 -1 表示“不确定进度”
+        （服务器未返回 Content-Length，进度条显示为忙碌动画）。
+      - cancel：返回 True 表示用户已取消；分块下载时每读一块就检查一次，
+        一旦取消立即抛出 TleFetchCanceled（调用方据此判定为“用户取消”而非错误）。
     """
     if (not force) and os.path.exists(cache_path):
         with open(cache_path, 'r', encoding='utf-8') as f:
             return f.read()
-    try:
+
+    def report(message):
+        if progress is not None:
+            progress(message)
+
+    def report_pct(pct):
+        if progress_pct is not None:
+            progress_pct(pct)
+
+    def download(url, pct_cb=report_pct, cancel=None):
         req = urllib.request.Request(
-            CELESTRAK_AMATEUR_URL,
-            headers={'User-Agent': 'F-HamLog/2.0 satellite prediction'})
+            url, headers={'User-Agent': 'F-HamLog/2.0 satellite prediction'})
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            data = resp.read().decode('utf-8')
-        os.makedirs(os.path.dirname(cache_path) or '.', exist_ok=True)
-        with open(cache_path, 'w', encoding='utf-8') as f:
-            f.write(data)
-        return data
-    except Exception as e:
-        if os.path.exists(cache_path):
-            with open(cache_path, 'r', encoding='utf-8') as f:
-                return f.read()
-        raise RuntimeError("无法下载 TLE 且没有本地缓存：%s" % e)
+            total = resp.headers.get('Content-Length')
+            try:
+                total = int(total)
+            except (TypeError, ValueError):
+                total = None
+            # 确定有总大小则走百分比进度，否则走“忙碌”不确定进度
+            pct_cb(0 if total else -1)
+            chunks = []
+            downloaded = 0
+            while True:
+                # 每读一块就检查一次取消请求，确保响应及时
+                if cancel is not None and cancel():
+                    raise TleFetchCanceled('用户取消了星历下载')
+                chunk = resp.read(16384)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                if total:
+                    downloaded += len(chunk)
+                    pct_cb(min(100, int(downloaded / total * 100)))
+            pct_cb(100)
+            return b''.join(chunks).decode('utf-8')
+
+    try:
+        report('正在下载 active 卫星数据…')
+        data = download(CELESTRAK_ALL_URL, cancel=cancel)
+        report('active 卫星数据下载完成，正在保存…')
+    except Exception as active_error:
+        # 用户取消：直接冒泡，不走回退逻辑（避免误报“下载失败”）
+        if isinstance(active_error, TleFetchCanceled):
+            raise
+        texts = []
+        failed_groups = []
+        total_groups = len(CELESTRAK_FALLBACK_GROUPS)
+        report('active 返回错误，开始按分类下载（0/%d）…' % total_groups)
+
+        def group_pct(pct, _i=0, _n=total_groups):
+            # 把单分类文件的字节进度映射为「分类总进度」：
+            # (已完成分类数 + 本文件进度) / 总分类数。无 Content-Length 时
+            # 退化为该分类槽位的起点，保持进度条始终处于确定模式。
+            f = pct / 100.0 if pct >= 0 else 0.0
+            report_pct(int((_i + f) / _n * 100))
+
+        for index, group in enumerate(CELESTRAK_FALLBACK_GROUPS, 1):
+            url = ('https://celestrak.org/NORAD/elements/gp.php?GROUP=%s'
+                   '&FORMAT=tle' % group)
+            try:
+                text = download(url, pct_cb=lambda p, _i=index - 1:
+                                group_pct(p, _i), cancel=cancel)
+                if text.strip():
+                    texts.append(text)
+            except TleFetchCanceled:
+                raise  # 用户取消：直接冒泡，不计入失败分类
+            except Exception:
+                failed_groups.append(group)
+            report('分类下载进度：%d/%d' %
+                   (index, total_groups))
+        data = _merge_tle_texts(texts)
+        if not data.strip():
+            raise RuntimeError(
+                '无法下载全部卫星 TLE。active 接口失败：%s；分类组也无法访问。'
+                % active_error)
+        if failed_groups:
+            print('[卫星星历] 以下分类组下载失败：%s' % ', '.join(failed_groups))
+
+    if not data.strip():
+        raise RuntimeError('Celestrak 返回了空的卫星 TLE 数据。')
+    report('正在写入星历缓存…')
+    os.makedirs(os.path.dirname(cache_path) or '.', exist_ok=True)
+    with open(cache_path, 'w', encoding='utf-8') as f:
+        f.write(data)
+    return data
+
+
+def _merge_tle_texts(texts):
+    """合并多组 Celestrak TLE，并按 NORAD 编号去重。"""
+    records = []
+    seen = set()
+    for text in texts:
+        lines = [ln.strip('\r') for ln in text.splitlines() if ln.strip()]
+        i = 0
+        while i + 1 < len(lines):
+            if lines[i].startswith('1 ') and lines[i + 1].startswith('2 '):
+                name = lines[i][2:7].strip()
+                line1, line2 = lines[i], lines[i + 1]
+                i += 2
+            elif (i + 2 < len(lines) and lines[i + 1].startswith('1 ') and
+                  lines[i + 2].startswith('2 ')):
+                name = lines[i].strip()
+                line1, line2 = lines[i + 1], lines[i + 2]
+                i += 3
+            else:
+                i += 1
+                continue
+            norad_id = line1[2:7]
+            if norad_id not in seen:
+                seen.add(norad_id)
+                records.extend((name, line1, line2))
+    return '\n'.join(records) + ('\n' if records else '')
 
 
 def parse_tle_text(text):
@@ -609,7 +731,7 @@ def parse_tle_text(text):
 
 
 def load_amateur_satellites(cache_path=TLE_CACHE, force=False):
-    """下载/读取业余卫星 TLE 并返回 [(name, Satrec), ...]。"""
+    """下载/读取全部活动卫星 TLE 并返回 [(name, Satrec), ...]。"""
     text = fetch_amateur_tle(cache_path=cache_path, force=force)
     return parse_tle_text(text)
 

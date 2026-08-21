@@ -1503,7 +1503,8 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
 
     def open_satellite_window():
         import satellite_window
-        satellite_window.main(window, quick_log_callback=quick_log)
+        satellite_window.main(window, quick_log_callback=quick_log,
+                              title='卫星通联记录')
 
     sat_predict_action = QAction('卫星通联记录', window)
     sat_predict_action.setShortcut('Ctrl+W')
