@@ -694,7 +694,7 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
         aes_close.triggered.connect(aes_close_)
         file_menu.addAction(aes_close)
 
-    file_menu.addSeparator()
+    '''file_menu.addSeparator()
 
     def open_main_page():
         # 打开主页面：启动 main.py 启动器窗口（与程序入口一致）
@@ -708,7 +708,7 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
     open_main_action = QAction('打开主页面', window)
     open_main_action.setShortcut('Ctrl+Shift+M')
     open_main_action.triggered.connect(open_main_page)
-    file_menu.addAction(open_main_action)
+    file_menu.addAction(open_main_action)'''
 
     file_menu.addSeparator()
 
