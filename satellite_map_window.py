@@ -1074,12 +1074,14 @@ class MarkerManageDialog(QDialog):
     def __init__(self, parent, markers=None):
         super().__init__(parent)
         self.setWindowTitle('标记点管理')
-        self.resize(680, 520)
+        self.resize(640, 480)
         self._rows = []
         self._syncing_coordinates = False
 
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel('标记点配置已统一为 TXT 格式，请使用记事本编辑。'))
+        layout.addWidget(QLabel(
+            '每行一条记录。点击单元格可直接编辑；用“添加”新增，“删除选中”移除整行；'
+            '完成后点“保存”写回文件。'))
 
         # 表格（与 TQSL 映射 / 转发器设置一致：纵向填满窗口）
         self.table = QTableWidget(0, 5)
@@ -1097,7 +1099,7 @@ class MarkerManageDialog(QDialog):
         btn_row = QHBoxLayout()
         add_btn = QPushButton('添加')
         del_btn = QPushButton('删除选中')
-        edit_btn = QPushButton('打开标记点TXT')
+        edit_btn = QPushButton('使用记事本编辑')
         save_btn = QPushButton('保存')
         close_btn = QPushButton('关闭')
         add_btn.clicked.connect(self._add_row)
@@ -1347,6 +1349,8 @@ class MapWindow(QMainWindow):
         ctl.addWidget(self._chk_twilight)
 
         self._marker_mgr_btn = QPushButton('标记点管理')
+        self._marker_mgr_btn.setToolTip(
+            '使用记事本编辑地图标记点（名称/网格/纬度/经度/颜色）file/sat_map_markers.txt')
         self._marker_mgr_btn.clicked.connect(self._open_marker_manager)
         ctl.addWidget(self._marker_mgr_btn)
 

@@ -404,7 +404,7 @@ class DictEditorDialog(QDialog):
                                 '# 可由“卫星通联记录”窗口的“编辑转发器”维护\n')
                     else:
                         f.write('# TQSL / LoTW 卫星名称映射表（格式：卫星显示名=TQSL认可名）\n'
-                                '# 可由“卫星通联记录”窗口的“TQSL映射”维护\n')
+                                '# 可由“卫星通联记录”窗口的“编辑TQSL映射”维护\n')
                 for key, vals in self._rows:
                     if self._delim is not None:
                         line = '%s=%s' % (key, self._delim.join(vals))
@@ -553,9 +553,9 @@ def main(parent_window, quick_log_callback=None, title='卫星过境'):
     refresh_btn = QPushButton('刷新TLE')
     obs_btn = QPushButton('观测站设置')
     edit_radio_btn = QPushButton('编辑转发器')
-    edit_radio_btn.setToolTip('在界面内直接编辑卫星转发器数据 sat_radio_dict.txt（下行/上行频率与模式）')
+    edit_radio_btn.setToolTip('使用记事本编辑卫星转发器数据 sat_radio_dict.txt（下行/上行频率与模式）')
     edit_tqsl_btn = QPushButton('编辑TQSL映射')
-    edit_tqsl_btn.setToolTip('在界面内直接编辑 TQSL/LoTW 卫星名称映射 tqsl_dict.txt')
+    edit_tqsl_btn.setToolTip('使用记事本编辑 TQSL/LoTW 卫星名称映射 tqsl_dict.txt')
     import_tle_btn = QPushButton('导入星历数据')
     import_tle_btn.setToolTip('从 txt 或 tle 文件导入卫星星历数据（TLE 格式），追加到现有卫星列表中')
     # 双站通联预测：从本窗口直接打开，无需再回到主页或菜单
@@ -1116,7 +1116,7 @@ def main(parent_window, quick_log_callback=None, title='卫星过境'):
                 f'卫星「{r["name"]}」未找到 TQSL / LoTW 名称映射，\n'
                 f'记录将以原始名称「{preset.get("sat_name", r["name"])}」保存，'
                 f'可能不会被 LoTW / TQSL 正确识别。\n'
-                f'可点击工具栏「TQSL映射」补充该卫星的映射。')
+                f'可点击工具栏「编辑TQSL映射」使用记事本补充该卫星的映射。')
         if quick_log_callback is not None:
             quick_log_callback(preset)
         else:

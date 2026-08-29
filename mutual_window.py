@@ -620,7 +620,7 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
                 f'卫星「{r["name"]}」未找到 TQSL / LoTW 名称映射，\n'
                 f'记录将以原始名称「{preset.get("sat_name", r["name"])}」保存，'
                 f'可能不会被 LoTW / TQSL 正确识别。\n'
-                f'可在「卫星过境预测」窗口的「编辑TQSL映射」中补充。')
+                f'可在「卫星过境预测」窗口的「编辑TQSL映射」中使用记事本补充。')
         if quick_log_callback is not None:
             quick_log_callback(preset)
         else:
