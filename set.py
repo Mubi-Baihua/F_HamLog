@@ -125,10 +125,9 @@ def main(window):
     grid_input.setFixedWidth(110)
     try:
         grid_input.setPlaceholderText('梅登黑格网格')
+        grid_input.setText(sp.latlon_to_maidenhead(m_lat, m_lon))
     except Exception:
         grid_input.setPlaceholderText('梅登黑格网格，如 PM84')
-    grid_to_coord = QPushButton('网格→坐标', central_widget)
-    grid_to_coord.setToolTip('将梅登黑格网格（如 PM84）转换为经纬度并填入上方输入框')
     aouto_save = QCheckBox("自动保存", central_widget)
     aouto_save.setChecked(aouto_save_b)
     aouto_list_ = QCheckBox("自动按时间排序", central_widget)
@@ -167,7 +166,6 @@ def main(window):
     pos_row.addSpacing(15)
     pos_row.addWidget(QLabel('坐标网:', central_widget))
     pos_row.addWidget(grid_input)
-    pos_row.addWidget(grid_to_coord)
     pos_row.addStretch(1)
     layout.addLayout(pos_row)
 
@@ -180,10 +178,20 @@ def main(window):
         except ValueError as e:
             QMessageBox.warning(window, '网格无效', str(e))
             return
+        grid_input.setText(sp.latlon_to_maidenhead(glat, glon))
         lat_input.setText(f'{glat:.5f}')
         lon_input.setText(f'{glon:.5f}')
 
-    grid_to_coord.clicked.connect(on_grid_to_coord)
+    def on_coord_to_grid():
+        try:
+            grid_input.setText(sp.latlon_to_maidenhead(
+                float(lat_input.text()), float(lon_input.text())))
+        except (TypeError, ValueError):
+            return
+
+    lat_input.editingFinished.connect(on_coord_to_grid)
+    lon_input.editingFinished.connect(on_coord_to_grid)
+    grid_input.editingFinished.connect(on_grid_to_coord)
     layout.addLayout(h_layout)
     layout.addWidget(sett_button)
     

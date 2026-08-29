@@ -23,6 +23,7 @@ LOS 时刻 − AOS 时刻（秒级精度），不再依赖粗扫描步长近似�
 """
 
 import os
+import subprocess
 import re
 import sys
 import urllib.request
@@ -760,6 +761,26 @@ def _read_text(path):
         except UnicodeDecodeError:
             continue
     return raw.decode('latin-1', errors='replace')
+
+
+def open_text_config(path, header):
+    """统一配置文件说明后用系统记事本打开。"""
+    os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
+    try:
+        old = _read_text(path) if os.path.exists(path) else ''
+        data_lines = [line.strip() for line in old.splitlines()
+                      if line.strip() and not line.lstrip().startswith('#')]
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write(header.rstrip() + '\n')
+            if data_lines:
+                f.write('\n'.join(data_lines) + '\n')
+    except OSError:
+        pass
+    try:
+        subprocess.Popen(['notepad.exe', os.path.abspath(path)])
+    except OSError:
+        return False
+    return True
 
 
 TQSL_DICT_PATH = _resolve_data_path("file/tqsl_dict.txt")

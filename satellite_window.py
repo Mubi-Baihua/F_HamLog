@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QDialogButtonBox, QMessageBox, QFrame, QCheckBox, QApplication,
     QAbstractItemView, QHeaderView, QScrollArea, QGroupBox, QFileDialog,
     QSizePolicy, QListWidget, QListWidgetItem, QGridLayout, QProgressBar,
+    QStyledItemDelegate, QCompleter,
 )
 from PySide6.QtCore import Qt, QThread, Signal, QTimer
 
@@ -69,6 +70,34 @@ def _duration_str(sec):
     return f'{s}秒'
 
 
+def _load_local_tle_names():
+    """读取本地星历中的卫星原名，供字典编辑器搜索补全。"""
+    try:
+        if not os.path.exists(TLE_CACHE):
+            return []
+        with open(TLE_CACHE, 'r', encoding='utf-8-sig') as f:
+            return [name for name, _ in sp.parse_tle_text(f.read())]
+    except Exception:
+        return []
+
+
+class SatelliteNameDelegate(QStyledItemDelegate):
+    """让 TQSL / 转发器编辑器的卫星名可从本地星历中搜索。"""
+
+    def __init__(self, names, parent=None):
+        super().__init__(parent)
+        self._names = names
+
+    def createEditor(self, parent, option, index):
+        editor = QLineEdit(parent)
+        completer = QCompleter(self._names, editor)
+        completer.setCaseSensitivity(Qt.CaseInsensitive)
+        completer.setFilterMode(Qt.MatchContains)
+        completer.setCompletionMode(QCompleter.PopupCompletion)
+        editor.setCompleter(completer)
+        return editor
+
+
 class ObserverDialog(QDialog):
     """编辑观测站位置（纬度/经度/海拔），支持梅登黑格网格输入。"""
 
@@ -77,7 +106,7 @@ class ObserverDialog(QDialog):
         self.setWindowTitle('观测站位置')
         self.resize(340, 175)
         lay = QVBoxLayout(self)
-        #lay.addWidget(QLabel('设置你的 QTH 位置，用于计算卫星仰角与方位。\n可填经纬度，或填梅登黑格网格（如 PM84 / PM84lx）后点“网格→坐标”。'))
+        #lay.addWidget(QLabel('设置你的 QTH 位置，用于计算卫星仰角与方位。\n可填经纬度或梅登黑格网格，编辑完成后自动同步。'))
 
         self.lat_edit = QLineEdit(f'{lat:.5f}')
         self.lon_edit = QLineEdit(f'{lon:.5f}')
@@ -96,14 +125,16 @@ class ObserverDialog(QDialog):
         try:
             self.grid_edit.setPlaceholderText(
                 '梅登黑格网格，如 %s' % sp.latlon_to_maidenhead(lat, lon))
+            self.grid_edit.setText(sp.latlon_to_maidenhead(lat, lon))
         except Exception:
             self.grid_edit.setPlaceholderText('梅登黑格网格，如 PM84')
-        grid_btn = QPushButton('网格→坐标')
-        grid_btn.clicked.connect(self._grid_to_coord)
         grid_row.addWidget(QLabel('网格:'))
         grid_row.addWidget(self.grid_edit)
-        grid_row.addWidget(grid_btn)
         lay.addLayout(grid_row)
+
+        self.lat_edit.editingFinished.connect(self._coord_to_grid)
+        self.lon_edit.editingFinished.connect(self._coord_to_grid)
+        self.grid_edit.editingFinished.connect(self._grid_to_coord)
 
         btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         btns.accepted.connect(self.accept)
@@ -119,8 +150,16 @@ class ObserverDialog(QDialog):
         except ValueError as e:
             QMessageBox.warning(self, '网格无效', str(e))
             return
+        self.grid_edit.setText(sp.latlon_to_maidenhead(glat, glon))
         self.lat_edit.setText(f'{glat:.5f}')
         self.lon_edit.setText(f'{glon:.5f}')
+
+    def _coord_to_grid(self):
+        try:
+            self.grid_edit.setText(sp.latlon_to_maidenhead(
+                float(self.lat_edit.text()), float(self.lon_edit.text())))
+        except (TypeError, ValueError):
+            return
 
     def get_values(self):
         try:
@@ -237,25 +276,41 @@ class DictEditorDialog(QDialog):
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         self.table.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
+        tle_names = _load_local_tle_names()
+        if tle_names:
+            self.table.setItemDelegateForColumn(
+                0, SatelliteNameDelegate(tle_names, self.table))
         lay.addWidget(self.table, 1)   # 拉伸因子 1：表格纵列填满窗口
 
         btn_row = QHBoxLayout()
         add_btn = QPushButton('添加')
         del_btn = QPushButton('删除选中')
+        text_btn = QPushButton('使用记事本编辑')
         save_btn = QPushButton('保存')
         close_btn = QPushButton('关闭')
         add_btn.clicked.connect(self._add_row)
         del_btn.clicked.connect(self._del_row)
+        text_btn.clicked.connect(self._open_text_editor)
         save_btn.clicked.connect(self._save)
         close_btn.clicked.connect(self.reject)
         btn_row.addWidget(add_btn)
         btn_row.addWidget(del_btn)
+        btn_row.addWidget(text_btn)
         btn_row.addStretch(1)
         btn_row.addWidget(save_btn)
         btn_row.addWidget(close_btn)
         lay.addLayout(btn_row)
 
         self._load()
+
+    def _open_text_editor(self):
+        if self._delim is not None:
+            header = ('# 卫星转发器表\n# 格式：卫星名=下行频率,上行频率,模式\n'
+                      '# 例如：SO-50=436.795,145.850,FM')
+        else:
+            header = ('# TQSL / LoTW 卫星名称映射表\n# 格式：卫星显示名=TQSL认可名\n'
+                      '# 例如：ISS (ZARYA)=ISS')
+        sp.open_text_config(self._path, header)
 
     # ---- 读取 ----
     def _load(self):
@@ -356,7 +411,7 @@ class DictEditorDialog(QDialog):
                     else:
                         line = '%s=%s' % (key, vals[0] if vals else '')
                     f.write(line + '\n')
-            QMessageBox.information(self, '已保存', '已保存 %d 条记录到：\n%s' % (len(self._rows), self._path))
+            QMessageBox.information(self, '已保存', '已保存 %d 条记录。' % len(self._rows))
             self.accept()
         except Exception as e:
             QMessageBox.warning(self, '保存失败', '写入文件出错：%s' % e)
@@ -944,20 +999,18 @@ def main(parent_window, quick_log_callback=None, title='卫星过境'):
         _push_sats_to_map()
 
     def edit_radio_dict():
-        """在界面内直接编辑卫星转发器数据 sat_radio_dict.txt（下行/上行频率与模式）。"""
         dlg = DictEditorDialog(
             win, '编辑卫星转发器', sp.SAT_RADIO_DICT_PATH,
             ['卫星名', '下行频率', '上行频率', '模式'], value_delimiter=',')
         if dlg.exec() == QDialog.Accepted and sats:
-            run_prediction()  # 应用新数据重新预测
+            run_prediction()
 
     def edit_tqsl_dict():
-        """在界面内直接编辑 TQSL/LoTW 卫星名称映射 tqsl_dict.txt。"""
         dlg = DictEditorDialog(
             win, '编辑 TQSL/LoTW 映射', sp.TQSL_DICT_PATH,
             ['卫星显示名', 'LoTW 认可名'], value_delimiter=None)
         if dlg.exec() == QDialog.Accepted and sats:
-            run_prediction()  # 预填的卫星名（TQSL 认可名）会随之更新
+            run_prediction()
 
     def open_mutual():
         """从卫星过境预测窗口内打开双站通联预测（入口统一收归此处）。"""

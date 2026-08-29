@@ -66,16 +66,9 @@ class StationBox(QGroupBox):
         self.grid_edit.setPlaceholderText('梅登黑格网格，如 PM84')
         self.grid_edit.setMaximumWidth(120)
         try:
-            # 坐标为 (0,0) 视为“未设置”，网格留空更直观
-            if lat != 0.0 or lon != 0.0:
-                self.grid_edit.setText(sp.latlon_to_maidenhead(lat, lon))
+            self.grid_edit.setText(sp.latlon_to_maidenhead(lat, lon))
         except Exception:
             pass
-        g2c_btn = QPushButton('网格→坐标')
-        c2g_btn = QPushButton('坐标→网格')
-        g2c_btn.clicked.connect(self._grid_to_coord)
-        c2g_btn.clicked.connect(self._coord_to_grid)
-
         self.el_spin = QSpinBox()
         self.el_spin.setRange(0, 90)
         self.el_spin.setValue(int(min_el))
@@ -84,8 +77,6 @@ class StationBox(QGroupBox):
 
         grid.addWidget(QLabel('网格:'), 1, 0)
         grid.addWidget(self.grid_edit, 1, 1)
-        grid.addWidget(g2c_btn, 1, 2)
-        grid.addWidget(c2g_btn, 1, 3)
         grid.addWidget(QLabel('最低仰角:'), 1, 4)
         grid.addWidget(self.el_spin, 1, 5)
 
@@ -95,10 +86,10 @@ class StationBox(QGroupBox):
             grid.addWidget(lbl, 2, 0, 1, 6)
 
         # 任意输入变更（坐标/网格编辑完成）都向外发信号，用于自动重算
-        self.lat_edit.editingFinished.connect(self.dataChanged.emit)
-        self.lon_edit.editingFinished.connect(self.dataChanged.emit)
+        self.lat_edit.editingFinished.connect(self._coord_to_grid)
+        self.lon_edit.editingFinished.connect(self._coord_to_grid)
         self.alt_edit.editingFinished.connect(self.dataChanged.emit)
-        self.grid_edit.editingFinished.connect(self.dataChanged.emit)
+        self.grid_edit.editingFinished.connect(self._grid_to_coord)
 
     # ---- 网格 / 坐标互转 ----
     def _grid_to_coord(self):
@@ -110,6 +101,7 @@ class StationBox(QGroupBox):
         except ValueError as e:
             QMessageBox.warning(self, '网格无效', str(e))
             return
+        self.grid_edit.setText(sp.latlon_to_maidenhead(glat, glon))
         self.lat_edit.setText(f'{glat:.5f}')
         self.lon_edit.setText(f'{glon:.5f}')
         self.dataChanged.emit()
@@ -255,7 +247,7 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
     box_a = StationBox('台站 A（本站）', a_lat, a_lon, a_alt, a_el,
                        hint='默认取“观测站设置”里的本站位置，可临时修改。')
     box_b = StationBox('台站 B（对方）', b_lat, b_lon, b_alt, b_el,
-                       hint='填写对方 QTH：可直接填经纬度，或填网格后点“网格→坐标”。')
+                       hint='填写对方 QTH：可直接填经纬度或梅登黑格网格，编辑完成后自动同步。')
     sta_row.addWidget(box_a)
     sta_row.addWidget(box_b)
     layout.addLayout(sta_row)

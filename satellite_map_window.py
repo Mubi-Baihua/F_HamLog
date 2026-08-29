@@ -244,6 +244,14 @@ def save_map_markers(markers):
         return []
 
 
+def open_map_markers_text():
+    """用记事本编辑地图标记点 TXT。"""
+    return sp.open_text_config(
+        MARKERS_PATH,
+        '# 地图标记点表\n# 格式：名称=纬度,经度,颜色\n'
+        '# 例如：北京=39.9042,116.4074,#ff6600')
+
+
 def _solar_declination_and_subsolar_lon(now_utc):
     """返回太阳赤纬与地理子太阳点经度，用于计算晨昏线。
 
@@ -1060,8 +1068,7 @@ class MaidenheadImportDialog(QDialog):
 class MarkerManageDialog(QDialog):
     """管理地图标记点（名称 / 纬度 / 经度 / 颜色）。
 
-    与 TQSL 映射、转发器设置风格一致：表格纵向填满窗口，并支持从
-    梅登黑格网格坐标批量导入标记点。
+    配置文件统一使用记事本编辑。
     """
 
     def __init__(self, parent, markers=None):
@@ -1069,38 +1076,38 @@ class MarkerManageDialog(QDialog):
         self.setWindowTitle('标记点管理')
         self.resize(680, 520)
         self._rows = []
+        self._syncing_coordinates = False
 
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel(
-            '双击单元格可编辑；「纬度 / 经度」为十进制（°）。\n'
-            '也可点击「从梅登黑格导入」按网格坐标批量添加标记点。'))
+        layout.addWidget(QLabel('标记点配置已统一为 TXT 格式，请使用记事本编辑。'))
 
         # 表格（与 TQSL 映射 / 转发器设置一致：纵向填满窗口）
-        self.table = QTableWidget(0, 4)
-        self.table.setHorizontalHeaderLabels(['名称', '纬度', '经度', '颜色'])
+        self.table = QTableWidget(0, 5)
+        self.table.setHorizontalHeaderLabels(['名称', '网格', '纬度', '经度', '颜色'])
         self.table.setEditTriggers(
             QAbstractItemView.DoubleClicked | QAbstractItemView.EditKeyPressed |
             QAbstractItemView.AnyKeyPressed)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.table.cellChanged.connect(self._sync_coordinates)
         layout.addWidget(self.table, 1)
 
         # 按钮行（与 TQSL / 转发器一致的表格 + 按钮布局）
         btn_row = QHBoxLayout()
         add_btn = QPushButton('添加')
         del_btn = QPushButton('删除选中')
-        mh_btn = QPushButton('从梅登黑格导入')
+        edit_btn = QPushButton('打开标记点TXT')
         save_btn = QPushButton('保存')
         close_btn = QPushButton('关闭')
         add_btn.clicked.connect(self._add_row)
         del_btn.clicked.connect(self._del_row)
-        mh_btn.clicked.connect(self._import_from_maidenhead)
+        edit_btn.clicked.connect(self._open_text)
         save_btn.clicked.connect(self._save_and_close)
         close_btn.clicked.connect(self.reject)
         btn_row.addWidget(add_btn)
         btn_row.addWidget(del_btn)
-        btn_row.addWidget(mh_btn)
+        btn_row.addWidget(edit_btn)
         btn_row.addStretch(1)
         btn_row.addWidget(save_btn)
         btn_row.addWidget(close_btn)
@@ -1108,14 +1115,64 @@ class MarkerManageDialog(QDialog):
 
         self._load(markers or load_map_markers())
 
-    # ---- 从梅登黑格坐标导入 ----
+    def _open_text(self):
+        open_map_markers_text()
+        self.reject()
+
+    def _sync_coordinates(self, row, column):
+        """标记点编辑完成后自动在网格与十进制坐标之间同步。"""
+        if self._syncing_coordinates or row < 0:
+            return
+        try:
+            self._syncing_coordinates = True
+            if column == 1:
+                grid_item = self.table.item(row, 1)
+                lat, lon = sp.maidenhead_to_latlon(grid_item.text().strip())
+                self.table.setItem(row, 1, QTableWidgetItem(
+                    sp.latlon_to_maidenhead(lat, lon)))
+                self.table.setItem(row, 2, QTableWidgetItem(f'{lat:.5f}'))
+                self.table.setItem(row, 3, QTableWidgetItem(f'{lon:.5f}'))
+            elif column in (2, 3):
+                lat_item = self.table.item(row, 2)
+                lon_item = self.table.item(row, 3)
+                lat = float(lat_item.text())
+                lon = float(lon_item.text())
+                self.table.setItem(row, 1, QTableWidgetItem(
+                    sp.latlon_to_maidenhead(lat, lon)))
+        except (AttributeError, TypeError, ValueError):
+            pass
+        finally:
+            self._syncing_coordinates = False
 
     def _import_from_maidenhead(self):
-        """打开梅登黑格导入对话框，将解析出的标记点追加到表格。"""
+        """批量读取网格并追加为标记点。"""
         dlg = MaidenheadImportDialog(self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
-            self._rows.extend(dlg.result_rows)
+            self._rows.extend(
+                (name, grid, lat, lon, color)
+                for name, lat, lon, color in dlg.result_rows
+                for grid in [sp.latlon_to_maidenhead(lat, lon)])
             self._render()
+
+    def _grid_to_coord(self):
+        """按观测站设置的交互方式，把选中行网格转换为经纬度。"""
+        rows = sorted({idx.row() for idx in self.table.selectedIndexes()})
+        if not rows:
+            return
+        for row in rows:
+            grid_item = self.table.item(row, 1)
+            grid = grid_item.text().strip() if grid_item else ''
+            if not grid:
+                continue
+            try:
+                lat, lon = sp.maidenhead_to_latlon(grid)
+            except ValueError as e:
+                QMessageBox.warning(self, '网格无效', str(e))
+                continue
+            self.table.setItem(row, 1, QTableWidgetItem(
+                sp.latlon_to_maidenhead(lat, lon)))
+            self.table.setItem(row, 2, QTableWidgetItem(f'{lat:.5f}'))
+            self.table.setItem(row, 3, QTableWidgetItem(f'{lon:.5f}'))
 
     # ---- 原有表格操作 ----
 
@@ -1123,20 +1180,25 @@ class MarkerManageDialog(QDialog):
         self._rows = []
         for idx, m in enumerate(markers):
             mm = _normalize_marker(m, idx)
-            self._rows.append((mm['name'], mm['lat'], mm['lon'], mm['color']))
+            try:
+                grid = sp.latlon_to_maidenhead(mm['lat'], mm['lon'])
+            except Exception:
+                grid = ''
+            self._rows.append((mm['name'], grid, mm['lat'], mm['lon'], mm['color']))
         self._render()
 
     def _render(self):
         self.table.setRowCount(len(self._rows))
         for i, row in enumerate(self._rows):
-            name, lat, lon, color = row
+            name, grid, lat, lon, color = row
             self.table.setItem(i, 0, QTableWidgetItem(str(name)))
-            self.table.setItem(i, 1, QTableWidgetItem(f'{lat}'))
-            self.table.setItem(i, 2, QTableWidgetItem(f'{lon}'))
-            self.table.setItem(i, 3, QTableWidgetItem(str(color)))
+            self.table.setItem(i, 1, QTableWidgetItem(str(grid)))
+            self.table.setItem(i, 2, QTableWidgetItem(f'{lat}'))
+            self.table.setItem(i, 3, QTableWidgetItem(f'{lon}'))
+            self.table.setItem(i, 4, QTableWidgetItem(str(color)))
 
     def _add_row(self):
-        self._rows.append((f'标记点 {len(self._rows) + 1}', 0.0, 0.0, ''))
+        self._rows.append((f'标记点 {len(self._rows) + 1}', '', 0.0, 0.0, ''))
         self._render()
 
     def _del_row(self):
@@ -1147,9 +1209,16 @@ class MarkerManageDialog(QDialog):
         self._render()
 
     def _save_and_close(self):
+        self._rows = []
+        for row in range(self.table.rowCount()):
+            values = []
+            for column in range(self.table.columnCount()):
+                item = self.table.item(row, column)
+                values.append(item.text().strip() if item else '')
+            self._rows.append(tuple(values))
         items = []
         for row in self._rows:
-            name, lat, lon, color = row
+            name, grid, lat, lon, color = row
             try:
                 lat_v = float(lat)
                 lon_v = float(lon)
