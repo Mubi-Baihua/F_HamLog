@@ -50,12 +50,28 @@ def _save_settings(d):
 LOCAL_TZ = datetime.datetime.now().astimezone().tzinfo
 
 
-def _utc_to_local_str(dt, tz=None):
-    """把（带 UTC 时区的）datetime 转为本地时间字符串。tz 缺省用系统本地时区。"""
+def _local_fmt(dt, tz, fmt):
+    """把（带 UTC 时区的）datetime 按本地时区格式化。dt 为空时返回 '--'。"""
     if dt is None:
         return '--'
     local = dt.astimezone(tz) if tz is not None else dt.astimezone()
-    return local.strftime('%m-%d %H:%M')
+    return local.strftime(fmt)
+
+
+def _utc_to_local_str(dt, tz=None):
+    """把（带 UTC 时区的）datetime 转为本地时间字符串（显示用，精确到秒）。
+    tz 缺省用系统本地时区。"""
+    return _local_fmt(dt, tz, '%m-%d %H:%M:%S')
+
+
+def _log_date_str(dt, tz=None):
+    """“记录”预填用的日期（%Y-%m-%d）。"""
+    return _local_fmt(dt, tz, '%Y-%m-%d')
+
+
+def _log_time_str(dt, tz=None):
+    """“记录”预填用的时间：只精确到分，与日志表 time 字段格式一致。"""
+    return _local_fmt(dt, tz, '%H:%M')
 
 
 def _duration_str(sec):
@@ -455,13 +471,14 @@ class PredictWorker(QThread):
     def _build_row(self, p, band):
         name = p['name']
         obs_tz = LOCAL_TZ
-        local_aos = p['aos'].astimezone(obs_tz)
         # 快速记录预填内容：卫星名用 TQSL/LoTW 认可的名称
+        # 预填时间只到分钟（ADIF / 日志表 time 字段的精度），
+        # 与界面上显示到秒的过境时刻区分开
         preset = {
             'sat_name': sp.tqsl_sat_name(name),
             'prop_mode': 'SAT',
-            'date': local_aos.strftime('%Y-%m-%d'),
-            'time': local_aos.strftime('%H:%M'),
+            'date': _log_date_str(p['aos'], obs_tz),
+            'time': _log_time_str(p['aos'], obs_tz),
         }
         if band:
             # FM 转发器（或线性转发器）的模式与收发频率
@@ -665,8 +682,8 @@ def main(parent_window, quick_log_callback=None, title='卫星过境'):
     table.setSelectionBehavior(QAbstractItemView.SelectRows)
     table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
     table.setColumnWidth(0, 170)
-    table.setColumnWidth(1, 120)
-    table.setColumnWidth(2, 120)
+    table.setColumnWidth(1, 140)  # 升起：MM-DD HH:MM:SS
+    table.setColumnWidth(2, 140)  # 落下：同上
     table.setColumnWidth(3, 80)
     table.setColumnWidth(4, 150)
     table.setColumnWidth(5, 90)

@@ -31,6 +31,7 @@ import satellite_pred as sp
 from satellite_window import (
     SatelliteSelectDialog, TleFetchWorker, LOCAL_TZ,
     _load_settings, _save_settings, _duration_str, _utc_to_local_str,
+    _log_date_str, _log_time_str,
 )
 
 # 防止窗口在 main() 返回后被 Python 回收
@@ -182,12 +183,13 @@ class MutualWorker(QThread):
 
     def _build_row(self, w, band):
         name = w['name']
-        local_start = w['start'].astimezone(LOCAL_TZ)
+        # 预填时间只到分钟（与日志表 time 字段精度一致），
+        # 界面显示（start_str / end_str / best_str）则精确到秒
         preset = {
             'sat_name': sp.tqsl_sat_name(name),
             'prop_mode': 'SAT',
-            'date': local_start.strftime('%Y-%m-%d'),
-            'time': local_start.strftime('%H:%M'),
+            'date': _log_date_str(w['start'], LOCAL_TZ),
+            'time': _log_time_str(w['start'], LOCAL_TZ),
         }
         if band:
             # 记录时：freq=上行频率(本端发射)，freq_rx=下行频率(本端接收)
@@ -235,7 +237,7 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
         mu_sats_raw = settings.get('sat_mu_sats', None)
 
     win = QMainWindow()
-    win.resize(1000, 660)
+    win.resize(1050, 660)
     win.setWindowTitle('通联预测')
     win._map_window = None  # 卫星地图窗口引用（由“地图”按钮打开）
     central = QWidget()
@@ -305,7 +307,8 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
     table.setEditTriggers(QAbstractItemView.NoEditTriggers)
     table.setSelectionBehavior(QAbstractItemView.SelectRows)
     table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
-    for col, wdt in enumerate((180, 135, 135, 95, 85, 85, 135, 70)):
+    # 第 1/2/6 列是本地时间（MM-DD HH:MM:SS），宽度需容纳秒
+    for col, wdt in enumerate((180, 150, 150, 95, 85, 85, 150, 70)):
         table.setColumnWidth(col, wdt)
     layout.addWidget(table)
 
