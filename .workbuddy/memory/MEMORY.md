@@ -28,6 +28,12 @@
 - **窗口宽度一致性**：控制条含「对方最低仰角」组（仅通联预测有 station_b 时可见），`setVisible(False)` 不计入布局最小宽→两来源 `resize` 被不同最小宽覆盖而不一致。`__init__` 临时显示该组测一次统一最小宽 `setMinimumWidth(_uniform_min_w)` 再恢复，保证两处地图窗口宽度相同（均为 1192）。
 - **地图铺满窗口且保持 2:1 比例**：等距圆柱投影的世界本应是 2:1（经度 360° : 纬度 180°）。原 `MapCanvas` 投影基于整个画布，窗口拉伸时地图变形；后改为 `_map_rect()` 固定 2:1 但四周留边。现 `_map_rect()` 直接返回整块画布，地图铺满窗口；`MapWindow.showEvent()` 首次显示时按「画布宽度/2」锁定窗口高度（1192 宽 → 675 高，画布 1174×587 精确 2:1），并 `setMinimumHeight` 防止被缩小变形。宽度保持统一 1192。
 
+## 卫星名匹配（归一化，全局统一）
+- `satellite_pred.py` 三个公共工具：`normalize_sat_name`（只留字母数字并大写，抹平大小写/空格/短横线/括号）、`sat_name_match(name, keys)`（多关键词 AND）、`parse_sat_keywords(text)`（按空白拆词+归一化）。
+- 使用场景：① `SatelliteSelectDialog` 搜索过滤（预计算 `self._norm`，底部计数标签「匹配 N / 共 M 颗」，全选/全不选只作用于可见项）；② `lookup_transponder` 第 6 层归一化兜底（表中 `AO-91` 可匹配 TLE 名 `AO 91`）。改匹配规则时两处应同步。
+- **隐藏行必须用 `QListWidget.setRowHidden(row, hide)`**，不要用 `QListWidgetItem.setHidden()`——后者只改标志、不保证触发视图 `doItemsLayout()` 重排。对话框内维护 `self._row_names`（行号→卫星名）以便按行号隐藏；过滤后 `scrollToItem(首个匹配项, PositionAtTop)`。
+- 搜索期间被隐藏但已勾选的项，点「确定」仍保留在 `get_selected()` 中（有意设计）。
+
 ## 时间精度约定（卫星模块）
 - **显示到秒**：`satellite_window._utc_to_local_str` = `%m-%d %H:%M:%S`，用于过境表「升起/落下」与通联预测表「可通联开始/结束/最佳时刻」。
 - **记录到分**：「记录」预填（`preset['date']/['time']`）用 `_log_date_str`(`%Y-%m-%d`)/`_log_time_str`(`%H:%M`)，与日志表 time 字段、ADIF 精度一致。两者共用底层 `_local_fmt(dt, tz, fmt)`。

@@ -210,6 +210,10 @@ class SatelliteSelectDialog(QDialog):
         self.list_widget.setUpdatesEnabled(False)
         self.checks = {}
         self.items = {}
+        # 预先算好归一化名，搜索时无需反复处理（卫星数量可达数千）
+        self._norm = {n: sp.normalize_sat_name(n) for n in names}
+        # 记录 (行号 → 卫星名)，过滤时按行号隐藏，避免每次反查
+        self._row_names = []
         init = selected if isinstance(selected, set) else None
         for n in names:
             item = QListWidgetItem(n, self.list_widget)
@@ -217,16 +221,23 @@ class SatelliteSelectDialog(QDialog):
             item.setCheckState(Qt.CheckState.Checked if init is None or n in init
                                else Qt.CheckState.Unchecked)
             self.items[n] = item
+            self._row_names.append(n)
         self.list_widget.setUpdatesEnabled(True)
         lay.addWidget(self.list_widget)
+
+        # 搜索命中计数（"匹配 N / 共 M 颗"）
+        self.count_label = QLabel('')
+        self.count_label.setStyleSheet('color: gray;')
+        lay.addWidget(self.count_label)
 
         btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         btns.accepted.connect(self.accept)
         btns.rejected.connect(self.reject)
         lay.addWidget(btns)
 
-        self._search = ''
+        self._keys = []          # 归一化后的搜索关键词（空列表 = 不过滤）
         self.search_edit.textChanged.connect(self._filter)
+        self._filter('')         # 初始化计数显示
 
     def _mk_btn(self, text, slot):
         b = QPushButton(text)
@@ -234,17 +245,49 @@ class SatelliteSelectDialog(QDialog):
         return b
 
     def _filter(self, text):
-        self._search = text.strip().lower()
-        self.list_widget.setUpdatesEnabled(False)
-        for n, item in self.items.items():
-            item.setHidden(bool(self._search) and self._search not in n.lower())
-        self.list_widget.setUpdatesEnabled(True)
+        """按搜索框内容过滤列表。
+
+        匹配规则与「卫星名补全 / 转发器查表」（sp.lookup_transponder）一致：
+        归一化后比较，忽略大小写、空格、短横线、下划线与括号，
+        多个关键词（空格分隔）之间是「与」关系。
+        例如输入 "so50"、"so 50"、"SO-50" 都能命中 "SO-50" 与
+        "SAUDISAT 1C (SO-50)"。
+        """
+        self._keys = sp.parse_sat_keywords(text)
+        lw = self.list_widget
+        lw.setUpdatesEnabled(False)
+        # 只显示匹配项，不匹配的一律隐藏（不占位、不可点选）。
+        # 注意：必须用 QListWidget.setRowHidden()（内部触发 doItemsLayout 重排），
+        # 单纯 QListWidgetItem.setHidden() 只改标志、不会让视图重新布局，
+        # 表现为"过滤没生效、匹配项仍停在原来的位置"。
+        first_hit_row = -1
+        for row, n in enumerate(self._row_names):
+            matched = sp.sat_name_match(self._norm[n], self._keys)
+            lw.setRowHidden(row, not matched)
+            if matched and first_hit_row < 0:
+                first_hit_row = row
+        # 把第一个匹配项滚到视口顶部，避免视口停在已隐藏区域
+        if first_hit_row >= 0:
+            lw.scrollToItem(self.items[self._row_names[first_hit_row]],
+                            QAbstractItemView.PositionAtTop)
+        else:
+            lw.scrollToTop()
+        lw.setUpdatesEnabled(True)
+        total = len(self.items)
+        n_hit = len(self._visible_names())
+        if not self._keys:
+            self.count_label.setText(f'共 {total} 颗')
+            self.count_label.setStyleSheet('color: gray;')
+        else:
+            self.count_label.setText(f'匹配 {n_hit} / 共 {total} 颗')
+            # 无命中时用醒目颜色提示，便于用户确认是"没搜到"而非"没过滤"
+            self.count_label.setStyleSheet(
+                'color: gray;' if n_hit else 'color: #c0392b;')
 
     def _visible_names(self):
         """当前搜索条件下可见的卫星名；无搜索时返回全部。"""
-        if not self._search:
-            return list(self.items.keys())
-        return [n for n in self.items if self._search in n.lower()]
+        return [n for n in self.items
+                if sp.sat_name_match(self._norm[n], self._keys)]
 
     def _select_all(self):
         for n in self._visible_names():

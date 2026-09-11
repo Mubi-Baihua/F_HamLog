@@ -872,6 +872,40 @@ def load_sat_radio_dict(path=SAT_RADIO_DICT_PATH):
     return d
 
 
+def normalize_sat_name(name):
+    """卫星名归一化：忽略大小写、空格、短横线、下划线、括号等一切非字母数字字符。
+
+    用于「宽松比较」——同一颗卫星在不同来源里写法可能不同，例如
+    ``AO-91`` / ``AO 91`` / ``AO_91`` / ``ao91`` 归一化后均为 ``AO91``；
+    TLE 名称行还有定宽填充导致的尾随空格，也应视为同一颗星。
+
+    只保留字母数字（其余字符一律丢弃），因此 ``SAUDISAT 1C (SO-50)``
+    归一化后为 ``SAUDISAT1CSO50``，用 ``so50`` 也能搜到。
+    """
+    return ''.join(ch for ch in (name or '').upper() if ch.isalnum())
+
+
+def sat_name_match(name, keywords):
+    """归一化后的宽松匹配：name 同时包含 keywords 中每一个关键词才命中。
+
+    keywords 为空/全空表示不过滤（全部命中）。关键词本身也应先经
+    :func:`normalize_sat_name` 处理，使输入与卫星名的写法差异被抹平。
+    """
+    if not keywords:
+        return True
+    norm = normalize_sat_name(name)
+    return all(k in norm for k in keywords if k)
+
+
+def parse_sat_keywords(text):
+    """把搜索框文本拆成归一化关键词列表（按空白分隔，多词之间为「与」关系）。
+
+    例如 ``'so 50'`` → ``['SO', '50']``，``'ao-91'`` → ``['AO91']``。
+    """
+    return [k for k in (normalize_sat_name(t) for t in (text or '').split())
+            if k]
+
+
 def lookup_transponder(bands, name):
     """按卫星名在转发器表中查找条目。
 
@@ -882,7 +916,9 @@ def lookup_transponder(bands, name):
       2. TQSL/LoTW 映射后的名称（tqsl_sat_name）；
       3. 名称中括号内的短名（如 ``(SO-50)``）；
       4. 括号内短名再做 TQSL 映射；
-      5. 以上各项的大小写不敏感匹配。
+      5. 以上各项的大小写不敏感匹配；
+      6. 归一化匹配（忽略空格/短横线/下划线，与搜索框逻辑一致），
+         例如表中键写作 ``AO-91`` 而 TLE 名为 ``AO 91`` 也能命中。
     全部未命中返回 None。
     """
     if not name:
@@ -903,6 +939,12 @@ def lookup_transponder(bands, name):
         c = c.strip().upper()
         if c in up:
             return up[c]
+    # 归一化兜底：忽略空格/短横线等差异（与搜索框的匹配逻辑保持一致）
+    norm = {normalize_sat_name(k): bands[k] for k in bands}
+    for c in cands:
+        v = norm.get(normalize_sat_name(c))
+        if v is not None:
+            return v
     return None
 
 
