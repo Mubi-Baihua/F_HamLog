@@ -56,6 +56,7 @@ jobs:
       - name: Nuitka 独立打包
         run: |
           python -m nuitka --standalone `
+            --assume-yes-for-downloads `
             --output-filename="${{ github.event.inputs.output_name || 'F HamLog 2' }}" `
             --main=main.py `
             --windows-icon-from-ico=file\F_HamLog.ico `
