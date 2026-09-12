@@ -8,7 +8,9 @@ import sys
 import re
 import os
 import datetime
+import json
 import fhl_rw
+import backup
 
 
 # --------------------------------------------------------------------------
@@ -270,7 +272,7 @@ class _NavFilter(QObject):
         return False
 
 
-def main(window, preset=None, on_saved=None):
+def main(window, preset=None, on_saved=None, preset_records=None, recovered=False):
     _install_qt_msg_filter()  # 过滤冻结列良性 Qt 警告
     window.resize(1200, 790)
     window.setWindowTitle('批量记录')
@@ -578,6 +580,73 @@ def main(window, preset=None, on_saved=None):
         _w.installEventFilter(nav_filter)
     table.cellChanged.connect(on_cell_changed)
 
+    # ---------- 未保存内容自动备份（batch_backup.fh） ----------
+    def _bk_cur_records():
+        """从表格收集当前所有日志列（列>=1）为记录列表。"""
+        recs = []
+        for c in range(1, table.columnCount()):
+            rec = {}
+            for r in range(table.rowCount()):
+                k = KEYS[r]
+                it = table.item(r, c)
+                rec[k] = it.text() if it is not None else ''
+            recs.append(rec)
+        return recs
+
+    _bk_state = {'last': json.dumps(_bk_cur_records(), ensure_ascii=False, sort_keys=True)}
+
+    def _bk_snapshot():
+        _bk_state['last'] = json.dumps(_bk_cur_records(), ensure_ascii=False, sort_keys=True)
+
+    def _bk_is_dirty():
+        try:
+            return json.dumps(_bk_cur_records(), ensure_ascii=False, sort_keys=True) != _bk_state['last']
+        except Exception:
+            return False
+
+    def _bk_write():
+        recs = _bk_cur_records()
+        if not recs:
+            backup.clear_backup(backup.BATCH_BACKUP)
+            return
+        backup.write_backup(backup.BATCH_BACKUP, recs, None)
+
+    def _bk_clear():
+        backup.clear_backup(backup.BATCH_BACKUP)
+
+    def _bk_after_save():
+        _bk_clear()
+        _bk_snapshot()
+
+    # 恢复场景：把上次未保存的批量记录回填到表格
+    if preset_records:
+        for _rec in preset_records:
+            _data = [_rec.get(k, '') for k in KEYS]
+            _insert_col(table.columnCount(), _data)
+
+    # 打开批量记录时：把当前内容写入备份作为基线；若为空则清空
+    _bk_snapshot()
+    if _bk_cur_records():
+        _bk_write()
+    else:
+        _bk_clear()
+    # 恢复场景：回填内容尚未保存，强制标记为「未保存更改」（关闭时会再次提示保存/不保存/取消）
+    if recovered:
+        _bk_state['last'] = ''
+
+    # 周期定时器：存在未保存更改时即时备份，覆盖意外关闭/崩溃场景
+    _bk_timer = QTimer(window)
+    _bk_timer.setInterval(1500)
+    _bk_timer.timeout.connect(lambda: _bk_write() if _bk_is_dirty() else None)
+    _bk_timer.start()
+
+    backup.install_close_guard(window, {
+        'is_dirty': _bk_is_dirty,
+        'write_backup': _bk_write,
+        'clear_backup': _bk_clear,
+        'do_save': lambda: save_all(),
+    })
+
     layout.addWidget(table)
 
     def collect_and_validate():
@@ -616,10 +685,10 @@ def main(window, preset=None, on_saved=None):
         records, err = collect_and_validate()
         if err:
             QMessageBox.warning(window, '格式错误', err)
-            return
+            return False
         if not records:
             QMessageBox.warning(window, '提示', '没有可保存的记录（日志列均为空）。')
-            return
+            return False
 
         fhl_list = records  # 供下方保存逻辑使用（与旧逻辑保持一致）
 
@@ -629,15 +698,16 @@ def main(window, preset=None, on_saved=None):
                 on_saved(fhl_list)
                 QMessageBox.information(window, '完成',
                                         f'已添加 {len(fhl_list)} 条记录到当前项目。')
+                _bk_after_save()
+                return True
             except Exception as e:
                 QMessageBox.warning(window, '保存失败',
                                     f'添加到项目失败：\n{e}')
-            window.close()
-            return
+                return False
 
         if not fhl_list:
             QMessageBox.warning(window, "提示", "没有可保存的记录。")
-            return
+            return False
 
         def save_records_to_path(records, save_path, key=None):
             fhl_rw.write_fhl_file(save_path, records, key)
@@ -723,7 +793,10 @@ def main(window, preset=None, on_saved=None):
         cancel_button.clicked.connect(finish_dialog.reject)
         finish_layout.addWidget(cancel_button, alignment=Qt.AlignRight)
 
-        finish_dialog.exec()
+        if finish_dialog.exec() == QDialog.Accepted:
+            _bk_after_save()
+            return True
+        return False
 
     # 按钮区（按钮文字与提示中显示对应快捷键，方便查看）
     btn_row = QHBoxLayout()
@@ -753,10 +826,15 @@ def main(window, preset=None, on_saved=None):
     button_redo.setEnabled(undo_stack.canRedo())
     undo_stack.canRedoChanged.connect(button_redo.setEnabled)
 
+    def _finish_save():
+        # 保存成功则关闭窗口；取消/失败则保持打开
+        if save_all():
+            window.close()
+
     button_save = QPushButton('完成 (Ctrl+S)')
     button_save.setMinimumHeight(34)
     button_save.setToolTip('保存全部记录（Ctrl+S）')
-    button_save.clicked.connect(save_all)
+    button_save.clicked.connect(_finish_save)
 
     btn_row.addWidget(button_add)
     btn_row.addWidget(button_del)
@@ -774,7 +852,7 @@ def main(window, preset=None, on_saved=None):
     layout.addWidget(hint)
 
     # 让 Ctrl+S 在未编辑（按钮/窗口聚焦）与编辑中（编辑器聚焦）时都能触发保存
-    nav_filter.do_save = save_all
+    nav_filter.do_save = _finish_save
 
     window.show()
     # 打开即聚焦「对方呼号」，方便直接输入（等窗口显示/冻结层几何就绪后再聚焦）

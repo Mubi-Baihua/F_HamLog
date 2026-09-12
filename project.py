@@ -1,18 +1,20 @@
 from PySide6.QtWidgets import *
 from PySide6.QtGui import QAction
-from PySide6.QtCore import Qt  # 新增导入 Qt
+from PySide6.QtCore import Qt, QEvent, QObject, QTimer  # 新增导入 Qt
 from dialog_defaults import desktop_dir
 from functools import partial
 import time as time_
 import sys
 import os
 import re
+import json
 import subprocess
 import webbrowser
 import urllib.parse
 import fhl_rw
 import copy
 import call_upper
+import backup
 
 # 复制/粘贴使用的字段顺序（与表格列对应，英文键名作为剪贴板表头，便于跨窗口/跨软件解析）
 COPY_FIELDS = ['date', 'time', 'm_call', 'o_call', 'freq', 'freq_rx', 'mode',
@@ -45,7 +47,7 @@ def _upgrade_file_records(file_list):
     for e in file_list:
         _ensure_log_keys(e)
 
-def main(window, filee='', save_path='',key_ = None,quick_poject=False):
+def main(window, filee='', save_path='',key_ = None,quick_poject=False, recovered=False):
     global file,key
     key = key_
     if isinstance(filee, list):
@@ -59,6 +61,30 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
                 _rec['o_call'] = _rec['o_call'].upper()
     else:
         file = []
+
+    # ---------- 未保存内容自动备份（project_backup.fhl） ----------
+    # 以已保存内容快照为基准，任何偏离（未保存更改）都会周期性写入备份；
+    # 正常保存后清空备份。window 关闭时若有未保存更改则弹『保存/不保存/取消』。
+    _bk_state = {'last': json.dumps(file, ensure_ascii=False, sort_keys=True)}
+
+    def _bk_snapshot():
+        _bk_state['last'] = json.dumps(file, ensure_ascii=False, sort_keys=True)
+
+    def _bk_is_dirty():
+        try:
+            return json.dumps(file, ensure_ascii=False, sort_keys=True) != _bk_state['last']
+        except Exception:
+            return False
+
+    def _bk_write():
+        if not file:
+            backup.clear_backup(backup.PROJECT_BACKUP)
+            return
+        backup.write_backup(backup.PROJECT_BACKUP, file, key)
+
+    def _bk_clear():
+        backup.clear_backup(backup.PROJECT_BACKUP)
+
     table = None
     undo_stack = []   # 撤销栈：保存 file 的完整深拷贝快照
     redo_stack = []   # 重做栈
@@ -480,6 +506,28 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
         
         project_others_window.show()
 
+    def _save_recovered_as():
+        # 恢复进来的项目没有原始项目文件：弹“保存恢复的文件”让用户把恢复内容
+        # 另存为真实项目文件；写入后把 save_path 指向该文件并复位快照
+        # （消除“未保存”标记）。之后若再次编辑，定时器会因 file 偏离快照而
+        # 重新标记“未保存”。
+        nonlocal save_path
+        sp, _ = QFileDialog.getSaveFileName(
+            window,
+            "保存恢复的文件",
+            os.path.join(desktop_dir(), '恢复的项目.fhl'),
+            "F HamLog项目 (*.fhl)")
+        if sp == '':
+            return False
+        global key
+        fhl_rw.write_fhl_file(sp, file, key)
+        backup.clear_backup(backup.PROJECT_BACKUP)
+        save_path = sp
+        _bk_snapshot()  # 复位快照 → 消除“未保存”标记
+        window.setWindowTitle(f'F HamLog 2 - {os.path.basename(save_path)}')
+        QMessageBox.information(window, "保存成功", "已保存恢复的内容。")
+        return True
+
     def save(message=True):
         with open('file/m_xml.txt', 'r', encoding='utf-8') as f:
             xml_dict = eval(f.read())
@@ -488,28 +536,41 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
 
         if (not(message) and aouto_save_b) or message:
             global key
+            # 无保存路径：恢复项目弹“保存恢复的文件”，普通新建项目弹“另存为”
+            if save_path == '':
+                if recovered:
+                    return _save_recovered_as()
+                return osave()
             fhl_rw.write_fhl_file(save_path,file,key)
+            backup.clear_backup(backup.PROJECT_BACKUP)
+            _bk_snapshot()
             if message:
                 QMessageBox.information(window, "保存成功", "保存成功！")
+        return True
 
     def osave():
         import json
-        save_path, _ = QFileDialog.getSaveFileName(
+        sp, _ = QFileDialog.getSaveFileName(
             window,  # 父窗口，可以是None或者您的主窗口
             "另存为文件",  # 对话框标题
             desktop_dir(),  # 初始目录：桌面，默认文件名为空
             "F HamLog项目 (*.fhl)"  # 文件过滤器，只显示.fos文件
         )
-        if save_path == '':
-            return
+        if sp == '':
+            return False
         global key
-        fhl_rw.write_fhl_file(save_path,file,key)
+        fhl_rw.write_fhl_file(sp,file,key)
+        backup.clear_backup(backup.PROJECT_BACKUP)
+        _bk_snapshot()
         QMessageBox.information(window, "另存成功", "另存成功！")
+        return True
 
     def esave():
         import json
         global key
         fhl_rw.write_fhl_file(save_path,file,key)
+        backup.clear_backup(backup.PROJECT_BACKUP)
+        _bk_snapshot()
         QMessageBox.information(window, "保存成功", "保存成功！")
         sys.exit()
 
@@ -629,7 +690,9 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
         import output_excel
         output_excel.main(selected_records)
 
-    if save_path == '':
+    # 恢复场景：不弹“新建文件”对话框（否则一打开就逼用户选路径）。
+    # 待用户真正点击“保存”时，再由 save()/_do_save 弹出“保存恢复的文件”。
+    if save_path == '' and not recovered:
         save_path, _ = QFileDialog.getSaveFileName(
             window,  # 父窗口，可以是None或者您的主窗口
             "新建文件",  # 对话框标题
@@ -642,8 +705,10 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
     window.resize(1350, 700)
     if quick_poject:
         window.setWindowTitle(f'F HamLog 2 - 通联日志')
-    else:
+    elif save_path:
         window.setWindowTitle(f'F HamLog 2 - {os.path.basename(save_path)}')
+    else:
+        window.setWindowTitle('F HamLog 2 - 恢复的项目')
     # window.showMaximized()
     # 创建菜单栏
     menu_bar = window.menuBar()
@@ -1483,6 +1548,9 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
         # 直接落盘到当前项目文件（不依赖自动保存开关，也不弹“保存成功”）
         global key
         fhl_rw.write_fhl_file(save_path, file, key)
+        # 追加即落盘：视为已保存，清空备份并更新快照
+        backup.clear_backup(backup.PROJECT_BACKUP)
+        _bk_snapshot()
 
     def quick_log(preset):
         """由卫星过境窗口“记录”按钮回调：打开批量记录窗口并预填卫星信息。"""
@@ -1579,6 +1647,42 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False):
 
     table_update(delete=False)
     table_update()
+
+    # ---------- 未保存内容自动备份 / 关闭守卫 ----------
+    # 打开项目时：把当前（已保存）内容写入备份作为基线；若为空则清空
+    _bk_snapshot()
+    if file:
+        _bk_write()
+    else:
+        _bk_clear()
+    # 恢复场景：恢复进来的内容尚未落盘到真实项目文件，强制标记为「未保存更改」
+    # （快照置为永不等的哨兵值，使 _bk_is_dirty() 恒为 True，关闭时会再次提示保存/不保存/取消）
+    if recovered:
+        _bk_state['last'] = ''
+
+    # 周期定时器：存在未保存更改时即时备份，覆盖意外关闭/崩溃场景
+    _bk_timer = QTimer(window)
+    _bk_timer.setInterval(1500)
+    _bk_timer.timeout.connect(lambda: _bk_write() if _bk_is_dirty() else None)
+    _bk_timer.start()
+
+    def _do_save():
+        # 已有保存路径（已“保存恢复的文件”或普通项目）→ 直接保存
+        if save_path:
+            save(message=True)
+            return True
+        # 恢复场景且尚未保存：弹“保存恢复的文件”（而非“新建文件”）
+        if recovered:
+            return _save_recovered_as()
+        # 普通新建项目（无路径）→ 弹“另存为”
+        return bool(osave())
+
+    backup.install_close_guard(window, {
+        'is_dirty': _bk_is_dirty,
+        'write_backup': _bk_write,
+        'clear_backup': _bk_clear,
+        'do_save': _do_save,
+    })
 
     window.show()
 

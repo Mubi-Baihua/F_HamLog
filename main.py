@@ -1,11 +1,12 @@
 from PySide6.QtWidgets import *
 from PySide6.QtGui import QIcon
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 import sys
 import json
 import webbrowser
 import urllib.parse
 import fhl_rw
+import backup
 from dialog_defaults import desktop_dir
 
 def main():
@@ -208,6 +209,50 @@ def main():
     import satellite_auto_update
     satellite_auto_updater = satellite_auto_update.AutoTleUpdater(window)
     satellite_auto_updater.start()
+
+    # ---------- 启动时检查并提示恢复未保存的内容 ----------
+    def _check_recovery():
+        import project
+        import batch_project
+        items = []
+        if backup.is_backup_nonempty(backup.PROJECT_BACKUP):
+            items.append(('project', backup.PROJECT_BACKUP))
+        if backup.is_backup_nonempty(backup.BATCH_BACKUP):
+            items.append(('batch', backup.BATCH_BACKUP))
+        if not items:
+            return
+        names = {'project': '项目', 'batch': '批量记录'}
+        detail = '\n'.join('- ' + names[t] for t, _ in items)
+        box = QMessageBox(window)
+        box.setWindowTitle('恢复未保存的内容')
+        box.setText('检测到上次有未保存的更改，是否恢复？')
+        box.setInformativeText(detail)
+        btn_rec = box.addButton('恢复', QMessageBox.AcceptRole)
+        btn_ign = box.addButton('忽略', QMessageBox.RejectRole)
+        box.exec()
+        if box.clickedButton() == btn_rec:
+            for t, path in items:
+                if t == 'project':
+                    data, key = fhl_rw.read_fhl_file(path)
+                    if data is None:
+                        continue
+                    global project_window
+                    project_window = QMainWindow()
+                    project.main(project_window, data, '', key_=key, recovered=True)
+                else:
+                    data, _ = fhl_rw.read_fhl_file(path)
+                    if data is None:
+                        continue
+                    global batch_window
+                    batch_window = QMainWindow()
+                    batch_project.main(batch_window, preset_records=data, recovered=True)
+            # 恢复后由对应窗口接管备份：保持脏标记，可再次提示恢复，故不清空
+        else:
+            # 忽略：丢弃所有未保存备份，避免下次启动重复提示
+            for _, path in items:
+                backup.clear_backup(path)
+
+    QTimer.singleShot(0, _check_recovery)
 
     app.exec()
 
