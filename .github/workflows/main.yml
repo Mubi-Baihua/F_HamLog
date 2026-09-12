@@ -1,12 +1,79 @@
+name: 构建 F HamLog (Nuitka)
+
+# 触发条件：仅在 Actions 页面手动点击 "Run workflow" 触发（可改 Python 版本 / exe 文件名）
+# 不自动构建：推送/合并代码不会触发本工作流
 on:
   workflow_dispatch:
+    inputs:
+      python_version:
+        description: '构建所用 Python 版本'
+        required: false
+        default: '3.13'
+      output_name:
+        description: '生成的 exe 文件名（不含 .exe）'
+        required: false
+        default: 'F HamLog 2'
+
+# 同一分支/手动触发只保留最新一次构建，避免排队堆积
+concurrency:
+  group: nuitka-build-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
 jobs:
-  my_job:
-    name: deploy to staging
+  build:
+    name: Windows Nuitka 独立打包
     runs-on: windows-latest
+    timeout-minutes: 90
 
     steps:
-    - name: Install Nuitka
-      run: pip install nuitka
-    - name: nuitka
-      run: python -m nuitka --standalone --output-filename="F HamLog 1" --windows-icon-from-ico=file\F_HamLog.ico --main=main.py --msvc=latest --windows-console-mode=attach --enable-plugin=pyside6 --windows-uac-admin
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置 Python ${{ github.event.inputs.python_version || '3.13' }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ github.event.inputs.python_version || '3.13' }}
+
+      # 缓存 pip 下载，重复构建可大幅提速
+      - name: 缓存 pip
+        uses: actions/cache@v4
+        with:
+          path: ~\AppData\Local\pip\Cache
+          key: ${{ runner.os }}-pip-${{ hashFiles('第三方模块.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      # 依赖列表来自仓库根目录 第三方模块.txt
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyside6 pandas openpyxl nuitka skyfield numpy cryptography matplotlib
+
+      # 与本地 打包.txt 保持一致的 Nuitka 参数
+      - name: Nuitka 独立打包
+        run: |
+          python -m nuitka --standalone `
+            --output-filename="${{ github.event.inputs.output_name || 'F HamLog 2' }}" `
+            --main=main.py `
+            --windows-icon-from-ico=file\F_HamLog.ico `
+            --msvc=latest `
+            --windows-console-mode=disable `
+            --enable-plugin=pyside6 `
+            --include-package=skyfield `
+            --include-package-data=skyfield `
+            --include-package=numpy `
+            --windows-uac-admin `
+            --include-data-dir=file=file/
+
+      - name: 列出构建产物（调试用）
+        run: Get-ChildItem -Recurse main.dist | Select-Object FullName, Length
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: F-HamLog-dist
+          path: main.dist
+          if-no-files-found: error
