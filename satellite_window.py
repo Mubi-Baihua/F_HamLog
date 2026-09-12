@@ -236,8 +236,10 @@ class SatelliteSelectDialog(QDialog):
         lay.addWidget(btns)
 
         self._keys = []          # 归一化后的搜索关键词（空列表 = 不过滤）
+        self._reordering = False  # 重排守卫，避免 itemChanged 递归触发
         self.search_edit.textChanged.connect(self._filter)
-        self._filter('')         # 初始化计数显示
+        self.list_widget.itemChanged.connect(self._on_item_changed)
+        self._filter('')         # 初始化计数显示 + 未搜索时置顶已选
 
     def _mk_btn(self, text, slot):
         b = QPushButton(text)
@@ -278,6 +280,8 @@ class SatelliteSelectDialog(QDialog):
         if not self._keys:
             self.count_label.setText(f'共 {total} 颗')
             self.count_label.setStyleSheet('color: gray;')
+            # 未搜索时：把已勾选卫星置顶（保持各自原有相对顺序），便于快速查看/调整
+            self._reorder_pin_selected()
         else:
             self.count_label.setText(f'匹配 {n_hit} / 共 {total} 颗')
             # 无命中时用醒目颜色提示，便于用户确认是"没搜到"而非"没过滤"
@@ -288,6 +292,42 @@ class SatelliteSelectDialog(QDialog):
         """当前搜索条件下可见的卫星名；无搜索时返回全部。"""
         return [n for n in self.items
                 if sp.sat_name_match(self._norm[n], self._keys)]
+
+    def _reorder_pin_selected(self):
+        """未搜索时把已勾选卫星置顶（保持各自原有相对顺序）。
+
+        通过物理重排 QListWidget 的 item 实现；重排后同步 self._row_names，
+        使后续 _filter 的“按行隐藏”逻辑与控件实际行号保持一致。仅在全可见
+        （未搜索）时调用，因此重排后所有项均设为可见。
+        """
+        lw = self.list_widget
+        sel = [n for n in self._row_names
+               if self.items[n].checkState() == Qt.CheckState.Checked]
+        unsel = [n for n in self._row_names
+                 if self.items[n].checkState() != Qt.CheckState.Checked]
+        new_order = sel + unsel
+        if new_order == self._row_names:
+            return  # 顺序未变，避免无谓重排/闪烁
+        self._reordering = True
+        lw.setUpdatesEnabled(False)
+        # 从尾部取出全部 item（每次 O(1)，整体 O(N)）；item 对象仍被 self.items 引用，
+        # 不会被回收。再按新顺序从 0 追加式插回（插到末尾同为 O(1)），整体保持线性，
+        # 避免卫星数量达数千颗时 takeItem(0) 的 O(N²) 卡顿。
+        while lw.count():
+            lw.takeItem(lw.count() - 1)
+        for i, n in enumerate(new_order):
+            lw.insertItem(i, self.items[n])
+            lw.setRowHidden(i, False)  # 未搜索时全部可见
+        lw.setUpdatesEnabled(True)
+        self._reordering = False
+        self._row_names = new_order
+
+    def _on_item_changed(self, item):
+        # 仅在未搜索时，勾选状态变化后把已选卫星重新置顶（搜索结果不打乱顺序）
+        if self._reordering:
+            return
+        if not self._keys:
+            self._reorder_pin_selected()
 
     def _select_all(self):
         for n in self._visible_names():

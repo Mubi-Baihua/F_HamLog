@@ -33,6 +33,7 @@
 - 使用场景：① `SatelliteSelectDialog` 搜索过滤（预计算 `self._norm`，底部计数标签「匹配 N / 共 M 颗」，全选/全不选只作用于可见项）；② `lookup_transponder` 第 6 层归一化兜底（表中 `AO-91` 可匹配 TLE 名 `AO 91`）。改匹配规则时两处应同步。
 - **隐藏行必须用 `QListWidget.setRowHidden(row, hide)`**，不要用 `QListWidgetItem.setHidden()`——后者只改标志、不保证触发视图 `doItemsLayout()` 重排。对话框内维护 `self._row_names`（行号→卫星名）以便按行号隐藏；过滤后 `scrollToItem(首个匹配项, PositionAtTop)`。
 - 搜索期间被隐藏但已勾选的项，点「确定」仍保留在 `get_selected()` 中（有意设计）。
+- **未搜索时已选置顶**：`SatelliteSelectDialog` 搜索框为空时，`_filter` 末尾调 `_reorder_pin_selected()` 把已勾选项物理重排到顶部（已选在前、保持各自原相对顺序，未选在后），并同步 `self._row_names`；`list_widget.itemChanged`→`_on_item_changed` 在未搜索时勾选一变就重新置顶（新勾选自动跳到顶部），`self._reordering` 守卫防递归。搜索中不重排（只显示匹配项）。重排取出 item 用尾部 `takeItem(count-1)`（O(1)/次）而非 `takeItem(0)`（O(N)/次），整体 O(N)，避免数千颗时 O(N²)。对话框被 `satellite_window` 与 `mutual_window` 共用，两处同时生效。
 
 ## 时间精度约定（卫星模块）
 - **显示到秒**：`satellite_window._utc_to_local_str` = `%m-%d %H:%M:%S`，用于过境表「升起/落下」与通联预测表「可通联开始/结束/最佳时刻」。
