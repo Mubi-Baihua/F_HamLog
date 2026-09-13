@@ -3,7 +3,7 @@
 设计要点：
 - 备份文件本身即「可恢复的未保存状态」：非空表示有可恢复内容，空文件表示无需恢复。
 - project 备份：file/project_backup.fhl（沿用原项目的加密 key）。
-- batch  备份：file/batch_backup.fh（始终明文，因为批量记录本身不绑定加密密钥）。
+- batch  备份：file/batch_backup.fhl（始终明文，因为批量记录本身不绑定加密密钥）。
 - 关闭窗口时若有未保存更改，弹出『保存 / 不保存 / 取消』；选择「不保存」时保留备份，
   下次启动 main.py 即可提示恢复。
 """
@@ -12,7 +12,27 @@ import os
 import fhl_rw
 
 PROJECT_BACKUP = os.path.join('file', 'project_backup.fhl')
-BATCH_BACKUP = os.path.join('file', 'batch_backup.fh')
+BATCH_BACKUP = os.path.join('file', 'batch_backup.fhl')
+
+# 兼容迁移：旧版本曾把批量备份写成 batch_backup.fh（错误扩展名），统一改为 .fhl。
+# 若旧文件存在且新文件不存在（或新文件为空而旧文件非空），则重命名以保留可恢复内容。
+_OLD_BATCH_BACKUP = os.path.join('file', 'batch_backup.fh')
+if os.path.exists(_OLD_BATCH_BACKUP):
+    _old_size = os.path.getsize(_OLD_BATCH_BACKUP)
+    _new_exists = os.path.exists(BATCH_BACKUP)
+    _new_size = os.path.getsize(BATCH_BACKUP) if _new_exists else 0
+    if (not _new_exists) or (_new_size == 0 and _old_size > 0):
+        try:
+            # 用 os.replace 而非 os.rename：Windows 下 rename 不能覆盖已存在的目标文件
+            os.replace(_OLD_BATCH_BACKUP, BATCH_BACKUP)
+        except OSError:
+            pass
+    elif _old_size == 0:
+        # 旧文件为空（无待恢复内容），直接清理，避免残留错误扩展名文件
+        try:
+            os.remove(_OLD_BATCH_BACKUP)
+        except OSError:
+            pass
 
 
 def _ensure_dir(path):

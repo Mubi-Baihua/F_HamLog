@@ -580,7 +580,7 @@ def main(window, preset=None, on_saved=None, preset_records=None, recovered=Fals
         _w.installEventFilter(nav_filter)
     table.cellChanged.connect(on_cell_changed)
 
-    # ---------- 未保存内容自动备份（batch_backup.fh） ----------
+    # ---------- 未保存内容自动备份（batch_backup.fhl） ----------
     def _bk_cur_records():
         """从表格收集当前所有日志列（列>=1）为记录列表。"""
         recs = []
@@ -719,22 +719,25 @@ def main(window, preset=None, on_saved=None, preset_records=None, recovered=Fals
             return data, key
 
         finish_dialog = QDialog(window)
-        finish_dialog.setWindowTitle('批量记录完成')
-        finish_dialog.resize(700, 140)
-        finish_dialog.setFixedSize(700, 140)
+        finish_dialog.setWindowTitle('批量记录')
+        finish_dialog.setMinimumWidth(460)
         finish_dialog.setModal(True)
 
         finish_layout = QVBoxLayout(finish_dialog)
-        finish_layout.setSpacing(12)
+        finish_layout.setSpacing(14)
+        finish_layout.setContentsMargins(20, 18, 20, 16)
 
-        title_label = QLabel('请选择保存方式：')
-        title_label.setAlignment(Qt.AlignCenter)
-        title_label.setStyleSheet('font-size: 12pt; font-weight: bold;')
-        finish_layout.addWidget(title_label)
+        summary_label = QLabel(f'已成功录入 {len(fhl_list)} 条记录，请选择保存方式：')
+        summary_label.setAlignment(Qt.AlignCenter)
+        summary_label.setStyleSheet('font-size: 10pt; color: #555;')
+        finish_layout.addWidget(summary_label)
 
-        action_row = QHBoxLayout()
-        action_row.setSpacing(10)
-        action_row.setContentsMargins(0, 0, 0, 0)
+        finish_layout.addSpacing(6)
+
+        grid = QGridLayout()
+        grid.setSpacing(10)
+        grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(1, 1)
 
         def add_to_project():
             project_path, _ = QFileDialog.getOpenFileName(
@@ -840,28 +843,25 @@ def main(window, preset=None, on_saved=None, preset_records=None, recovered=Fals
             finish_dialog.accept()
 
         btn_project = QPushButton('添加到 F HamLog 项目')
-        btn_project.setMinimumHeight(36)
-        btn_project.clicked.connect(add_to_project)
-        action_row.addWidget(btn_project)
-
         btn_save_as = QPushButton('另存为 F HamLog 项目')
-        btn_save_as.setMinimumHeight(36)
-        btn_save_as.clicked.connect(save_as_project)
-        action_row.addWidget(btn_save_as)
-
         btn_default = QPushButton('添加到默认通联日志')
-        btn_default.setMinimumHeight(36)
-        btn_default.clicked.connect(add_to_default_log)
-        action_row.addWidget(btn_default)
-
         btn_multi = QPushButton('添加到多人日志')
-        btn_multi.setMinimumHeight(36)
+        for _b in (btn_project, btn_save_as, btn_default, btn_multi):
+            _b.setMinimumHeight(38)
+        btn_project.clicked.connect(add_to_project)
+        btn_save_as.clicked.connect(save_as_project)
+        btn_default.clicked.connect(add_to_default_log)
         btn_multi.clicked.connect(add_to_multiplayer)
-        action_row.addWidget(btn_multi)
+        grid.addWidget(btn_project, 0, 0)
+        grid.addWidget(btn_save_as, 0, 1)
+        grid.addWidget(btn_default, 1, 0)
+        grid.addWidget(btn_multi, 1, 1)
+        finish_layout.addLayout(grid)
 
-        finish_layout.addLayout(action_row)
+        finish_layout.addStretch(1)
 
         cancel_button = QPushButton('取消')
+        cancel_button.setFixedWidth(96)
         cancel_button.clicked.connect(finish_dialog.reject)
         finish_layout.addWidget(cancel_button, alignment=Qt.AlignRight)
 

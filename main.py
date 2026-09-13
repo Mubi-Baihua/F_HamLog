@@ -2,9 +2,10 @@ from PySide6.QtWidgets import *
 from PySide6.QtGui import QIcon
 from PySide6.QtCore import Qt, QTimer
 import sys
+import os
+import time
+import re
 import json
-import webbrowser
-import urllib.parse
 import fhl_rw
 import backup
 from dialog_defaults import desktop_dir
@@ -17,7 +18,45 @@ project_window = None
 batch_window = None
 set_window = None
 
+
+def _cleanup_remote_rooms(days=1):
+    """启动时清理 file/remote_rooms 中超过 days 天的多人日志房间文件。
+
+    文件名形如「多人日志_YYYYMMDD_HHMMSS.fhl」，优先用文件名里的开放时间戳判定
+    新旧；解析失败则回退到文件修改时间。目录不存在时直接返回。"""
+    rooms_dir = os.path.join('file', 'remote_rooms')
+    if not os.path.isdir(rooms_dir):
+        return
+    cutoff = time.time() - days * 86400.0
+    ts_re = re.compile(r'(\d{8})_(\d{6})')
+    for fn in os.listdir(rooms_dir):
+        if not fn.lower().endswith('.fhl'):
+            continue
+        full = os.path.join(rooms_dir, fn)
+        ts = None
+        m = ts_re.search(fn)
+        if m:
+            try:
+                ts = time.mktime(time.strptime(m.group(1) + m.group(2),
+                                               '%Y%m%d%H%M%S'))
+            except ValueError:
+                ts = None
+        if ts is None:
+            try:
+                ts = os.path.getmtime(full)
+            except OSError:
+                continue
+        if ts < cutoff:
+            try:
+                os.remove(full)
+            except OSError:
+                pass
+
+
 def main():
+    # 启动时清理过期（默认 3 天）的多人日志房间文件
+    _cleanup_remote_rooms(days=1)
+
     def _confirm_replace_session():
         """打开新的项目窗口前先确认。
 
@@ -163,17 +202,6 @@ def main():
         set_window = QMainWindow()
         set.main(set_window)
 
-    def qrz_page():
-        print('qrz主页')
-        with open('file/m_xml.txt', 'r', encoding='utf-8') as f:
-            xml_dict = eval(f.read())
-        callsign = xml_dict['m_call']
-        if callsign == '':
-            url = 'https://www.qrz.com'
-        else:
-            url = f"https://www.qrz.com/db/{urllib.parse.quote_plus(callsign)}"
-        webbrowser.open(url)
-    
     def batch_project():
         print("批量记录")
         import batch_project
@@ -260,10 +288,10 @@ def main():
     button_batch.clicked.connect(batch_project)
     _style_btn(button_batch)
 
-    button_qrz = QPushButton('QRZ主页')
-    button_qrz.setFixedSize(105, BTN_H)
-    button_qrz.clicked.connect(qrz_page)
-    _style_btn(button_qrz)
+    button_join_grid = QPushButton('加入多人日志')
+    button_join_grid.setFixedSize(105, BTN_H)
+    button_join_grid.clicked.connect(join_server)
+    _style_btn(button_join_grid)
 
     button_sat = QPushButton('卫星过境')
     button_sat.setFixedSize(220, BTN_H)
@@ -281,18 +309,11 @@ def main():
     _style_btn(button_open)
 
     grid.addWidget(button_batch, 0, 0)
-    grid.addWidget(button_qrz, 0, 1)
+    grid.addWidget(button_join_grid, 0, 1)
     grid.addWidget(button_sat, 1, 0, 1, 2)
     grid.addWidget(button_start, 2, 0)
     grid.addWidget(button_open, 2, 1)
     main_layout.addWidget(grid_box, alignment=Qt.AlignHCenter)
-
-    # ---------- 加入多人日志（加入入口统一收归主页） ----------
-    button_join = QPushButton('加入多人日志')
-    button_join.setFixedSize(220, BTN_H)
-    button_join.clicked.connect(join_server)
-    _style_btn(button_join)
-    main_layout.addWidget(button_join, alignment=Qt.AlignHCenter)
 
     # ---------- 分隔线 ----------
     line = QFrame(central_widget)

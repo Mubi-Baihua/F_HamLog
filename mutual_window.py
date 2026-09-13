@@ -398,8 +398,9 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
         if va is None or vb is None:
             status.setText('两个台站的经纬度/海拔必须都是有效数字。')
             return
+        # 台站 A（本站）位置在「卫星过境预测 → 观测站设置」中填写，
+        # 通联预测不再单独提示“尚未设置位置”；未设置时静默跳过预测（不弹窗、不提示）。
         if va[0] == 0.0 and va[1] == 0.0:
-            status.setText('台站 A（本站）尚未设置位置，请在“卫星过境预测 → 观测站设置”中填写并保存。')
             return
         if vb[0] == 0.0 and vb[1] == 0.0:
             status.setText('台站 B（对方）尚未设置位置，请填写对方 QTH 或网格后自动开始预测。')
@@ -481,10 +482,10 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
             if getattr(win, '_tle_worker', None) is worker:
                 win._tle_worker = None
             sats = s
+            # 通联预测：若尚未选择卫星，不自动弹窗（仅在「卫星过境预测」中引导选择），
+            # 置为空集合，由 run_prediction 在状态栏提示用户点击「选择卫星…」。
             if selected_names is None:
-                open_select()
-                if selected_names is None:
-                    selected_names = set()
+                selected_names = set()
             refresh_btn.setEnabled(True)
             status.setText('已载入 TLE，共 %d 颗卫星。' % len(sats))
             # 若地图窗口已打开，同步最新的「已选卫星」列表（名称/轨道根数）
@@ -666,11 +667,8 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
     win.show()
     # 暴露反向同步接口，供「卫星过境预测」窗口在改选卫星时调用
     win.apply_remote_selection = apply_remote_selection
-    if a_lat == 0.0 and a_lon == 0.0:
-        QMessageBox.information(
-            win, '未设置本站位置',
-            '台站 A（本站）尚未设置位置。\n'
-            '可在「卫星过境预测 → 观测站设置」中填写并保存，也可在本窗口临时填写。')
+    # 台站 A（本站）位置在「卫星过境预测 → 观测站设置」中填写，
+    # 通联预测打开时不再弹窗提示“尚未设置位置”；未设置时 run_prediction 会静默跳过。
     refresh_tle(force=False)
     _open_windows.append(win)
 
