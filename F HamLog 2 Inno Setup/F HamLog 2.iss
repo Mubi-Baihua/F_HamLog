@@ -9,7 +9,7 @@
 #define MyAppExeName "F HamLog 2.exe"
 
 [Setup]
-AppId={{9C87FCB8‑00FD‑4889‑8E7B‑02B5789015C0}
+AppId={{9C87FCB8-00FD-4889-8E7B-02B5789015C0}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
@@ -22,7 +22,7 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 DisableProgramGroupPage=yes
 OutputDir=D:\F-Dev\BIG\F_HamLog\F HamLog 2 Inno Setup
-OutputBaseFilename=F HamLog 2.3 setup
+OutputBaseFilename=F HamLog 2.4 setup
 SetupIconFile=D:\F-Dev\BIG\F_HamLog\file\F_HamLog.ico
 SolidCompression=yes
 WizardStyle=modern dynamic windows11

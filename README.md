@@ -21,16 +21,21 @@
 可以自行编写插件，并安装。
 
 ### 远程日志
-**1.8.0及以上版本不支持远程日志。如需继续使用，请自行构建[#remote_project.py](https://github.com/Mubi-Baihua/F_HamLog/blob/main/%23remote_project.py)。**   
 
 支持编辑远程服务器上的日志。
 
-远程日志服务端请下载 [F HamLog Remote Log Server 1.1.0.exe](https://github.com/Mubi-Baihua/F_HamLog/blob/main/F_HamLog_Remote_Log_Server_1.1.0/F%20HamLog%20Remote%20Log%20Server%201.1.0.exe)。
+**1.8.0~2.3.0版本（包括1.8.0和2.3.0）不支持远程日志。如需使用，请自行构建[#remote_project.py](https://github.com/Mubi-Baihua/F_HamLog/blob/main/%23remote_project.py)。**   
+
+**不同版本的 F HamLog 需要不同的远程日志服务端，请直接从该 F HamLog 版本的的releases页下载对应的服务端。**
+
+2.4.0及以上版本的远程日志不需要单独搭建一个服务端，你可以直接使用 F HamLog 创建远程日志房间。
 
 ---
 
 ## 重要提示
-2.3.0以上版本支持覆盖安装，自动保留原有数据。但仍建议在安装前手动备份默认通联日志。
+1. 2.3.0以上版本支持覆盖安装，自动保留原有数据。但仍建议在安装前手动备份默认通联日志。
+2. 请定期手动备份默认通联日志。
+3. 强烈不建议手动修改 F HamLog 项目文件，在使用插件前请确认插件来自可信的开发者。
 
 ---
 
@@ -78,6 +83,9 @@ with open(f"{abs_path}/output.fhl", "w", encoding="utf-8") as f:
 
 ### FHL文件格式
 FHL文件格式为json文件。编码使用utf-8。
+
+>[!WARNING]
+>强烈不建议手动修改 F HamLog 项目文件！
 
 参考文件：
 ```json
