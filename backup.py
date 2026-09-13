@@ -50,6 +50,15 @@ def install_close_guard(window, callbacks):
       clear_backup()          清空备份（用于正常保存 / 无更改关闭）
       do_save()       -> bool 执行保存，返回是否成功
 
+    可选：
+      on_close()              窗口**确实要关闭**时调用（「取消」分支不会调用）。
+                              用于释放与窗口绑定的后台资源（如多人日志连接/内嵌服务端），
+                              因为 Qt 关闭窗口默认只是隐藏（不触发 destroyed），
+                              仅在 destroyed 里做清理会漏掉「关闭窗口」这一路径。
+      texts()         -> dict 覆盖对话框文案，可含键：
+                              title / text / save / discard / cancel
+                              例如多人日志下「保存」实为「同步到服务端」。
+
     关闭逻辑：
       - 无未保存更改：清空备份并直接关闭。
       - 有未保存更改：弹『保存 / 不保存 / 取消』。
@@ -68,12 +77,38 @@ def install_close_guard(window, callbacks):
             self._allow = False
             w.installEventFilter(self)
 
+        def _fire_close(self):
+            cb = self._cb.get('on_close')
+            if cb is None:
+                return
+            try:
+                cb()
+            except Exception:
+                pass
+
+        def _texts(self):
+            texts = {
+                'title': '未保存的更改',
+                'text': '当前窗口有未保存的更改，是否保存？',
+                'save': '保存',
+                'discard': '不保存',
+                'cancel': '取消',
+            }
+            cb = self._cb.get('texts')
+            if cb is not None:
+                try:
+                    texts.update(cb() or {})
+                except Exception:
+                    pass
+            return texts
+
         def eventFilter(self, obj, event):
             if event.type() != QEvent.Close:
                 return False
             # 已获准关闭（由下方 window.close() 重新触发），放行
             if self._allow:
                 self._allow = False
+                self._fire_close()
                 return False
             # 无未保存更改：清空备份并直接关闭
             if not self._cb['is_dirty']():
@@ -81,16 +116,18 @@ def install_close_guard(window, callbacks):
                     self._cb['clear_backup']()
                 except Exception:
                     pass
+                self._fire_close()
                 return False
 
             event.ignore()
+            t = self._texts()
             msg = QMessageBox(self._w)
             msg.setIcon(QMessageBox.Warning)
-            msg.setWindowTitle('未保存的更改')
-            msg.setText('当前窗口有未保存的更改，是否保存？')
-            btn_save = msg.addButton('保存', QMessageBox.AcceptRole)
-            btn_discard = msg.addButton('不保存', QMessageBox.DestructiveRole)
-            btn_cancel = msg.addButton('取消', QMessageBox.RejectRole)
+            msg.setWindowTitle(t['title'])
+            msg.setText(t['text'])
+            btn_save = msg.addButton(t['save'], QMessageBox.AcceptRole)
+            btn_discard = msg.addButton(t['discard'], QMessageBox.DestructiveRole)
+            btn_cancel = msg.addButton(t['cancel'], QMessageBox.RejectRole)
             msg.setDefaultButton(btn_save)
             msg.exec()
             clicked = msg.clickedButton()

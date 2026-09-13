@@ -1,6 +1,6 @@
 from PySide6.QtWidgets import *
 from PySide6.QtGui import QAction
-from PySide6.QtCore import Qt, QEvent, QObject, QTimer  # 新增导入 Qt
+from PySide6.QtCore import Qt, QEvent, QObject, QTimer, QThread, Signal  # 新增导入 Qt
 from dialog_defaults import desktop_dir
 from functools import partial
 import time as time_
@@ -8,6 +8,8 @@ import sys
 import os
 import re
 import json
+import socket
+import threading
 import subprocess
 import webbrowser
 import urllib.parse
@@ -15,6 +17,7 @@ import fhl_rw
 import copy
 import call_upper
 import backup
+from remote_server import send_frame, recv_frame, LogServer, get_lan_ip
 
 # 复制/粘贴使用的字段顺序（与表格列对应，英文键名作为剪贴板表头，便于跨窗口/跨软件解析）
 COPY_FIELDS = ['date', 'time', 'm_call', 'o_call', 'freq', 'freq_rx', 'mode',
@@ -33,6 +36,26 @@ FIELD_LABELS = {
 file = None
 key = None
 _open_windows = []  # 保持由本模块打开的卫星批量记录窗口引用，防止被回收
+# “新建日志 / 更多信息”窗口引用：在 main() 内被 _on_sync 等引用，
+# 必须先于任何使用初始化，否则首次打开项目时引用会抛 NameError。
+project_others_window = None
+
+# Qt 对象存活性判断：QMainWindow 的 destroyed 信号回调执行时，底层 C++ 对象已被删除，
+# 此时任何 setWindowTitle / setVisible 等调用都会抛
+#   RuntimeError: libshiboken: Internal C++ object ... already deleted
+# 因此凡是可能在窗口销毁后被触发的清理逻辑，动界面之前必须先判活。
+try:
+    import shiboken6
+
+    def _qt_alive(widget):
+        """widget 非 None 且底层 C++ 对象仍然有效时返回 True。"""
+        try:
+            return widget is not None and shiboken6.isValid(widget)
+        except Exception:
+            return False
+except Exception:  # pragma: no cover - 极端情况下退化为仅判 None
+    def _qt_alive(widget):
+        return widget is not None
 
 def _ensure_log_keys(entry):
     # 确保单条记录包含新加的字段
@@ -47,7 +70,256 @@ def _upgrade_file_records(file_list):
     for e in file_list:
         _ensure_log_keys(e)
 
-def main(window, filee='', save_path='',key_ = None,quick_poject=False, recovered=False):
+
+# ---------------------------------------------------------------------------
+# 多人日志客户端：与 remote_server 共用帧协议，作为「开放多人日志」/「加入多人日志」的
+# 统一后端。远程模式下 project.main 的所有功能（表格/新建/搜索/导入导出/卫星记录等）
+# 都直接操作内存中的 file 列表，仅落盘改为经此连接发送到服务端——因此无需重复编写。
+# ---------------------------------------------------------------------------
+
+class RemoteConnection:
+    """到多人日志服务端的连接（客户端侧）。"""
+
+    def __init__(self, host, port, password, role='guest', display_ip=''):
+        self.host = host
+        self.port = int(port)
+        self.password = password
+        # role：'host' 表示本机即为服务端（开放多人日志者）；其余均为 'guest'（普通客户端）
+        self.role = role
+        # display_ip：内嵌服务端经 127.0.0.1 连回本机服务器时，向服务端上报的局域网展示地址
+        self.display_ip = display_ip
+        self.sock = None
+        self.initial_file = []
+        # 握手期间收到的 PEERS（在线客户端列表），用于给同步线程播种，
+        # 保证新加入的客户端立刻能看到在线客户端（无需等他人上下线）。
+        self.initial_peers = []
+        self._sync = None
+        # 发送锁：主线程（保存）、后台同步线程与心跳线程共用同一 socket，必须串行发送，
+        # 否则两条帧的字节会在 TCP 层交错导致解析失败。
+        self._send_lock = threading.Lock()
+        # 心跳线程：见 _start_heartbeat 的说明。
+        self._hb_thread = None
+        self._hb_stop = threading.Event()
+
+    def _locked_send(self, msg_type, payload=''):
+        with self._send_lock:
+            send_frame(self.sock, msg_type, payload)
+
+    def connect(self):
+        """完成鉴权并拉取初始日志列表；失败抛出 RuntimeError。"""
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.sock.settimeout(10)
+        try:
+            self.sock.connect((self.host, self.port))
+        except Exception as e:
+            self.sock = None
+            raise RuntimeError(f'无法连接到服务端 {self.host}:{self.port}（{e}）')
+        self._locked_send('AUTH', json.dumps(
+            {'password': self.password, 'role': self.role, 'ip': self.display_ip},
+            ensure_ascii=False))
+        resp = recv_frame(self.sock)
+        if resp is None or resp[0] != 'LOGIN':
+            self.sock.close(); self.sock = None
+            raise RuntimeError('登录失败：密码错误或服务端拒绝连接。')
+        self._locked_send('FETCH', '')
+        # 服务端在 LOGIN 后可能立刻下发 PEERS 广播帧，FETCH 与 FILE 之间可能夹着它，
+        # 因此循环读取，跳过 PEERS / SYNC 等广播帧，直到拿到 FILE。
+        # 同时把途中收到的 PEERS 记下来，供同步线程首次刷新在线客户端使用。
+        while True:
+            resp = recv_frame(self.sock)
+            if resp is None:
+                self.sock.close(); self.sock = None
+                raise RuntimeError('获取日志数据失败。')
+            if resp[0] == 'FILE':
+                break
+            if resp[0] == 'PEERS':
+                try:
+                    self.initial_peers = json.loads(resp[1])
+                except Exception:
+                    self.initial_peers = []
+            # 其它广播帧（SYNC / OK / PONG）忽略，继续读下一个
+        try:
+            self.initial_file = json.loads(resp[1])
+        except Exception:
+            self.initial_file = []
+        _upgrade_file_records(self.initial_file)
+        return True
+
+    def send_save(self, file_list):
+        """把当前全部日志覆盖式保存到服务端。"""
+        data = json.dumps(file_list, ensure_ascii=False)
+        try:
+            self._locked_send('SAVE', data)
+        except Exception as e:
+            raise RuntimeError(f'保存失败：{e}')
+
+    def start_sync(self, on_sync, on_disconnect):
+        """启动后台同步线程：每秒向服务端拉取一次最新日志。"""
+        self._start_heartbeat()
+        self._sync = _SyncThread(self, on_sync, on_disconnect)
+        # 信号跨线程投递到 GUI 线程执行，保证表格刷新/弹窗线程安全
+        self._sync.sync_signal.connect(on_sync)
+        self._sync.disconnect_signal.connect(on_disconnect)
+        self._sync.start()
+
+    def _start_heartbeat(self, interval=1.0):
+        """启动轻量心跳：每 interval 秒补发一帧 NEXT，让服务端始终在空闲阈值内收到本客户端数据。
+
+        必要性：同步方式是「发 FETCH → 读取整份日志」。日志较大时（例如含通联录音的
+        base64 数据），读取会占用较长时间，期间同步线程发不出 FETCH；服务端按
+        「2 秒未收到任何信息即视为退出」的规则就会把客户端踢掉，客户端随之中止同步
+        （表现为「日志无法同步」）。心跳线程独立于日志传输，可避免这种误判。
+        """
+        if self._hb_thread is not None and self._hb_thread.is_alive():
+            return
+        self._hb_stop.clear()
+
+        def _loop():
+            while not self._hb_stop.wait(interval):
+                if self.sock is None:
+                    return
+                try:
+                    self._locked_send('NEXT', '')
+                except Exception:
+                    return
+
+        self._hb_thread = threading.Thread(target=_loop, daemon=True)
+        self._hb_thread.start()
+
+    def _stop_heartbeat(self):
+        self._hb_stop.set()
+
+    def stop_sync(self, wait_ms=3000):
+        """停止后台同步线程并等待其真正退出（避免 QThread 在运行中被销毁）。"""
+        sync = self._sync
+        if sync is None:
+            return
+        sync.stop()
+        try:
+            if sync.isRunning():
+                sync.wait(wait_ms)
+        except Exception:
+            pass
+
+    def _close_socket(self):
+        """给服务端发 QUIT 退出指令并关闭 socket（幂等）。"""
+        self._stop_heartbeat()
+        if self.sock is not None:
+            try:
+                self._locked_send('QUIT', '')
+            except Exception:
+                pass
+            try:
+                self.sock.shutdown(socket.SHUT_RDWR)
+            except Exception:
+                pass
+            try:
+                self.sock.close()
+            except Exception:
+                pass
+            self.sock = None
+
+    def close(self):
+        """退出多人日志：先给服务端发 QUIT 退出指令，再关闭连接。
+
+        即使 QUIT 未能送达（如网络已断），服务端也会在 CLIENT_IDLE_TIMEOUT（2 秒）
+        内因收不到本客户端任何信息而自动清理，因此无需强依赖 QUIT。
+        """
+        self._close_socket()
+
+    def shutdown(self):
+        """完整退出多人日志（客户端退出 / 关闭窗口 / 切换连接时使用）。
+
+        顺序很关键：必须**先**把同步线程标记为停止，再关闭 socket、最后 join 线程。
+        否则线程会因 socket 被关闭而走「连接断开」分支，向已经离开会话的窗口误报断开提示。
+        """
+        sync = self._sync
+        if sync is not None:
+            sync.stop()          # 先置位：线程后续不再上报「连接断开」
+        self._close_socket()     # 关闭连接会立刻解除 recv 阻塞，使线程尽快退出
+        if sync is not None:
+            try:
+                if sync.isRunning():
+                    sync.wait(3000)
+            except Exception:
+                pass
+
+
+class _SyncThread(QThread):
+    """后台线程：每秒向服务端拉取一次最新日志（FETCH→FILE，拉取式同步），
+    同时接收 PEERS 广播以刷新在线客户端列表。"""
+    sync_signal = Signal(list)
+    disconnect_signal = Signal()
+    peers_signal = Signal(list)
+
+    def __init__(self, conn, on_sync, on_disconnect):
+        super().__init__()
+        self.conn = conn
+        self._on_sync = on_sync
+        self._on_disconnect = on_disconnect
+        self._running = True
+        # 用握手期收到的在线客户端列表播种，新加入的客户端立即可见
+        self.last_peers = list(getattr(conn, 'initial_peers', []) or [])
+
+    def run(self):
+        import time as _t
+        fails = 0
+        while self._running:
+            t0 = _t.monotonic()
+            try:
+                # 每秒向服务端拉取一次最新日志（拉取式同步；FETCH 也兼作保活心跳）
+                self.conn._locked_send('FETCH', '')
+                self.conn.sock.settimeout(10.0)
+                while self._running:
+                    resp = recv_frame(self.conn.sock)
+                    if resp is None:
+                        # 对端已关闭连接（服务端结束/被断开）：明确上报断开。
+                        # 主动退出（关闭窗口 / 关闭多人日志）已把 _running 置 False，
+                        # 此处不得再上报断开提示。
+                        if self._running:
+                            self._running = False
+                            self.disconnect_signal.emit()
+                        return
+                    t, body = resp
+                    if t == 'FILE':
+                        fails = 0
+                        try:
+                            self.sync_signal.emit(json.loads(body))
+                        except Exception:
+                            pass
+                        break
+                    elif t == 'PEERS':
+                        try:
+                            self.last_peers = json.loads(body)
+                        except Exception:
+                            self.last_peers = []
+                        try:
+                            self.peers_signal.emit(self.last_peers)
+                        except Exception:
+                            pass
+                    # SYNC / OK / PONG 忽略：下一次 FETCH 会拉到最新
+            except socket.timeout:
+                # 本次拉取超时：跳过，稍后重试
+                pass
+            except Exception:
+                # 发送/接收瞬时异常（网络抖动等）：先连续重试几次，避免一次抖动就
+                # 永久中止同步（表现为「日志无法同步」且窗口看不出异常）。
+                fails += 1
+                if fails >= 3:
+                    if self._running:
+                        self._running = False
+                        self.disconnect_signal.emit()
+                    return
+            # 固定 1 秒周期：把「传输耗时」计入周期，避免日志较大时周期被拉长到
+            # 服务端的空闲阈值（2 秒）之上而被判为退出。
+            _t.sleep(max(0.0, 1.0 - (_t.monotonic() - t0)))
+
+    def stop(self):
+        self._running = False
+
+
+def main(window, filee='', save_path='', key_=None, quick_poject=False, recovered=False,
+         remote=None, is_host=False, server=None):
     global file,key
     key = key_
     if isinstance(filee, list):
@@ -62,21 +334,70 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False, recovere
     else:
         file = []
 
+    # 远程后端状态：运行时可经「多人日志管理」动态挂载/卸载（避免新建窗口即可联机）
+    window._remote = remote
+    window._is_host = False
+    window._remote_sync = None
+    window._is_host = is_host
+    window._server = server
+    window._aes_action = None
+    window._local_title = ''
+    def _rc():
+        return window._remote
+
     # ---------- 未保存内容自动备份（project_backup.fhl） ----------
-    # 以已保存内容快照为基准，任何偏离（未保存更改）都会周期性写入备份；
+    # 以「已持久化内容」快照为基准，任何偏离（未保存更改）都会周期性写入备份；
     # 正常保存后清空备份。window 关闭时若有未保存更改则弹『保存/不保存/取消』。
-    _bk_state = {'last': json.dumps(file, ensure_ascii=False, sort_keys=True)}
+    #
+    # 多人日志下「已持久化」的含义不同：内容由服务端持续持有并落盘，所以基线跟随服务端
+    # 内容走（每次同步即视为已保存），本机不再写“未保存”备份；退出多人日志后，持久化
+    # 责任回到本机文件，再以「最近一次写入本机文件的内容」为基线重新判断——只有内容相对
+    # 本机文件确有变化才算未保存，避免把会话期间他人造成的变化误报成本机的未保存更改。
+    def _bk_json():
+        return json.dumps(file, ensure_ascii=False, sort_keys=True)
+
+    _bk_init = _bk_json()
+    _bk_state = {
+        'last': _bk_init,    # 当前“已持久化”基线（多人日志下 = 服务端已持有的内容）
+        'local': _bk_init,   # 最近一次写入本机文件的内容（退出多人日志后作基线）
+    }
 
     def _bk_snapshot():
-        _bk_state['last'] = json.dumps(file, ensure_ascii=False, sort_keys=True)
+        """把当前内容记为「已持久化」。
+
+        单人模式：内容已写入本机文件 → 同时更新“本机文件基线”。
+        多人日志：内容已由服务端持有（本次同步 / 已推送）→ 只更新“已持久化”基线，
+        不动本机文件基线（退出会话后靠它判断内容相对本机文件是否有变化）。
+        """
+        snap = _bk_json()
+        _bk_state['last'] = snap
+        if _rc() is None:
+            _bk_state['local'] = snap
 
     def _bk_is_dirty():
         try:
-            return json.dumps(file, ensure_ascii=False, sort_keys=True) != _bk_state['last']
+            return _bk_json() != _bk_state['last']
         except Exception:
             return False
 
-    def _bk_write():
+    def _bk_on_remote_exit():
+        """退出多人日志后重算基线：持久化责任回到本机文件。
+
+        只有「内容相对最近一次写入本机文件确有变化」才标记为未保存（哨兵值 ''）；
+        无变化则保持干净，关闭窗口时不会无端提示保存。
+        """
+        try:
+            snap = _bk_json()
+        except Exception:
+            return
+        _bk_state['last'] = snap if snap == _bk_state.get('local', '') else ''
+
+    def _bk_write(force=False):
+        # 多人日志：内容由服务端持有并落盘，本机不写“未保存”备份——否则下次启动会误报
+        # “恢复未保存的内容”，把共享会话日志当成未保存内容恢复、覆盖本机项目。
+        # force=True 仅由关闭守卫的「不保存」分支使用（确有未同步内容时才需要留备份）。
+        if _rc() is not None and not force:
+            return
         if not file:
             backup.clear_backup(backup.PROJECT_BACKUP)
             return
@@ -84,6 +405,17 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False, recovere
 
     def _bk_clear():
         backup.clear_backup(backup.PROJECT_BACKUP)
+
+    def _bk_close_texts():
+        """关闭守卫文案：多人日志下「保存」实为「同步到服务端」。"""
+        if _rc() is not None:
+            return {
+                'title': '未同步到服务端',
+                'text': '有内容尚未同步到服务端，是否立即同步？',
+                'save': '同步',
+                'discard': '不同步',
+            }
+        return {}
 
     table = None
     undo_stack = []   # 撤销栈：保存 file 的完整深拷贝快照
@@ -198,14 +530,18 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False, recovere
         a7 = QAction('重做', window); a7.triggered.connect(redo); menu.addAction(a7)
         menu.exec(table.viewport().mapToGlobal(pos))
 
-    def table_update(delete=True):
+    def table_update(delete=True, persist=True):
         nonlocal table
         if delete:
-            layout.removeWidget(table)
-            table.deleteLater()
+            # 只有先把旧表格从布局移除并销毁，重建后界面才只会剩一个表格。
+            # （历史上远程同步曾用 delete=False，导致旧表格残留在布局里 → 出现两个表格）
+            if table is not None:
+                layout.removeWidget(table)
+                table.deleteLater()
             table = None
-            list_time(message=False)
-            save(message=False)
+            if persist:
+                list_time(message=False)
+                save(message=False)
             
 
         file_length = len(file)
@@ -529,6 +865,19 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False, recovere
         return True
 
     def save(message=True):
+        # 多人日志模式：直接把内存中的 file 覆盖式发送到服务端，由服务端落盘/广播
+        rc = _rc()
+        if rc is not None:
+            try:
+                rc.send_save(file)
+            except Exception as e:
+                QMessageBox.warning(window, "保存失败", f"无法保存到服务端：{e}")
+                return False
+            _bk_snapshot()
+            if message:
+                QMessageBox.information(window, "保存成功", "已保存到服务端！")
+            return True
+
         with open('file/m_xml.txt', 'r', encoding='utf-8') as f:
             xml_dict = eval(f.read())
 
@@ -566,6 +915,15 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False, recovere
         return True
 
     def esave():
+        rc = _rc()
+        if rc is not None:
+            try:
+                rc.send_save(file)
+                QMessageBox.information(window, "保存成功", "已保存到服务端，多人日志已关闭。")
+            except Exception as e:
+                QMessageBox.warning(window, "保存失败", str(e))
+            window.close()
+            return
         import json
         global key
         fhl_rw.write_fhl_file(save_path,file,key)
@@ -692,7 +1050,8 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False, recovere
 
     # 恢复场景：不弹“新建文件”对话框（否则一打开就逼用户选路径）。
     # 待用户真正点击“保存”时，再由 save()/_do_save 弹出“保存恢复的文件”。
-    if save_path == '' and not recovered:
+    # 多人日志模式（本机开放服务端 / 加入他人多人日志）不需要本地项目文件，跳过选择。
+    if save_path == '' and not recovered and remote is None:
         save_path, _ = QFileDialog.getSaveFileName(
             window,  # 父窗口，可以是None或者您的主窗口
             "新建文件",  # 对话框标题
@@ -703,12 +1062,20 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False, recovere
             return
     print(save_path)
     window.resize(1350, 700)
-    if quick_poject:
+    if _rc() is not None:
+        _role = '服务端' if is_host else '客户端'
+        window.setWindowTitle(f'F HamLog 2 - 多人日志（{_role}） {window._remote.host}:{window._remote.port}')
+        # 断开多人日志后恢复用的本地标题（而非多人日志标题本身）
+        window._local_title = 'F HamLog 2'
+    elif quick_poject:
         window.setWindowTitle(f'F HamLog 2 - 通联日志')
+        window._local_title = window.windowTitle()
     elif save_path:
         window.setWindowTitle(f'F HamLog 2 - {os.path.basename(save_path)}')
+        window._local_title = window.windowTitle()
     else:
         window.setWindowTitle('F HamLog 2 - 恢复的项目')
+        window._local_title = window.windowTitle()
     # window.showMaximized()
     # 创建菜单栏
     menu_bar = window.menuBar()
@@ -748,16 +1115,20 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False, recovere
         else:
             QMessageBox.warning(window,'解密项目','密钥错误！')
 
-    if key == None:
-        aes_open = QAction('加密此项目', window)
-        aes_open.setShortcut('Ctrl+Alt+E')
-        aes_open.triggered.connect(aes_open_)
-        file_menu.addAction(aes_open)
-    else:
-        aes_close = QAction('不再加密此项目', window)
-        aes_close.setShortcut('Ctrl+Alt+E')
-        aes_close.triggered.connect(aes_close_)
-        file_menu.addAction(aes_close)
+    aes_action = None
+    if key is None and _rc() is None:
+        aes_action = QAction('加密此项目', window)
+        aes_action.setShortcut('Ctrl+Alt+E')
+        aes_action.triggered.connect(aes_open_)
+        file_menu.addAction(aes_action)
+    elif key is not None:
+        aes_action = QAction('不再加密此项目', window)
+        aes_action.setShortcut('Ctrl+Alt+E')
+        aes_action.triggered.connect(aes_close_)
+        file_menu.addAction(aes_action)
+    # 多人日志模式：不显示加密菜单（与服务端后端互斥）
+    window._aes_action = aes_action
+
 
     '''file_menu.addSeparator()
 
@@ -1547,7 +1918,14 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False, recovere
         table_update()
         # 直接落盘到当前项目文件（不依赖自动保存开关，也不弹“保存成功”）
         global key
-        fhl_rw.write_fhl_file(save_path, file, key)
+        if _rc() is not None:
+            # 多人日志：追加即同步到服务端
+            try:
+                _rc().send_save(file)
+            except Exception as e:
+                QMessageBox.warning(window, '保存失败', str(e))
+        else:
+            fhl_rw.write_fhl_file(save_path, file, key)
         # 追加即落盘：视为已保存，清空备份并更新快照
         backup.clear_backup(backup.PROJECT_BACKUP)
         _bk_snapshot()
@@ -1587,6 +1965,12 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False, recovere
     sat_menu.addAction(batch_action)
     # 通联预测入口统一收归「卫星通联记录」窗口内的「通联预测」按钮，
     # 不再在菜单单独列出。
+
+    # ---------- 多人日志 菜单（位于“记录”与“插件”之间） ----------
+    multi_menu = menu_bar.addMenu('多人日志')
+    multi_action = QAction('多人日志管理', window)
+    multi_action.triggered.connect(lambda: open_multiplayer_manager())
+    multi_menu.addAction(multi_action)
 
 
     central_widget = QWidget()
@@ -1636,6 +2020,12 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False, recovere
             except FileNotFoundError:
                 QMessageBox.warning(window, "插件错误", f"插件 {pack_name} 未正确生成输出文件！")
             table_update()
+            if _rc() is not None:
+                # 插件修改了日志，同步回服务端
+                try:
+                    _rc().send_save(file)
+                except Exception:
+                    pass
             os.remove(f'file/pypack/{pack_name}/input.fhl')
             os.remove(f'file/pypack/{pack_name}/output.fhl')
 
@@ -1659,14 +2049,26 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False, recovere
     # （快照置为永不等的哨兵值，使 _bk_is_dirty() 恒为 True，关闭时会再次提示保存/不保存/取消）
     if recovered:
         _bk_state['last'] = ''
+        _bk_state['local'] = ''
 
     # 周期定时器：存在未保存更改时即时备份，覆盖意外关闭/崩溃场景
+    def _bk_tick():
+        # 多人日志：内容由服务端持续持有并落盘，本机不参与“未保存”备份
+        if _rc() is not None:
+            return
+        if _bk_is_dirty():
+            _bk_write()
+
     _bk_timer = QTimer(window)
     _bk_timer.setInterval(1500)
-    _bk_timer.timeout.connect(lambda: _bk_write() if _bk_is_dirty() else None)
+    _bk_timer.timeout.connect(_bk_tick)
     _bk_timer.start()
 
     def _do_save():
+        # 多人日志：关闭守卫中的“保存”即保存到服务端（不再弹“另存为”）
+        rc = _rc()
+        if rc is not None:
+            return save(message=True)
         # 已有保存路径（已“保存恢复的文件”或普通项目）→ 直接保存
         if save_path:
             save(message=True)
@@ -1677,12 +2079,361 @@ def main(window, filee='', save_path='',key_ = None,quick_poject=False, recovere
         # 普通新建项目（无路径）→ 弹“另存为”
         return bool(osave())
 
+    def _on_window_close():
+        """项目窗口确实关闭时调用（不含「取消」分支）。
+
+        Qt 关闭窗口默认只是隐藏、不触发 destroyed，因此必须在此主动退多人日志：
+        断开同步连接、发 QUIT；若本机是服务端，则一并停掉内嵌服务端。
+        否则窗口关掉后连接仍然活着，之后服务端结束时会向已关闭的窗口误弹「连接断开」。
+        """
+        srv = getattr(window, '_server', None)
+        if window._remote is not None or srv is not None:
+            _detach_remote()
+        if srv is not None:
+            try:
+                srv.stop()
+            except Exception:
+                pass
+
     backup.install_close_guard(window, {
         'is_dirty': _bk_is_dirty,
-        'write_backup': _bk_write,
+        # 「不保存」分支需要留一份备份以便下次恢复，故 force=True 绕过多人日志的免备份逻辑
+        'write_backup': lambda: _bk_write(force=True),
         'clear_backup': _bk_clear,
         'do_save': _do_save,
+        'on_close': _on_window_close,
+        'texts': _bk_close_texts,
     })
+
+    # ---------- 远程模式：挂载/卸载后端（运行时也可经「多人日志管理」动态调用） ----------
+    def _attach_remote(conn, is_host=False, server=None):
+        """把当前项目窗口挂载到远程后端：标题、加密菜单、后台同步一并接管。"""
+        # 若已挂载其它连接（如再次「开放多人日志」），先断开旧连接，避免服务端/线程泄漏
+        old = window._remote
+        if old is not None and old is not conn:
+            try:
+                old.shutdown()
+            except Exception:
+                pass
+        window._remote = conn
+        window._is_host = is_host
+        window._server = server
+        window._remote_dc_shown = False
+        if is_host:
+            window.setWindowTitle(f'F HamLog 2 - 多人日志（服务端） {conn.host}:{conn.port}')
+        else:
+            window.setWindowTitle(f'F HamLog 2 - 多人日志（客户端） {conn.host}:{conn.port}')
+        # 仅在尚未记录时补一个本地标题，避免覆盖正常项目的原标题（断开后要恢复它）
+        if not window._local_title:
+            window._local_title = 'F HamLog 2'
+        if window._aes_action is not None:
+            window._aes_action.setVisible(False)
+        # 进入多人日志：内容改由服务端持有（本机开放时，当前内容已作为房间初始内容），
+        # 因此把当前内容记为“已持久化”。此后本机不再写“未保存”备份（见 _bk_write），
+        # 避免下次启动把共享会话日志误当成未保存内容恢复、覆盖本机项目。
+        try:
+            _bk_snapshot()
+        except Exception:
+            pass
+
+        def _on_sync(new_list):
+            global file, project_others_window
+            # 窗口已销毁时不再刷新表格（避免操作已删除的 C++ 对象）
+            if not _qt_alive(window):
+                return
+            # 正在编辑“更多信息/新建日志”窗口时跳过刷新，避免覆盖正在编辑的行索引
+            if project_others_window is not None and project_others_window.isVisible():
+                return
+            try:
+                same = (json.dumps(new_list, ensure_ascii=False, sort_keys=True) ==
+                        json.dumps(file, ensure_ascii=False, sort_keys=True))
+            except Exception:
+                same = False
+            if same:
+                # 本地内容与服务端一致 ⇒ 已持久化。这里也要补一次基线：本地编辑恰好等于
+                # 服务端内容时（如他人先改成了同样的内容），否则会一直被判为“有未保存更改”。
+                _bk_snapshot()
+                return
+            file = new_list
+            # 沿用原有表格刷新逻辑：先移除并销毁旧表格再重建，界面始终只有一个表格。
+            # persist=False 避免把刚拉取到的内容立刻再回写服务端（否则会来回同步）。
+            table_update(persist=False)
+            # 服务端内容即“已保存内容”：同步基线，避免把他人造成的变化误判为本机未保存更改
+            # （这也是多人日志下不再无端弹「未保存的更改」、不再写本地备份的前提）。
+            _bk_snapshot()
+
+        def _on_disconnect():
+            # 已主动退出（关闭窗口 / 关闭多人日志）时不再提示
+            if window._remote is None:
+                return
+            if getattr(window, '_remote_dc_shown', False):
+                return
+            window._remote_dc_shown = True
+            window._remote = None
+            window._is_host = False
+            window._server = None
+            window._remote_sync = None
+            # 被动断开：持久化责任回到本机文件，重算“是否有未保存更改”的基线，
+            # 让会话期间累积的内容在关闭窗口时有机会被保存下来。
+            _bk_on_remote_exit()
+            # 窗口可能已随关闭一起销毁，触碰界面元素前先判活
+            if not _qt_alive(window):
+                return
+            try:
+                QMessageBox.warning(window, '多人日志已断开',
+                                    '与多人日志服务端的连接已断开，之后的修改将不再同步到服务端。\n'
+                                    '需要继续同步请重新加入多人日志。')
+                if window._local_title:
+                    # 标题上留标记：断线后窗口看起来仍像在会话中，容易误以为「日志没同步」
+                    window.setWindowTitle(f'{window._local_title} - 多人日志已断开')
+                if window._aes_action is not None:
+                    window._aes_action.setVisible(True)
+            except Exception:
+                pass
+
+        try:
+            conn.start_sync(_on_sync, _on_disconnect)
+        except Exception as e:
+            if _qt_alive(window):
+                QMessageBox.warning(window, '同步失败', f'无法启动与服务端的同步：{e}')
+        # 同步线程在 start_sync 内创建并存入 conn._sync，须在之后取用（用于读取在线客户端列表）
+        window._remote_sync = getattr(conn, '_sync', None)
+
+        # 关闭项目窗口时的统一清理：断开同步连接（客户端退出）；若本机是服务端，
+        # 同时停掉内嵌服务端（多人日志随之关闭，其他客户端会被断开）。只挂一次。
+        if not getattr(window, '_remote_cleanup_hooked', False):
+            window._remote_cleanup_hooked = True
+
+            def _cleanup_remote(*_a):
+                # 此回调由 QMainWindow.destroyed 触发，此时 C++ 对象已被删除，
+                # 只能做后端清理（restore_ui=False），绝不能再操作窗口界面。
+                srv = getattr(window, '_server', None)
+                _detach_remote(restore_ui=False)
+                if srv is not None:
+                    try:
+                        srv.stop()
+                    except Exception:
+                        pass
+
+            window.destroyed.connect(_cleanup_remote)
+
+    def _detach_remote(restore_ui=True):
+        """关闭多人日志 / 客户端退出：断开同步连接、发退出指令、恢复标题与加密菜单。
+
+        restore_ui=False 用于窗口销毁（destroyed）回调：此时窗口的 C++ 对象已删除，
+        必须跳过所有界面操作，否则会抛 libshiboken ... already deleted。
+        """
+        conn = window._remote
+        if conn is not None:
+            try:
+                conn.shutdown()
+            except Exception:
+                pass
+        window._remote = None
+        window._is_host = False
+        window._server = None
+        window._remote_sync = None
+        # 退出多人日志：内容不再由服务端持有，按“相对本机文件是否有变化”重算未保存基线
+        _bk_on_remote_exit()
+        if restore_ui and _qt_alive(window):
+            if window._local_title:
+                window.setWindowTitle(window._local_title)
+            if window._aes_action is not None:
+                window._aes_action.setVisible(True)
+
+    if _rc() is not None:
+        _attach_remote(remote, is_host, server)
+
+    # ---------- 多人日志管理：类 Minecraft 的「开放 / 加入」控制窗口 ----------
+    def open_multiplayer_manager():
+        # 复用单例对话框：重复点击菜单只聚焦已打开的窗口，避免多实例
+        dlg = getattr(window, '_mp_dialog', None)
+        if _qt_alive(dlg):
+            dlg.showNormal()
+            dlg.raise_()
+            dlg.activateWindow()
+            # 窗口曾被关闭期间的连接变化（如被动断开）需在重新打开时立即反映
+            cb = getattr(dlg, '_refresh_cb', None)
+            if cb is not None:
+                try:
+                    cb()
+                except Exception:
+                    pass
+            return
+        dlg = QDialog(window)
+        dlg.setWindowTitle('多人日志管理')
+        dlg.resize(470, 470)
+        # 标准可最小化窗口（非模态，可最小化到任务栏）
+        dlg.setWindowModality(Qt.NonModal)
+        dlg.setWindowFlags(dlg.windowFlags() | Qt.WindowMinMaxButtonsHint)
+        window._mp_dialog = dlg
+        layout = QVBoxLayout(dlg)
+
+        status = QLabel('状态：未连接')
+        layout.addWidget(status)
+
+        # ===== 服务端：开放 / 关闭多人日志 =====
+        box_srv = QGroupBox('服务端')
+        sv = QVBoxLayout(box_srv)
+        pw_lan = QLineEdit()
+        pw_lan.setEchoMode(QLineEdit.Password)
+        pw_lan.setPlaceholderText('密码（可留空）')
+        btn_tgl_lan = QPushButton('显示/隐藏')
+        def _tgl_lan():
+            if pw_lan.echoMode() == QLineEdit.Password:
+                pw_lan.setEchoMode(QLineEdit.Normal)
+            else:
+                pw_lan.setEchoMode(QLineEdit.Password)
+        btn_tgl_lan.clicked.connect(_tgl_lan)
+        hl = QHBoxLayout(); hl.addWidget(QLabel('密码：')); hl.addWidget(pw_lan, 1); hl.addWidget(btn_tgl_lan)
+        sv.addLayout(hl)
+        btn_open = QPushButton('开放多人日志')
+        sv.addWidget(btn_open)
+        layout.addWidget(box_srv)
+
+        # ===== 服务端信息（IP / 端口 / 密码）：直接显示，分别可复制；
+        #        作为「服务端」分组的内容，随服务端分组一起显隐 =====
+        info_w = QWidget()
+        iv = QVBoxLayout(info_w)
+        iv.setContentsMargins(0, 0, 0, 0)
+        lbl_ip = QLabel(''); lbl_port = QLabel(''); lbl_pw = QLabel('')
+        for _l in (lbl_ip, lbl_port, lbl_pw):
+            _l.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            _l.setWordWrap(True)
+        def _do_copy(lbl, btn):
+            QApplication.clipboard().setText(lbl.text())
+            btn.setText('已复制')
+            QTimer.singleShot(800, lambda: btn.setText('复制'))
+        def _make_row(label_text, lbl):
+            h = QHBoxLayout()
+            h.addWidget(QLabel(label_text))
+            h.addWidget(lbl, 1)
+            b = QPushButton('复制')
+            b.clicked.connect(lambda *_: _do_copy(lbl, b))
+            h.addWidget(b)
+            return h
+        iv.addLayout(_make_row('局域网地址：', lbl_ip))
+        iv.addLayout(_make_row('端口：', lbl_port))
+        iv.addLayout(_make_row('密码：', lbl_pw))
+        info_w.setVisible(False)
+        # 服务端信息归属于「服务端」分类：放进服务端分组内直接显示（不再单独成栏）
+        sv.addWidget(info_w)
+
+        # ===== 在线用户（服务端与客户端均可查看） =====
+        box_peers = QGroupBox('已连接的设备')
+        pv = QVBoxLayout(box_peers)
+        list_peers = QListWidget()
+        pv.addWidget(list_peers)
+        lbl_peer_count = QLabel('在线用户：0')
+        pv.addWidget(lbl_peer_count)
+        layout.addWidget(box_peers)
+
+        # 注意：按需求「客户端的多人日志管理不提供退出功能」，客户端本窗口只用于查看
+        # 在线用户；服务端则通过上面同一个按钮「关闭多人日志」来结束。
+
+        def _refresh():
+            rc = window._remote
+            is_guest = (rc is not None and not window._is_host)
+            # 作为客户端加入时，本窗口仅用于查看在线用户，隐藏「服务端」分栏
+            box_srv.setVisible(not is_guest)
+            if rc is None:
+                status.setText('状态：未连接')
+                btn_open.setText('开放多人日志')
+                info_w.setVisible(False)
+                pw_lan.setEnabled(True)
+            elif window._is_host:
+                status.setText(f'状态：服务端 {rc.host}:{rc.port}')
+                btn_open.setText('关闭多人日志')
+                pw_lan.setEnabled(False)
+                pw_lan.setText(rc.password)
+                # 重新打开管理窗口时，按当前连接恢复连接信息
+                lbl_ip.setText(rc.display_ip or get_lan_ip())
+                lbl_port.setText(str(rc.port))
+                lbl_pw.setText(rc.password or '（无）')
+                info_w.setVisible(True)
+            else:
+                status.setText(f'状态：客户端 {rc.host}:{rc.port}')
+                info_w.setVisible(False)
+
+        def _update_peers():
+            peers = []
+            sync = getattr(window, '_remote_sync', None)
+            if sync is not None:
+                peers = getattr(sync, 'last_peers', []) or []
+            list_peers.clear()
+            if not peers:
+                list_peers.addItem('（暂无其他用户）')
+            else:
+                for p in peers:
+                    if isinstance(p, dict):
+                        ip = str(p.get('ip', '?'))
+                        is_srv = bool(p.get('host'))
+                    else:
+                        ip, is_srv = str(p), False
+                    # 服务端单独标记，便于客户端区分
+                    list_peers.addItem(f'{ip}（服务端）' if is_srv else ip)
+            lbl_peer_count.setText(f'在线用户：{len(peers)}')
+
+        # 定时刷新在线用户列表：无论何时重连都自动生效，无需重新绑定信号
+        timer = QTimer(dlg)
+        timer.setInterval(1500)
+        timer.timeout.connect(_update_peers)
+        timer.start()
+
+        def _open_lan():
+            import time as _t
+            password = pw_lan.text()
+            rooms_dir = os.path.join('file', 'remote_rooms')
+            os.makedirs(rooms_dir, exist_ok=True)
+            name = '多人日志_' + _t.strftime('%Y%m%d_%H%M%S')
+            fhl_path = os.path.join(rooms_dir, f'{name}.fhl')
+            # 以当前日志作为多人日志初始内容（深拷贝，避免后续修改污染服务端副本）
+            srv = LogServer(password=password, port=0, fhl_path=fhl_path)
+            try:
+                srv.start(seed_list=copy.deepcopy(file))
+            except Exception as e:
+                QMessageBox.warning(dlg, '开放失败', f'无法启动服务端：{e}')
+                return
+            ip, real_port = srv.address
+            lan = get_lan_ip()
+            # 本机即服务端：以 role=host 连回本机，并上报局域网 IP 作为对外展示地址
+            conn = RemoteConnection('127.0.0.1', real_port, password,
+                                    role='host', display_ip=lan)
+            try:
+                conn.connect()
+            except Exception as e:
+                srv.stop()
+                QMessageBox.warning(dlg, '开放失败', f'无法连接本机服务端：{e}')
+                return
+            _attach_remote(conn, True, srv)
+            _refresh()
+            _update_peers()
+
+        def _close_lan():
+            srv = window._server
+            _detach_remote()
+            if srv is not None:
+                try:
+                    srv.stop()
+                except Exception:
+                    pass
+            lbl_ip.setText(''); lbl_port.setText(''); lbl_pw.setText('')
+            info_w.setVisible(False)
+            _refresh()
+            _update_peers()
+
+        def _toggle_open():
+            # 本机已作为服务端开放 → 关闭；否则开放
+            if window._remote is not None and window._is_host:
+                _close_lan()
+            else:
+                _open_lan()
+
+        btn_open.clicked.connect(_toggle_open)
+        dlg._refresh_cb = _refresh   # 复用对话框重新打开时用它立即刷新状态
+        _refresh()
+        _update_peers()
+        dlg.show()
 
     window.show()
 

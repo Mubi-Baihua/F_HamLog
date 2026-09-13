@@ -61,3 +61,19 @@
 - `play_recording` 播放时弹窗显示该日志的「时间 + 对方呼号」（`date`/`time`/`o_call`）。
 - 数据模型：`record` 默认 `''`（无录音）；`_ensure_log_keys`、`new()` 模板、`input_fhl._ensure_log_keys` 均补默认，保证字段一致。该字段已加入 `COPY_FIELDS` / `FIELD_LABELS`（中文表头「通联录音」），剪贴板复制/粘贴可往返携带录音 base64；但仍不进 Excel / ADI 导出白名单（避免超大 base64 写入表格/ADI 文件）。
 - 不依赖 `QtMultimedia`（PySide6-Essentials 不含），播放走系统默认播放器；加密模式下 base64 字符串随 JSON 一起 AES-GCM 加密。
+
+## 多人日志架构与退出/生命周期约定（important）
+- **功能只写一次**：`remote_server.py` 纯标准库 `LogServer` 引擎；客户端 `RemoteConnection`/`_SyncThread` 在 `project.py`；project 全部功能在远程模式复用，仅「落盘」改为发服务端。独立 GUI 服务端在 `F_HamLog_Remote_Log_Server_2.0/`（自带 `remote_server.py` 副本，改协议时两份同步）。
+- **退出必须走 `RemoteConnection.shutdown()`，顺序不可换**：① `sync.stop()` 置位 → ② `_close_socket()`（QUIT + shutdown/close，解除 recv 阻塞）→ ③ `sync.wait(3000)` join。先关 socket 后置位会有竞态，导致主动退出被误报「连接断开」。`_SyncThread.run()` 中 emit 断开信号前必须判 `if self._running`。
+- **Qt 关窗默认只隐藏、不触发 `destroyed`**：与窗口同生命周期的后台资源（连接/内嵌服务端/线程）必须在 `backup.install_close_guard` 的 `on_close` 回调里释放（「取消」分支不调用）；`destroyed` 仅作兜底。`destroyed` 回调里**禁止任何界面操作**（C++ 对象已删），`_detach_remote(restore_ui=False)` 就是为此。
+- **判活工具**：模块级 `_qt_alive(widget)`（`shiboken6.isValid`）。凡可能在窗口销毁后触发的回调，碰界面前都要判活。
+- **表格刷新**：`table_update(delete=True, persist=True)`。远程同步用 `table_update(persist=False)`——必须先 `removeWidget+deleteLater` 再重建（否则旧表格残留 → 两个表格），但不做 `list_time/save`（避免把刚拉到的内容立刻回写服务端）。
+- **文案约定**：统计在线人数一律用「在线用户」（不是「在线客户端」）；「服务端信息（局域网地址/端口/密码+复制）」属于「服务端」分组内的内容。客户端的管理窗只读、无退出按钮。
+- 服务端（内嵌与独立 2.0）**启动后禁用密码输入**（连带「显示/隐藏」），停止后恢复。
+- **服务端发送必须按客户端加锁**：`entry['_lock']` + `_send_entry(entry,type,payload)`，`_handle` 回包与 `_broadcast`/`_notify_peers` 广播都走它——应答线程与广播线程可能同时写同一 socket。
+- **服务端空闲判定语义（2 秒）**：`_FrameReader.read_frame(CLIENT_IDLE_TIMEOUT)`——**只有连续 2 秒一个字节都没收到**才算客户端退出（有数据就重置计时），因此大日志/大录音传输中的停顿不会误杀。实现用大块 `recv` + 自带缓冲 + `select`，socket 保持阻塞（**不要**再对连接 settimeout，广播线程的 send 会被影响）。哨兵 `_IDLE`/`_BAD` 是模块级对象。
+- **客户端心跳（大日志保活的关键）**：`RemoteConnection._start_heartbeat()`（`start_sync` 里启动 / `_close_socket` 里停）每秒发 `NEXT`，服务端回 PONG（同步线程忽略）。同步线程改为**固定 1 秒周期**（`sleep(max(0, 1.0 - 本轮耗时))`），并对瞬时异常**重试 3 次**才报断开；`recv_frame` 返回 None（对端关闭）仍立即报断开。
+- **`main.py` 只保留一个 `project_window` 引用**：新建项目窗口会回收旧窗口 → 旧窗口若开着多人日志房间，房间会静默死掉（其他端再也收不到更新）。已加 `_confirm_replace_session()` 先确认。**改动窗口管理时必须保留这个确认**。
+- **两进程真机回归脚本**：仓库根的 `__mp_host.py`（房主：开房→写端口→轮询状态）与 `__mp_guest.py`（客户端：等端口→加入→经真实表格加记录→轮询）；先跑 host（后台）再跑 guest，读 `__host_log.txt`/`__guest_log.txt`。**单进程无法验证同步**（`project.file` 是模块级全局，两个窗口共用）。
+- **「未保存更改」判定（双基线，important）**：`_bk_state = {'last': 已持久化基线, 'local': 最近一次写入本机文件的内容}`；`_bk_snapshot()` 里 `last` 总更新、**只有 `_rc() is None`（非多人日志）才更新 `local`**（所以既有 save/osave/打开 等调用点无需改动）。多人日志语义：服务端=已保存 → `_on_sync` 采纳服务端内容后（含「内容与服务端一致」的自愈分支）补 `_bk_snapshot()`；`_bk_write` 在多人日志下不写 `project_backup.fhl`（`force=True` 仅供关闭守卫「不保存」分支）；`_bk_tick` 多人日志下直接 return。退出会话（`_detach_remote` / `_on_disconnect`）调 `_bk_on_remote_exit()`：`last = snap if snap == local else ''`（'' 为恒脏哨兵）→ 只有内容相对本机文件确有变化才提示保存。关闭守卫文案由可选 `texts()` 回调定制：多人日志＝「未同步到服务端 / 同步 / 不同步」。
+- **本机数据文件不是测试的 playground**：`file/project_backup.fhl` 属用户真实数据（可能是未保存内容）。任何会跑 `project.main` 的测试都必须先备份该文件字节、finally 还原。

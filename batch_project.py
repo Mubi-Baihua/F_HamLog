@@ -720,8 +720,8 @@ def main(window, preset=None, on_saved=None, preset_records=None, recovered=Fals
 
         finish_dialog = QDialog(window)
         finish_dialog.setWindowTitle('批量记录完成')
-        finish_dialog.resize(520, 120)
-        finish_dialog.setFixedSize(520, 120)
+        finish_dialog.resize(700, 140)
+        finish_dialog.setFixedSize(700, 140)
         finish_dialog.setModal(True)
 
         finish_layout = QVBoxLayout(finish_dialog)
@@ -772,6 +772,73 @@ def main(window, preset=None, on_saved=None, preset_records=None, recovered=Fals
             QMessageBox.information(finish_dialog, '完成', f'已添加 {len(fhl_list)} 条记录到默认通联日志')
             finish_dialog.accept()
 
+        def add_to_multiplayer():
+            """把本次批量记录追加到指定的多人日志服务端（连接后拉取现有日志再整体保存）。"""
+            dlg2 = QDialog(finish_dialog)
+            dlg2.setWindowTitle('添加到多人日志')
+            dlg2.resize(360, 200)
+            v = QVBoxLayout(dlg2)
+            host_e = QLineEdit(); host_e.setPlaceholderText('服务端地址（IP 或域名）')
+            port_e = QLineEdit('8000')
+            pw_e = QLineEdit(); pw_e.setEchoMode(QLineEdit.Password); pw_e.setPlaceholderText('密码（可留空）')
+            btn_tgl = QPushButton('显示/隐藏')
+            def _tgl():
+                if pw_e.echoMode() == QLineEdit.Password:
+                    pw_e.setEchoMode(QLineEdit.Normal)
+                else:
+                    pw_e.setEchoMode(QLineEdit.Password)
+            btn_tgl.clicked.connect(_tgl)
+            r1 = QHBoxLayout(); r1.addWidget(QLabel('服务端：')); r1.addWidget(host_e, 1)
+            r2 = QHBoxLayout(); r2.addWidget(QLabel('端口：')); r2.addWidget(port_e, 1)
+            r3 = QHBoxLayout(); r3.addWidget(QLabel('密码：')); r3.addWidget(pw_e, 1); r3.addWidget(btn_tgl)
+            v.addLayout(r1); v.addLayout(r2); v.addLayout(r3)
+            bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+            bb.accepted.connect(dlg2.accept); bb.rejected.connect(dlg2.reject)
+            v.addWidget(bb)
+            if dlg2.exec() != QDialog.Accepted:
+                return
+            host = host_e.text().strip()
+            if not host:
+                QMessageBox.warning(finish_dialog, '添加到多人日志', '请输入服务端地址。')
+                return
+            try:
+                port = int(port_e.text().strip() or '8000')
+            except ValueError:
+                port = 8000
+            password = pw_e.text()
+            # 复用 project.RemoteConnection（同一份客户端逻辑，功能只写一次）
+            try:
+                from project import RemoteConnection
+            except Exception as e:
+                QMessageBox.warning(finish_dialog, '添加到多人日志', f'无法加载多人日志客户端：{e}')
+                return
+            conn = RemoteConnection(host, port, password, role='guest')
+            try:
+                conn.connect()   # 连接并拉取服务端现有日志
+                merged = list(conn.initial_file) + list(fhl_list)
+                conn.send_save(merged)
+                # 等服务端回 OK 再关闭，避免立即关闭触发 RST
+                try:
+                    conn.sock.settimeout(5.0)
+                    from remote_server import recv_frame
+                    while True:
+                        f = recv_frame(conn.sock)
+                        if f is None or f[0] == 'OK':
+                            break
+                except Exception:
+                    pass
+                conn.close()
+            except Exception as e:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+                QMessageBox.warning(finish_dialog, '添加到多人日志', f'添加失败：{e}')
+                return
+            QMessageBox.information(finish_dialog, '完成',
+                f'已添加 {len(fhl_list)} 条记录到多人日志（{host}:{port}）。')
+            finish_dialog.accept()
+
         btn_project = QPushButton('添加到 F HamLog 项目')
         btn_project.setMinimumHeight(36)
         btn_project.clicked.connect(add_to_project)
@@ -786,6 +853,11 @@ def main(window, preset=None, on_saved=None, preset_records=None, recovered=Fals
         btn_default.setMinimumHeight(36)
         btn_default.clicked.connect(add_to_default_log)
         action_row.addWidget(btn_default)
+
+        btn_multi = QPushButton('添加到多人日志')
+        btn_multi.setMinimumHeight(36)
+        btn_multi.clicked.connect(add_to_multiplayer)
+        action_row.addWidget(btn_multi)
 
         finish_layout.addLayout(action_row)
 
