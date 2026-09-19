@@ -1,44 +1,112 @@
-name: 构建 F HamLog (Nuitka)
+name: 发布 F HamLog（Nuitka → Inno Setup → 兼容版压缩包 → Releases）
 
-# 触发条件：仅在 Actions 页面手动点击 "Run workflow" 触发（可改 Python 版本 / exe 文件名）
-# 不自动构建：推送/合并代码不会触发本工作流
+# 触发方式：仅在 Actions 页面手动点击 "Run workflow"
+# 只需填写 version（同时作为 tag，例如 2.4.0），其余保留默认即可完成全流程：
+#   1. Nuitka 打包（保留 pip / 虚拟环境 / Nuitka 构建目录缓存，加速下次打包）
+#   2. Inno Setup 6 生成安装包（版本号自动注入，文件名形如 "F HamLog 2.4 setup.exe"）
+#   3. 生成兼容版压缩包（免安装，解压即用）
+#   4. 发布到 Releases（tag = 填入的版本号；附件 = 安装包 + 兼容版压缩包 + 远程日志服务端）
+#      说明内容留空，由作者在 Releases 页面手动填写
 on:
   workflow_dispatch:
     inputs:
+      version:
+        description: '版本号（同时用作 Release 的 tag，如 2.4.0 → 安装包 F HamLog 2.4 setup.exe）'
+        required: true
       python_version:
         description: '构建所用 Python 版本'
         required: false
         default: '3.13'
-      output_name:
-        description: '生成的 exe 文件名（不含 .exe）'
+      app_exe_name:
+        description: '主程序 exe 名称（不含 .exe）'
         required: false
         default: 'F HamLog 2'
+      remote_server_exe:
+        description: '随版本发布的远程日志服务端（相对仓库根目录）'
+        required: false
+        default: 'F_HamLog_Remote_Log_Server_2.0.0/dist/F_HamLog_Remote_Log_Server_2.0.0.exe'
+      draft:
+        description: '是否发布为草稿（true / false）'
+        required: false
+        default: 'false'
+      upload_debug_artifact:
+        description: '是否额外上传 main.dist 构建产物（调试用，会明显变慢）'
+        required: false
+        default: 'false'
 
-# 同一分支/手动触发只保留最新一次构建，避免排队堆积
+# 同一分支只保留最新一次发布流程，避免同时写 Releases
 concurrency:
-  group: nuitka-build-${{ github.ref }}
-  cancel-in-progress: true
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  build:
-    name: Windows Nuitka 独立打包
+  release:
+    name: 打包并发布
     runs-on: windows-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
+
+    defaults:
+      run:
+        shell: pwsh
 
     steps:
+      # ------------------------------------------------------------------
+      # 0. 解析版本号，推导全部产物名称
+      # ------------------------------------------------------------------
+      - name: 解析版本号与产物名称
+        env:
+          IN_VERSION: ${{ inputs.version }}
+          IN_APP_EXE: ${{ inputs.app_exe_name }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $version = ([string]$Env:IN_VERSION).Trim()
+          if ($version -notmatch '^\d+\.\d+(\.\d+)*$') {
+            throw "版本号格式不合法：「$version」，应形如 2.4.0"
+          }
+
+          # 2.4.0 → 2.4 ；补丁版本 2.4.1 保持原样，避免同名覆盖
+          $display = $version -replace '\.0$', ''
+
+          $appExe = ([string]$Env:IN_APP_EXE).Trim()
+          if ([string]::IsNullOrWhiteSpace($appExe)) { $appExe = 'F HamLog 2' }
+
+          # 注意：紧跟中文的变量必须写成 ${display}，否则 PowerShell 会把「变量名+中文」当一个变量名
+          $map = [ordered]@{
+            VERSION       = $version
+            DISPLAY       = $display
+            APP_EXE_NAME  = $appExe
+            SETUP_BASE    = "F HamLog $display setup"
+            ZIP_NAME      = "F HamLog ${display}兼容版.zip"
+            ASSET_SETUP   = "F.HamLog.$display.setup.exe"
+            ASSET_ZIP     = "F.HamLog.$display.zip"
+            RELEASE_TITLE = "F HamLog $display($version)"
+          }
+          # 显式按“无 BOM 的 UTF-8”写 GITHUB_ENV，避免不同 shell 下 Out-File 带 BOM 导致环境变量被污染
+          $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+          foreach ($k in $map.Keys) {
+            [System.IO.File]::AppendAllLines($env:GITHUB_ENV, [string[]]@("$k=$($map[$k])"), $utf8NoBom)
+            Write-Host "$k = $($map[$k])"
+          }
+
+          Write-Host "主程序 exe：$appExe.exe"
+          Write-Host "版本号 $version → 安装包 $($map.SETUP_BASE).exe / 兼容版 $($map.ZIP_NAME)"
+
       - name: 检出代码
         uses: actions/checkout@v4
 
-      - name: 设置 Python ${{ github.event.inputs.python_version || '3.13' }}
+      - name: 设置 Python ${{ inputs.python_version }}
         uses: actions/setup-python@v5
         with:
-          python-version: ${{ github.event.inputs.python_version || '3.13' }}
+          python-version: ${{ inputs.python_version }}
 
-      # 缓存 pip 下载，重复构建可大幅提速
-      - name: 缓存 pip
+      # ------------------------------------------------------------------
+      # 1. 依赖与缓存
+      # ------------------------------------------------------------------
+      - name: 缓存 pip 下载
         uses: actions/cache@v4
         with:
           path: ~\AppData\Local\pip\Cache
@@ -46,18 +114,67 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pip-
 
-      # 依赖列表来自仓库根目录 第三方模块.txt
-      - name: 安装依赖
-        run: |
-          python -m pip install --upgrade pip
-          pip install pyside6 pandas openpyxl nuitka skyfield numpy cryptography matplotlib
+      # Nuitka 会下载 depends.exe 等辅助工具，缓存下来下次免下载
+      - name: 缓存 Nuitka 辅助工具
+        uses: actions/cache@v4
+        with:
+          path: ~\AppData\Local\Nuitka
+          key: ${{ runner.os }}-nuitka-tools
 
-      # 与本地 打包.txt 保持一致的 Nuitka 参数
+      # 直接复用上一次装好的虚拟环境，可省掉数分钟依赖安装时间
+      - name: 缓存虚拟环境（依赖）
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: ${{ runner.os }}-venv-${{ inputs.python_version }}-${{ hashFiles('第三方模块.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-venv-${{ inputs.python_version }}-
+
+      - name: 准备虚拟环境与依赖
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $venv   = Join-Path $env:GITHUB_WORKSPACE '.venv'
+          $venvPy = Join-Path $venv 'Scripts\python.exe'
+
+          # 缓存命中时先校验依赖是否齐全（Python 补丁版本变化会让旧 venv 失效）
+          $ready = $false
+          if (Test-Path $venvPy) {
+            & $venvPy -c "import PySide6, pandas, openpyxl, skyfield, numpy, cryptography, matplotlib, nuitka" 2>$null
+            if ($LASTEXITCODE -eq 0) { $ready = $true; Write-Host '缓存命中：直接复用虚拟环境' }
+          }
+
+          if (-not $ready) {
+            Write-Host '缓存未命中或已失效：重建虚拟环境并安装依赖'
+            if (Test-Path $venv) { Remove-Item $venv -Recurse -Force }
+            python -m venv $venv
+            if ($LASTEXITCODE -ne 0) { throw '创建虚拟环境失败' }
+            & $venvPy -m pip install --upgrade pip
+            & $venvPy -m pip install pyside6 pandas openpyxl nuitka skyfield numpy cryptography matplotlib
+            if ($LASTEXITCODE -ne 0) { throw '安装依赖失败' }
+          }
+
+          [System.IO.File]::AppendAllLines($env:GITHUB_ENV, [string[]]@("PYTHON_VENV=$venvPy"), (New-Object System.Text.UTF8Encoding $false))
+          & $venvPy -c "import sys, nuitka, PySide6, skyfield; print('Python', sys.version.split()[0]); print('Nuitka', nuitka.__version__)"
+
+      # ------------------------------------------------------------------
+      # 2. Nuitka 独立打包
+      # ------------------------------------------------------------------
+      # 缓存 main.build：源码未变动的模块会跳过 C 编译与链接，显著加速下一次打包
+      - name: 缓存 Nuitka 构建目录
+        uses: actions/cache@v4
+        with:
+          path: main.build
+          key: ${{ runner.os }}-nuitka-build-${{ inputs.python_version }}-${{ hashFiles('*.py') }}
+          restore-keys: |
+            ${{ runner.os }}-nuitka-build-${{ inputs.python_version }}-
+            ${{ runner.os }}-nuitka-build-
+
       - name: Nuitka 独立打包
         run: |
-          python -m nuitka --standalone `
+          $ErrorActionPreference = 'Stop'
+          & $env:PYTHON_VENV -m nuitka --standalone `
             --assume-yes-for-downloads `
-            --output-filename="${{ github.event.inputs.output_name || 'F HamLog 2' }}" `
+            --output-filename="$env:APP_EXE_NAME" `
             --main=main.py `
             --windows-icon-from-ico=file\F_HamLog.ico `
             --msvc=latest `
@@ -66,13 +183,174 @@ jobs:
             --include-package=skyfield `
             --include-package-data=skyfield `
             --include-package=numpy `
+            --include-module=remote_crypto `
             --windows-uac-admin `
             --include-data-dir=file=file/
+          if ($LASTEXITCODE -ne 0) { throw "Nuitka 打包失败（退出码 $LASTEXITCODE）" }
 
-      - name: 列出构建产物（调试用）
-        run: Get-ChildItem -Recurse main.dist | Select-Object FullName, Length
+      - name: 校验打包产物
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = Join-Path $env:GITHUB_WORKSPACE "main.dist\$env:APP_EXE_NAME.exe"
+          if (-not (Test-Path $exe)) { throw "未找到主程序：$exe" }
+          $size = [math]::Round((Get-Item $exe).Length / 1MB, 1)
+          Write-Host "主程序：$exe（$size MB）"
+          Write-Host 'main.dist 文件数：' ([System.IO.Directory]::GetFiles("$env:GITHUB_WORKSPACE\main.dist", '*', 'AllDirectories').Count)
 
-      - name: 上传构建产物
+      # ------------------------------------------------------------------
+      # 3. Inno Setup 6 生成安装包（自动注入版本号）
+      # ------------------------------------------------------------------
+      - name: 生成安装包（Inno Setup 6）
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          # 运行器一般自带 Inno Setup 6，找不到就在常见目录与 Chocolatey 里找
+          $candidates = @(
+            'C:\Program Files (x86)\Inno Setup 6\ISCC.exe',
+            'C:\Program Files\Inno Setup 6\ISCC.exe',
+            (Join-Path $env:LOCALAPPDATA 'Programs\Inno Setup 6\ISCC.exe')
+          )
+          $iscc = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $iscc) {
+            $iscc = (Get-ChildItem 'C:\Program Files (x86)', 'C:\Program Files' -Filter 'ISCC.exe' -Recurse -ErrorAction SilentlyContinue |
+                     Select-Object -First 1).FullName
+          }
+          if (-not $iscc) {
+            Write-Host '未找到 Inno Setup，尝试通过 Chocolatey 安装'
+            choco install innosetup -y --no-progress
+            $iscc = (Get-ChildItem 'C:\Program Files (x86)', 'C:\Program Files' -Filter 'ISCC.exe' -Recurse -ErrorAction SilentlyContinue |
+                     Select-Object -First 1).FullName
+          }
+          if (-not $iscc) { throw '未找到 ISCC.exe，无法生成安装包' }
+          Write-Host "使用编译器：$iscc"
+
+          $script = Join-Path $env:GITHUB_WORKSPACE '.github\inno\F HamLog 2.iss'
+          & $iscc `
+            "/DMyAppVersion=$env:VERSION" `
+            "/DOutputBaseFilename=$env:SETUP_BASE" `
+            "/DMyAppExeName=$env:APP_EXE_NAME.exe" `
+            "/DRepoRoot=$env:GITHUB_WORKSPACE" `
+            $script
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup 编译失败（退出码 $LASTEXITCODE）" }
+
+          $setup = Join-Path $env:GITHUB_WORKSPACE "release\$env:SETUP_BASE.exe"
+          if (-not (Test-Path $setup)) { throw "未生成安装包：$setup" }
+
+          # 校验版本号确实注入成功（ProductVersion 由系统补空格，必须 Trim 后比较）
+          $actual = ([string](Get-Item $setup).VersionInfo.ProductVersion).Trim()
+          if ($actual -ne $env:VERSION) {
+            throw "安装包版本号不一致：期望 $env:VERSION，实际 $actual"
+          }
+          $size = [math]::Round((Get-Item $setup).Length / 1MB, 1)
+          Write-Host "安装包：$setup（$size MB，版本 $actual）"
+
+      # ------------------------------------------------------------------
+      # 4. 兼容版压缩包（免安装）
+      # ------------------------------------------------------------------
+      - name: 生成兼容版压缩包
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $src = Join-Path $env:GITHUB_WORKSPACE 'main.dist'
+          $dst = Join-Path $env:GITHUB_WORKSPACE "release\$env:ZIP_NAME"
+          if (Test-Path $dst) { Remove-Item $dst -Force }
+
+          $sevenZip = 'C:\Program Files\7-Zip\7z.exe'
+          if (Test-Path $sevenZip) {
+            Push-Location $src
+            try {
+              & $sevenZip a -tzip -mx=5 $dst *
+              if ($LASTEXITCODE -ne 0) { throw "7-Zip 压缩失败（退出码 $LASTEXITCODE）" }
+            } finally { Pop-Location }
+          } else {
+            Compress-Archive -Path (Join-Path $src '*') -DestinationPath $dst -CompressionLevel Optimal
+          }
+
+          if (-not (Test-Path $dst)) { throw "未生成兼容版压缩包：$dst" }
+          $size = [math]::Round((Get-Item $dst).Length / 1MB, 1)
+          Write-Host "兼容版压缩包：$dst（$size MB）"
+
+      # ------------------------------------------------------------------
+      # 5. 汇总附件并发布到 Releases
+      # ------------------------------------------------------------------
+      - name: 准备发布附件
+        env:
+          IN_REMOTE_EXE: ${{ inputs.remote_server_exe }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $assets = Join-Path $env:GITHUB_WORKSPACE 'release_assets'
+          if (Test-Path $assets) { Remove-Item $assets -Recurse -Force }
+          New-Item -ItemType Directory -Path $assets -Force | Out-Null
+
+          # 安装包与兼容版压缩包：历史 Release 用点号命名（F.HamLog.2.4.setup.exe），保持一致
+          Copy-Item (Join-Path $env:GITHUB_WORKSPACE "release\$env:SETUP_BASE.exe") (Join-Path $assets $env:ASSET_SETUP) -Force
+          Copy-Item (Join-Path $env:GITHUB_WORKSPACE "release\$env:ZIP_NAME") (Join-Path $assets $env:ASSET_ZIP) -Force
+
+          # 远程日志服务端：直接取仓库中已打包好的文件，不重新打包
+          $remote = ([string]$Env:IN_REMOTE_EXE).Trim() -replace '/', '\'
+          if ([string]::IsNullOrWhiteSpace($remote)) {
+            Write-Host '未指定远程日志服务端，跳过'
+          } else {
+            $remotePath = Join-Path $env:GITHUB_WORKSPACE $remote
+            if (-not (Test-Path $remotePath)) { throw "找不到远程日志服务端：$remotePath" }
+            Copy-Item $remotePath (Join-Path $assets (Split-Path $remote -Leaf)) -Force
+            Write-Host "远程日志服务端：$remotePath"
+          }
+
+          Get-ChildItem $assets -File | ForEach-Object {
+            Write-Host ("附件：{0}（{1} MB）" -f $_.Name, [math]::Round($_.Length / 1MB, 1))
+          }
+
+      - name: 发布到 Releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IN_DRAFT: ${{ inputs.draft }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $repo   = '${{ github.repository }}'
+          $tag    = $env:VERSION
+          $assets = (Get-ChildItem (Join-Path $env:GITHUB_WORKSPACE 'release_assets') -File).FullName
+          $isDraft = ([string]$Env:IN_DRAFT).Trim().ToLower() -eq 'true'
+
+          # 说明内容留空（由作者在 Releases 页面手动填写）：
+          # 不传 --title / --notes / --generate-notes，标题即 tag，正文为空。
+
+          gh release view $tag -R $repo --json tagName *> $null
+          if ($LASTEXITCODE -eq 0) {
+            # 已存在：只覆盖同名附件，不动标题与说明，避免抹掉手写内容
+            Write-Host "Release $tag 已存在：覆盖同名附件（标题与说明保持不变）"
+            gh release upload $tag $assets -R $repo --clobber
+            if ($LASTEXITCODE -ne 0) { throw '上传附件失败' }
+          } else {
+            Write-Host "创建 Release：$tag（说明留空，待手动填写）"
+            $createArgs = @('release', 'create', $tag) + $assets + @(
+              '-R', $repo,
+              '--target', '${{ github.sha }}'
+            )
+            if ($isDraft) { $createArgs += '--draft' }
+            gh @createArgs
+            if ($LASTEXITCODE -ne 0) { throw "创建 Release 失败（退出码 $LASTEXITCODE）" }
+          }
+
+          $url = (gh release view $tag -R $repo --json url --jq .url)
+          Write-Host "发布完成：$url"
+          Write-Host '请到 Releases 页面手动填写说明内容。'
+
+          # 逐行构建，避免嵌套数组被 [string[]] 拼接成一行
+          $summary = New-Object System.Collections.Generic.List[string]
+          $summary.Add("## 发布完成：$env:RELEASE_TITLE")
+          $summary.Add('')
+          $summary.Add("- tag：``$tag``")
+          $summary.Add("- Release：$url")
+          $summary.Add("- 提交：``${{ github.sha }}``")
+          $summary.Add('- 说明内容：留空，待手动填写')
+          $summary.Add('')
+          $summary.Add('### 已上传附件')
+          $summary.Add('')
+          foreach ($a in $assets) { $summary.Add("- ``$(Split-Path $a -Leaf)``") }
+          [System.IO.File]::AppendAllLines($env:GITHUB_STEP_SUMMARY, $summary.ToArray(), (New-Object System.Text.UTF8Encoding $false))
+
+      - name: 上传构建产物（调试用）
+        if: ${{ inputs.upload_debug_artifact == 'true' }}
         uses: actions/upload-artifact@v4
         with:
           name: F-HamLog-dist

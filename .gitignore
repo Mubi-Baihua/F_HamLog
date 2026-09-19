@@ -34,3 +34,9 @@ file/_key_backup_*/
 # 临时调试产物
 __*_out.txt
 __*.log
+
+# 发布流程（GitHub Actions / 本地用 CI 脚本打包）的中间产物
+/release/
+/release_assets/
+/.venv/
+main.build/

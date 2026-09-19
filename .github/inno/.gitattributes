@@ -1,0 +1,2 @@
+# Inno Setup 语言文件必须保持 CRLF 换行，避免被检出的换行符转换影响编译
+*.isl text eol=crlf
