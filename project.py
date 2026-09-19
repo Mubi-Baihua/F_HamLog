@@ -2436,7 +2436,9 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
             return
         dlg = QDialog(window)
         dlg.setWindowTitle('多人日志管理')
-        dlg.resize(470, 470)
+        # 窗口比初版加宽、加高：服务端信息里的「局域网地址 / 密钥指纹」在 470 宽时容易被折行，
+        # 「已连接的设备」列表也只有几行可见；放宽后分组信息与在线用户列表都能完整展示。
+        dlg.resize(640, 640)
         # 标准可最小化窗口（非模态，可最小化到任务栏）
         dlg.setWindowModality(Qt.NonModal)
         dlg.setWindowFlags(dlg.windowFlags() | Qt.WindowMinMaxButtonsHint)

@@ -6,6 +6,8 @@
 可作为独立 exe 运行，托管一个多人日志服务端，供各客户端通过 IP:端口 + 密码加入。
 
 功能：
+- 首次运行时自动创建所需目录与文件：keys/（长期密钥）、main.fhl（空日志）、password_xml.txt（密码），
+  因此分发包里只要一个 exe 即可；
 - 设置端口与密码后「启动」即可监听，日志落盘到同目录 main.fhl；
 - 实时显示监听地址、在线用户数与事件日志；
 - 启动后禁用密码输入，避免运行中改动；「停止」或关闭窗口即结束服务（在线客户端会被断开）。
@@ -19,9 +21,17 @@ from PySide6.QtWidgets import *
 from PySide6.QtCore import QObject, Signal, Qt
 from PySide6.QtGui import QIcon
 import remote_server
+import remote_crypto
 
 
 def _app_dir():
+    """程序所在目录：keys/、main.fhl、password_xml.txt 等运行数据都落在这里。
+
+    打包成 onefile 后 __file__ 可能指向运行时解包的临时目录（进程退出即被清理），
+    因此已打包时必须优先取 sys.executable 所在目录，保证文件建在 exe 旁边而不是临时目录。
+    """
+    if getattr(sys, 'frozen', False) or '__compiled__' in globals():
+        return os.path.dirname(os.path.abspath(sys.executable))
     return os.path.dirname(os.path.abspath(__file__))
 
 
@@ -112,11 +122,59 @@ class ServerGUI(QMainWindow):
         self.log_box.setReadOnly(True)
         lay.addWidget(self.log_box)
 
+        # 首次运行 / 程序被放在新目录下时，先把运行所需的目录与文件建好，再读取密码
+        for err in self._ensure_runtime_files():
+            self._ev.log.emit(err)
         # 预填已保存的密码（若存在），否则用默认值——密码会随「启动」/关闭自动保存
         self.pass_edit.setText(self._load_password())
 
         # 显示本机局域网地址，方便分享
         self._ev.log.emit(f'本机局域网地址参考：{remote_server.get_lan_ip()}')
+
+    # ---- 运行所需的文件与目录（首次运行自动创建）----
+    def _ensure_runtime_files(self):
+        """确保 keys/、main.fhl、password_xml.txt 都存在，缺失则按默认值自动创建。
+
+        三样东西都放在程序目录下（见 _app_dir），因此分发时只要一个 exe 即可运行，
+        不需要额外预置文件。返回失败项的文字说明（全部成功则为空列表），由调用方写进事件日志：
+        装在只读目录（如 Program Files）等情况下不该让界面打不开，但要让操作者看得见。
+        """
+        failed = []
+        base = _app_dir()
+
+        def _guard(what, fn):
+            try:
+                fn()
+            except Exception as e:
+                failed.append(f'自动创建{what}失败：{e}')
+
+        # 1) 长期密钥目录 + 当前端口对应的长期密钥文件
+        #    （指纹由此生成：同一端口固定身份，换端口即换身份）
+        _guard('密钥目录', lambda: os.makedirs(os.path.join(base, 'keys'), exist_ok=True))
+        try:
+            port = int(self.port_edit.text().strip() or '8000')
+        except ValueError:
+            port = 8000
+        _guard('长期密钥', lambda: remote_crypto.load_or_create_server_key(
+            remote_crypto.key_file_for_port(port, base)))
+
+        # 2) 房间日志：先落一份空日志，避免首次运行时该文件缺失
+        def _make_fhl():
+            fhl = os.path.join(base, 'main.fhl')
+            if not os.path.exists(fhl):
+                with open(fhl, 'w', encoding='utf-8') as f:
+                    f.write('[]')
+        _guard('房间日志', _make_fhl)
+
+        # 3) 密码文件：不存在时写入默认密码（与 _load_password 的兜底值保持一致）
+        def _make_pw():
+            pw = self._password_path()
+            if not os.path.exists(pw):
+                with open(pw, 'w', encoding='utf-8') as f:
+                    f.write('000000')
+        _guard('密码文件', _make_pw)
+
+        return failed
 
     # ---- 密码持久化 ----
     def _password_path(self):

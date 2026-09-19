@@ -27,6 +27,8 @@ file/known_server_keys.txt
 file/remote_rooms/
 F_HamLog_Remote_Log_Server_2.0.0/main.fhl
 F_HamLog_Remote_Log_Server_2.0.0/keys/
+# 独立服务端的密码存储（明文密码，且由程序自动创建，绝不入库）
+F_HamLog_Remote_Log_Server_2.0.0/password_xml.txt
 
 # 密钥迁移备份（手工清理）
 file/_key_backup_*/
