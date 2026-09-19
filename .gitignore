@@ -21,7 +21,7 @@ file/keys/
 keys/
 *.fhlkey
 # 客户端「已知服务端公钥」记录（TOFU 信任库，各机器不同）
-file/known_server_keys.txt
+#file/known_server_keys.txt
 
 # 多人日志房间的会话日志：每次「开放多人日志」新建一份，属运行时数据
 file/remote_rooms/
@@ -31,7 +31,7 @@ F_HamLog_Remote_Log_Server_2.0.0/keys/
 F_HamLog_Remote_Log_Server_2.0.0/password_xml.txt
 
 # 密钥迁移备份（手工清理）
-file/_key_backup_*/
+#file/_key_backup_*/
 
 # 临时调试产物
 __*_out.txt

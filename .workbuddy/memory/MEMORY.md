@@ -62,7 +62,8 @@
 
 ## 独立服务端（F_HamLog_Remote_Log_Server_2.0.0）
 - 启动即**自动创建所需文件与目录**：`keys/`（含当前端口长期密钥 `server_<端口>.fhlkey`）、`main.fhl`（空日志 `[]`）、`password_xml.txt`（默认 `000000`）；`_ensure_runtime_files()` 返回失败项文字，由 `__init__` 写进事件日志（只读目录下也不影响开窗）。分发时只需一个 exe。
-- `_app_dir()` 已打包（`sys.frozen` / `__compiled__`）时优先取 `sys.executable` 所在目录 —— onefile 的 `__file__` 可能指向临时解包目录，否则数据会写丢。**注意 `main.py` 必须自己 `import remote_crypto`**（此前漏了，密钥创建被静默跳过）。
+- `_app_dir()` **不能信 `sys.executable`/`__file__`**：Nuitka onefile 下两者都指向 `%TEMP%\onefile_<PID>_…`（退出即清理），`sys.frozen` 不存在（只有 `'__compiled__' in globals()` 为 True）。正确顺序：① `os.environ['NUITKA_ONEFILE_DIRECTORY']`（引导程序给的 exe 目录）→ ② `sys.argv[0]` 再 `sys.executable` 的目录 → ③ `__file__` 目录。启动时会在事件日志打印「数据目录：…」。**注意 `main.py` 必须自己 `import remote_crypto`**（曾漏，密钥创建被静默跳过）。
+- 该 exe 带 `--windows-uac-admin`：非提权进程直接启动会 `WinError 740`；要端到端验证就另打一个**去掉 uac-admin** 的临时测试包（不覆盖 `dist/` 正式产物）。该 exe 是 git 跟踪文件，发布工作流默认路径就是 `F_HamLog_Remote_Log_Server_2.0.0/dist/F_HamLog_Remote_Log_Server_2.0.0.exe`，重打后需提交。
 - 客户端「多人日志管理」窗为可最小化的非模态 `QDialog`（`project.open_multiplayer_manager`，当前 640×640），单例复用（`window._mp_dialog`）。
 
 ## 验证环境（离屏 GUI 冒烟）

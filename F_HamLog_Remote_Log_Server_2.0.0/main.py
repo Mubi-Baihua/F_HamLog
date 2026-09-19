@@ -27,11 +27,24 @@ import remote_crypto
 def _app_dir():
     """程序所在目录：keys/、main.fhl、password_xml.txt 等运行数据都落在这里。
 
-    打包成 onefile 后 __file__ 可能指向运行时解包的临时目录（进程退出即被清理），
-    因此已打包时必须优先取 sys.executable 所在目录，保证文件建在 exe 旁边而不是临时目录。
+    **打包成 onefile 后不能信 sys.executable / __file__**：实测二者都指向运行时的临时解包目录
+    （如 %TEMP%\\onefile_<PID>_…，进程退出即被清理），照此写盘会「看似建了、退出就没了」。
+    Nuitka 的 onefile 引导程序会把原始 exe 所在目录写进 NUITKA_ONEFILE_DIRECTORY，优先用它。
     """
+    # ① Nuitka onefile：引导程序给出的「exe 所在目录」
+    env_dir = os.environ.get('NUITKA_ONEFILE_DIRECTORY')
+    if env_dir and os.path.isdir(env_dir):
+        return os.path.normpath(env_dir)
+    # ② 其它打包形态（Nuitka standalone / PyInstaller 等）：取原始程序路径所在目录。
+    #    onefile 下 sys.executable 指向临时目录，sys.argv[0] 才是原始程序，故前者优先。
     if getattr(sys, 'frozen', False) or '__compiled__' in globals():
-        return os.path.dirname(os.path.abspath(sys.executable))
+        for cand in ((sys.argv[0] if sys.argv else ''), sys.executable or ''):
+            if not cand:
+                continue
+            d = os.path.dirname(os.path.abspath(cand))
+            if d and os.path.isdir(d):
+                return os.path.normpath(d)
+    # ③ 源码运行
     return os.path.dirname(os.path.abspath(__file__))
 
 
@@ -125,6 +138,7 @@ class ServerGUI(QMainWindow):
         # 首次运行 / 程序被放在新目录下时，先把运行所需的目录与文件建好，再读取密码
         for err in self._ensure_runtime_files():
             self._ev.log.emit(err)
+        self._ev.log.emit(f'数据目录：{_app_dir()}')
         # 预填已保存的密码（若存在），否则用默认值——密码会随「启动」/关闭自动保存
         self.pass_edit.setText(self._load_password())
 
