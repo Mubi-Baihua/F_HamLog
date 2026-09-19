@@ -154,7 +154,8 @@ jobs:
           }
 
           [System.IO.File]::AppendAllLines($env:GITHUB_ENV, [string[]]@("PYTHON_VENV=$venvPy"), (New-Object System.Text.UTF8Encoding $false))
-          & $venvPy -c "import sys, nuitka, PySide6, skyfield; print('Python', sys.version.split()[0]); print('Nuitka', nuitka.__version__)"
+          # 版本号用 importlib.metadata 读取（Nuitka 4.x 已移除 nuitka.__version__）
+          & $venvPy -c "import sys, importlib.metadata as md; print('Python', sys.version.split()[0]); [print(n, md.version(n)) for n in ('nuitka','PySide6','skyfield','numpy')]"
 
       # ------------------------------------------------------------------
       # 2. Nuitka 独立打包
@@ -306,7 +307,7 @@ jobs:
           IN_DRAFT: ${{ inputs.draft }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $repo   = '${{ github.repository }}'
+          $repo   = $env:GITHUB_REPOSITORY
           $tag    = $env:VERSION
           $assets = (Get-ChildItem (Join-Path $env:GITHUB_WORKSPACE 'release_assets') -File).FullName
           $isDraft = ([string]$Env:IN_DRAFT).Trim().ToLower() -eq 'true'
@@ -324,7 +325,7 @@ jobs:
             Write-Host "创建 Release：$tag（说明留空，待手动填写）"
             $createArgs = @('release', 'create', $tag) + $assets + @(
               '-R', $repo,
-              '--target', '${{ github.sha }}'
+              '--target', $env:GITHUB_SHA
             )
             if ($isDraft) { $createArgs += '--draft' }
             gh @createArgs
@@ -341,7 +342,7 @@ jobs:
           $summary.Add('')
           $summary.Add("- tag：``$tag``")
           $summary.Add("- Release：$url")
-          $summary.Add("- 提交：``${{ github.sha }}``")
+          $summary.Add("- 提交：``$env:GITHUB_SHA``")
           $summary.Add('- 说明内容：留空，待手动填写')
           $summary.Add('')
           $summary.Add('### 已上传附件')

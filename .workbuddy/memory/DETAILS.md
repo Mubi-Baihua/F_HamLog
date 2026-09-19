@@ -35,3 +35,26 @@
 - 转发器表 `file/sat_radio_dict.txt`、TQSL 映射 `file/tqsl_dict.txt`、星下点标记 `file/sat_map_markers.txt`。
 - 呼号大写委托：挂完 `setItemDelegateForRow` 必须 `table._upper_call_delegate = delegate` 保留引用，否则 Python 端 delegate 被回收导致编辑异常。核心 `_upper_in_place` 用 `setText`+`setCursorPosition` 保光标；`text.upper()` 幂等。
 - 呼号大写接入点：① `project.main()` 打开项目时遍历 `file` 把每条 `m_call`/`o_call` 转大写（仅当 `file` 为 list）；② `new()`/`project_others()` 行2(己方)/行3(对方) 挂委托；③ `research_call()` 搜索关键词；④ `find_replace()` 查找/替换框（按字段联动）；⑤ `set.py`「我的呼号」；⑥ `batch_project.py` 模板表与翻页表（行2/3），且 `app_list['m_call']` 取自设置即转大写。
+
+## 验证环境（离屏 GUI 冒烟）
+- venv 已装 PySide6-Essentials+cryptography+skyfield+numpy，可 `QT_QPA_PLATFORM=offscreen` 做真实 GUI 冒烟（建窗/后台线程/读表/点按钮）。
+- **`project.py` 主窗口在 offscreen 下硬崩溃**（无回溯、exit 1）——环境限制非代码问题；`main/satellite_window/mutual_window/batch_project` 均可正常离屏。
+- 测完务必核对并还原 `file/m_xml.txt`（测试脚本可能写入坐标残留）。注意 `m_lat/m_lon=0,0` 时打开卫星窗口会先弹「设置观测站」引导框，抢在待测提示框前面。
+- **离屏测「嵌套模态消息框」**（`QMessageBox.exec()` 由 `accept()` 内部弹出）：
+  ① 必须显式触发 `QTimer.singleShot(150, dlg.accept)`，否则消息框不出现；
+  ② 点击用**独立 `QTimer()` 对象**轮询（`setInterval(50)`+`timeout.connect`），**不要用链式 `singleShot`**（模态嵌套后不再触发→挂死）；
+  ③ 找按钮**必须限定 `isinstance(w, QMessageBox) and w.isVisible()`**（`topLevelWidgets()` 会返回主对话框自身，点到隐藏控件不触发槽）；
+  ④ 被拦下后对话框**故意保持打开**，测试需再补一次点击（如「取消」）结束 `exec()`；
+  ⑤ 抓第二个框要用 `delay_ms` 跳过第一个框；
+  ⑥ **标准按钮 `text()` 带助记符**（实测 `'&Yes'`/`'&No'`），按文本 `=='Yes'` **点不到**，必须用 `w.button(QMessageBox.StandardButton.Yes)` 按 role 匹配（自定义 `addButton` 的按钮无 `&`，可按文本）；
+  ⑦ 测「开窗即弹提示」时 `main()` 里的同步模态会阻塞主线程 → 用 `QTimer.singleShot(80, lambda: main(None))` 延迟触发。见 `test_max_selected_smoke.py`。
+- **两进程真机回归**：仓库根 `__mp_host.py`（房主：开房→写端口+指纹→轮询状态）与 `__mp_guest.py`（客户端：等端口→**经 `verify_fingerprint` 走真实核对路径**→加入→经真实表格加记录→轮询）；先跑 host（后台）再跑 guest，读 `__host_log.txt`/`__guest_log.txt`。**单进程无法验证同步**（`project.file` 是模块级全局，两个窗口共用）。
+
+## 卫星选择对话框：搜索/置顶/超限机制
+- `SatelliteSelectDialog` 搜索过滤预计算 `self._norm`，计数显示「匹配 N / 共 M 颗」，全选/全不选**只作用于可见项**；维护 `self._row_names`（行号→卫星名）以便按行号隐藏；过滤后 `scrollToItem(首个匹配项, PositionAtTop)`。**搜索期间被隐藏但已勾选的项，点「确定」仍保留在 `get_selected()`（有意设计）**。
+- 未搜索时已选置顶：搜索框为空时 `_filter` 末尾调 `_reorder_pin_selected()` 把已勾选项物理重排到顶部（已选在前、保持各自原相对顺序）并同步 `_row_names`；`itemChanged`→`_on_item_changed` 勾选一变即重排（新勾选自动跳顶），`self._reordering` 守卫防递归；搜索中不重排。取出 item 用尾部 `takeItem(count-1)`（O(1)/次）而非 `takeItem(0)`（O(N)/次），整体 O(N)，避免数千颗时 O(N²)。
+- `clamp_selected_count(n)` → `(保留集合, 裁掉数)`。
+- `SatelliteSelectDialog.accept()` 超限不关闭：置 `self.reset_requested=True` + `super().reject()`；两处调用方（`satellite_window`/`mutual_window` 的 `open_select`）用 `while True:` 循环——`Accepted`→裁剪+break；`Rejected && reset_requested`→`selected_names=set()` 后**关窗重开**；否则 return。`_persist()/run_prediction()/推地图` 移出循环只跑一次。**原因**：原地对数千项 `setCheckState` 会逐次触发 `itemChanged`→重排+刷新标签，O(N²) 卡顿。旧的 `_clear_all_selected()` 已删除。
+- `m_xml` 中的自选超限不再静默裁剪：两处 `main()` 读 `sat_sats`/`mu_sats` 后先 `clamp_selected_count` 兜底（防卡）并记 `_oversized_from_settings`，`win.show()` 之后弹提示，选清除则 `selected_names.clear()` + `_persist()`。
+- 计数标签 = `self._count_base` 缓存基数 + `　已选 N 颗`，超限追加「，超过上限 500 颗」并转红。
+- `import_tle()` 默认全选同样受上限约束。测试 `test_max_selected_smoke.py`（36 项，含重开循环模拟与 m_xml 超限提示三分支）。

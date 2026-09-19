@@ -24,17 +24,11 @@
 - **地图铺满且保持 2:1**：`_map_rect()` 直接返回整块画布；`MapWindow.showEvent()` 首次显示按「画布宽/2」锁窗口高（1192→675，画布 1174×587 精确 2:1），并 `setMinimumHeight` 防缩小变形。
 
 ## 卫星名匹配（归一化，全局统一）
-- 工具 `normalize_sat_name`（只留字母数字并大写，抹平大小写/空格/短横线/括号）、`sat_name_match(name,keys)`（多关键词 AND）、`parse_sat_keywords(text)`。
-- 场景：① `SatelliteSelectDialog` 搜索过滤（预计算 `self._norm`，计数「匹配 N / 共 M 颗」，全选/全不选只作用于可见项）；② `lookup_transponder` 第 6 层归一化兜底（表中 `AO-91` 可匹配 TLE 名 `AO 91`）。改匹配规则两处应同步。
-- **隐藏行必须 `QListWidget.setRowHidden(row,hide)`**，不能用 `QListWidgetItem.setHidden()`（只改标志、不保证触发 `doItemsLayout()` 重排）。对话框维护 `self._row_names`（行号→卫星名）以便按行号隐藏；过滤后 `scrollToItem(首个匹配项, PositionAtTop)`。
-- 搜索期间被隐藏但已勾选的项，点「确定」仍保留在 `get_selected()`（有意设计）。
-- **未搜索时已选置顶**：搜索框为空时 `_filter` 末尾调 `_reorder_pin_selected()` 把已勾选项物理重排到顶部（已选在前、保持各自原相对顺序）并同步 `_row_names`；`itemChanged`→`_on_item_changed` 勾选一变即重排（新勾选自动跳顶），`self._reordering` 守卫防递归；搜索中不重排。取出 item 用尾部 `takeItem(count-1)`（O(1)/次）而非 `takeItem(0)`（O(N)/次），整体 O(N)，避免数千颗时 O(N²)。
-- 上限 `MAX_SELECTED_SATELLITES=500` + `clamp_selected_count(n)` → `(保留集合, 裁掉数)`；裁剪取**排序后前 N 个**（set 无序，保证结果可复现）。
-- 超限提示统一走 `satellite_window.prompt_over_limit_selection(parent, n, limit, source_hint='')`：True=用户确认「清除所有选择」（已过二次确认）/ False=「重新选择」或取消。文案与按钮（**重新选择** / **清除所有选择** / 取消，**不含"一键"**）全集中此处，两个入口共用（对话框 accept、开窗读设置发现超限）。改文案只改这里。
-- `SatelliteSelectDialog.accept()` 超限不关闭：置 `self.reset_requested=True` + `super().reject()`；两处调用方（`satellite_window`/`mutual_window` 的 `open_select`）用 `while True:` 循环——`Accepted`→裁剪+break；`Rejected && reset_requested`→`selected_names=set()` 后**关窗重开**；否则 return。`_persist()/run_prediction()/推地图` 移出循环只跑一次。**原因**：原地对数千项 `setCheckState` 会逐次触发 `itemChanged`→重排+刷新标签，O(N²) 卡顿。旧的 `_clear_all_selected()` 已删除。
-- `m_xml` 中的自选超限不再静默裁剪：两处 `main()` 读 `sat_sats`/`mu_sats` 后先 `clamp_selected_count` 兜底（防卡）并记 `_oversized_from_settings`，`win.show()` 之后弹上述提示，选清除则 `selected_names.clear()` + `_persist()`。
-- 计数标签 = `self._count_base` 缓存基数 + `　已选 N 颗`，超限追加「，超过上限 500 颗」并转红。**必须由缓存重建标签，不要读 `count_label.text()` 当基数**——否则每次勾选变化都会累加。
-- 兜底三处：对话框 accept()、两处调用方 `open_select`、加载设置后立即裁剪；`import_tle()` 默认全选同样受上限约束。测试 `test_max_selected_smoke.py`（36 项，含重开循环模拟与 m_xml 超限提示三分支）。
+- 工具 `normalize_sat_name`（只留字母数字并大写，抹平大小写/空格/短横线/括号）、`sat_name_match(name,keys)`（多关键词 AND）、`parse_sat_keywords(text)`。用于 ① `SatelliteSelectDialog` 搜索过滤 ② `lookup_transponder` 第 6 层兜底（表中 `AO-91` 可匹配 TLE 名 `AO 91`）。改匹配规则两处须同步。
+- **隐藏行必须 `QListWidget.setRowHidden(row,hide)`**，不能用 `QListWidgetItem.setHidden()`（只改标志、不保证触发 `doItemsLayout()` 重排）。
+- 未搜索时已选置顶（勾选一变即物理重排到顶部，`_reordering` 守卫防递归）；计数标签**必须由 `self._count_base` 缓存重建**，别读 `count_label.text()` 当基数（会累加）。
+- 上限 `MAX_SELECTED_SATELLITES=500` + `clamp_selected_count(n)`（裁剪取**排序后前 N 个**，保证可复现）。
+- 超限提示统一走 `satellite_window.prompt_over_limit_selection(parent,n,limit,source_hint='')`（按钮：**重新选择** / **清除所有选择** / 取消，**不含"一键"**；改文案只改这处）；`accept()` 超限不关闭 → 置 `reset_requested=True`+`reject()`，调用方 `while True:` 循环「关窗重开」。兜底三处：对话框 accept、两处 `open_select`、加载设置后立即裁剪。测试 `test_max_selected_smoke.py`。详细机制（takeItem O(1)、`_row_names`、m_xml 超限三分支）见 `DETAILS.md`。
 
 ## 呼号统一大写（call_upper.py）
 - `UpperCallDelegate`（QTableWidget 呼号单元格实时大写）+ `connect_callsign_upper(edit, field_getter)`（QLineEdit，仅字段为 m_call/o_call 时；恒定字段用 `lambda: 'm_call'`）。六个接入点见 `DETAILS.md`。
@@ -69,18 +63,10 @@
 - **本机数据文件不是测试的 playground**：`file/project_backup.fhl` 属用户真实数据（可能是未保存内容）。任何会跑 `project.main` 的测试都必须先备份该文件字节、finally 还原。
 
 ## 验证环境（离屏 GUI 冒烟）
-- venv 已装 PySide6-Essentials+cryptography+skyfield+numpy，可 `QT_QPA_PLATFORM=offscreen` 做真实 GUI 冒烟（建窗/后台线程/读表/点按钮）。
-- **`project.py` 主窗口在 offscreen 下硬崩溃**（无回溯、exit 1）——环境限制非代码问题；`main/satellite_window/mutual_window/batch_project` 均可正常离屏。
-- 测完务必核对并还原 `file/m_xml.txt`（测试脚本可能写入坐标残留）。注意 `m_lat/m_lon=0,0` 时打开卫星窗口会先弹「设置观测站」引导框，抢在待测提示框前面。
-- **离屏测「嵌套模态消息框」**（`QMessageBox.exec()` 由 `accept()` 内部弹出）：
-  ① 必须显式触发 `QTimer.singleShot(150, dlg.accept)`，否则消息框不出现；
-  ② 点击用**独立 `QTimer()` 对象**轮询（`setInterval(50)`+`timeout.connect`），**不要用链式 `singleShot`**（模态嵌套后不再触发→挂死）；
-  ③ 找按钮**必须限定 `isinstance(w, QMessageBox) and w.isVisible()`**（`topLevelWidgets()` 会返回主对话框自身，点到隐藏控件不触发槽）；
-  ④ 被拦下后对话框**故意保持打开**，测试需再补一次点击（如「取消」）结束 `exec()`；
-  ⑤ 抓第二个框要用 `delay_ms` 跳过第一个框；
-  ⑥ **标准按钮 `text()` 带助记符**（实测 `'&Yes'`/`'&No'`），按文本 `=='Yes'` **点不到**，必须用 `w.button(QMessageBox.StandardButton.Yes)` 按 role 匹配（自定义 `addButton` 的按钮无 `&`，可按文本）；
-  ⑦ 测「开窗即弹提示」时 `main()` 里的同步模态会阻塞主线程 → 用 `QTimer.singleShot(80, lambda: main(None))` 延迟触发。见 `test_max_selected_smoke.py`。
-- **两进程真机回归**：仓库根 `__mp_host.py`（房主：开房→写端口+指纹→轮询状态）与 `__mp_guest.py`（客户端：等端口→**经 `verify_fingerprint` 走真实核对路径**→加入→经真实表格加记录→轮询）；先跑 host（后台）再跑 guest，读 `__host_log.txt`/`__guest_log.txt`。**单进程无法验证同步**（`project.file` 是模块级全局，两个窗口共用）。
+- venv 装 PySide6-Essentials+cryptography+skyfield+numpy，可 `QT_QPA_PLATFORM=offscreen` 真实冒烟（建窗/后台线程/读表/点按钮）。
+- **`project.py` 主窗口 offscreen 下硬崩溃**（无回溯、exit 1）——环境限制；`main/satellite_window/mutual_window/batch_project` 可正常离屏。
+- 测完核对并还原 `file/m_xml.txt`；`m_lat/m_lon=0,0` 时卫星窗口会先弹「设置观测站」抢在待测提示前。
+- **1. 离屏「嵌套模态消息框」**（`QMessageBox.exec()` 由 `accept()` 内弹）与 **2. 两进程真机回归**（`__mp_host.py`/`__mp_guest.py`，单进程无法验证同步）—— 详细步骤与 7 条踩坑见 `DETAILS.md`。
 
 ## 发布流程（GitHub Actions 全自动）
 - 仓库 `github.com/Mubi-Baihua/F_HamLog`，主分支 `develop`。`.github/workflows/main.yml` 手动 `workflow_dispatch`，一次跑完：Nuitka 打包 → Inno Setup 6 安装包 → 兼容版压缩包 → 发布 Releases。
@@ -89,5 +75,5 @@
 - **Release 说明内容留空、由作者手动填写**：`gh release create <tag>` **不传** `--title`/`--notes`/`--generate-notes`（标题即 tag，正文为空）；tag=填写的 version。已存在时只 `gh release upload --clobber` 覆盖附件，**不 edit、不动标题与说明**（避免抹掉手写内容）→ 幂等可重跑。
 - `.github/inno/F HamLog 2.iss` 为 CI 专用脚本（安装/升级逻辑与 `F HamLog 2 Inno Setup\F HamLog 2.iss` 一致，**AppId 相同**故升级关系不变）：路径全走 `RepoRoot`（`/D` 注入），版本/包名/ExeName 由 `/DMyAppVersion` `/DOutputBaseFilename` `/DMyAppExeName` 注入；`.github/inno/ChineseSimplified.isl` 是仓库内置中文语言文件（**运行器 Inno Setup 6.7.1 不带非官方中文包**），配套 `.gitattributes` 锁定 CRLF。
 - 缓存策略：`~\AppData\Local\pip\Cache`、`~\AppData\Local\Nuitka`（辅助工具）、`.venv`（按 `第三方模块.txt` 哈希，命中后先用 import 校验，Python 补丁版本变化致 venv 失效则重建）、`main.build`（按 `*.py` 哈希，源码未变的模块跳过 C 编译与链接）。
-- **踩坑（改脚本务必注意）**：① PowerShell 里**紧跟中文的变量必须写 `${var}`** —— `"$display兼容版"` 会被当成一个变量名（中文属 Unicode 字母），值静默变空；② `VersionInfo.ProductVersion` 由系统**补尾部空格**，与版本号比较必须 `.Trim()`；③ `GITHUB_ENV`/summary 一律用 `[System.IO.File]::AppendAllLines`/`WriteAllLines` + `UTF8Encoding($false)` 写，避开 `Out-File` 在不同 shell 下的 BOM 差异（并统一 `shell: pwsh`）；④ 7-Zip 打包用 `Push-Location main.dist; 7z a -tzip <dst> *`（条目落在压缩包根部，与历史一致），无 7z 时退回 `Compress-Archive`；⑤ 多行文本数组**不要用 `[string[]]` 强转**（嵌套数组会被拼成空格分隔的一行），用 `List[string]` 逐行 `Add` 后 `.ToArray()`。
-- 本地验证手法：PyYAML 解析工作流 → 抽出每段 `run` → 替换 `${{ }}` 占位 → 交 `[Parser]::ParseFile` 查语法；再用桩 `gh.cmd`（`PATH` 前置）真实跑「解析版本号/生成安装包/压缩包/准备附件/发布」各步，验证路径与参数拼装。本机已装 Inno Setup 6.7.3（`%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe`）与 7-Zip。
+- **踩坑（改脚本务必注意）**：① PowerShell 里**紧跟中文的变量必须写 `${var}`** —— `"$display兼容版"` 会被当成一个变量名（中文属 Unicode 字母），值静默变空；② `VersionInfo.ProductVersion` 由系统**补尾部空格**，与版本号比较必须 `.Trim()`；③ `GITHUB_ENV`/summary 一律用 `[System.IO.File]::AppendAllLines`/`WriteAllLines` + `UTF8Encoding($false)` 写，避开 `Out-File` 在不同 shell 下的 BOM 差异（并统一 `shell: pwsh`）；④ 7-Zip 打包用 `Push-Location main.dist; 7z a -tzip <dst> *`（条目落在压缩包根部，与历史一致），无 7z 时退回 `Compress-Archive`；⑤ 多行文本数组**不要用 `[string[]]` 强转**（嵌套数组会被拼成空格分隔的一行），用 `List[string]` 逐行 `Add` 后 `.ToArray()`；⑥ **`nuitka.__version__` 在 Nuitka 4.x 已移除**，读包版本一律用 `importlib.metadata.version('nuitka')`；⑦ **`run:` 块里别在 PowerShell 双引号串中写 `${{ … }}`**（会被当 `${…}` 变量引用；GitHub 虽会在执行前替换，但本地解析必报错），统一改用 `$env:GITHUB_REPOSITORY` / `$env:GITHUB_SHA`（单引号形式不受影响）。
+- 本地验证手法：PyYAML 解析工作流 → 抽出每段 `run` → 替换 `${{ }}` 占位 → 交 `[Parser]::ParseFile` 查语法；再用桩 `gh.cmd`（`PATH` 前置）真实跑「解析版本号/生成安装包/压缩包/准备附件/发布」各步，验证路径与参数拼装。本机已装 Inno Setup 6.7.3（`%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe`）与 7-Zip。**校验脚本本身别写错**：`powershell -Command <串> <路径>` 里 `$args[0]` 取不到值，`ParseFile('')` 解析空串恒「无错误」→ 假通过；须把路径**内联**进命令串，并核对解析的确实是目标文件。
