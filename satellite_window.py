@@ -187,13 +187,55 @@ class ObserverDialog(QDialog):
         return lat, lon, alt
 
 
+def prompt_over_limit_selection(parent, n, limit, source_hint=''):
+    """已选卫星数超限时的统一提示框（选择对话框点“确定” / 读取 m_xml 两个入口共用）。
+
+    返回 True 表示用户确认「清除所有选择」（已通过二次确认），调用方应以空选择重开
+    选择窗口；返回 False 表示「重新选择」或「取消」，调用方留在原处或什么都不做。
+
+    :param source_hint: 附在正文后的来源说明（如“设置文件 m_xml.txt 中保存的选择已超限”），
+                        便于用户理解这次提示从何而来。
+    """
+    box = QMessageBox(parent)
+    box.setIcon(QMessageBox.Icon.Warning)
+    box.setWindowTitle('选择的卫星过多')
+    box.setText('选择的卫星过多。')
+    text = (f'已勾选 {n} 颗，单次最多支持 {limit} 颗。\n'
+            f'请减少勾选后再确定，或清除全部已选卫星重新挑选。')
+    if source_hint:
+        text = source_hint + '\n' + text
+    box.setInformativeText(text)
+    keep_btn = box.addButton('重新选择', QMessageBox.ButtonRole.AcceptRole)
+    clear_btn = box.addButton('清除所有选择', QMessageBox.ButtonRole.DestructiveRole)
+    box.addButton('取消', QMessageBox.ButtonRole.RejectRole)
+    box.setDefaultButton(keep_btn)
+    box.exec()
+    if box.clickedButton() is not clear_btn:
+        # 「重新选择」与「取消」都不改变现有选择
+        return False
+    # 破坏性操作：二次确认后才真正清除
+    again = QMessageBox.question(
+        parent, '确认清除',
+        f'将清除全部 {n} 颗已选卫星，回到未选择状态，并重新打开选择窗口。是否继续？',
+        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        QMessageBox.StandardButton.No)
+    return again == QMessageBox.StandardButton.Yes
+
+
 class SatelliteSelectDialog(QDialog):
-    """从已加载卫星中勾选“自选”范围。"""
+    """从已加载卫星中勾选“自选”范围。
+
+    勾选上限为 sp.MAX_SELECTED_SATELLITES（500 颗）。超过时点“确定”会拦下并提示，
+    可选择「重新选择」留在对话框继续调整，或「清除所有选择」把已勾选的全部清空（需二次确认）；
+    选后者时本对话框直接关闭（`reset_requested=True`），由调用方重建一个全新的选择窗口。
+    """
 
     def __init__(self, parent, names, selected):
         super().__init__(parent)
         self.setWindowTitle('选择卫星')
         self.resize(360, 480)
+        # 「清除所有选择」并二次确认后置 True，调用方据此重建全新的选择窗口
+        self.reset_requested = False
         lay = QVBoxLayout(self)
         lay.addWidget(QLabel('勾选要参与过境预测的卫星（可搜索筛选）：'))
 
@@ -225,7 +267,7 @@ class SatelliteSelectDialog(QDialog):
         self.list_widget.setUpdatesEnabled(True)
         lay.addWidget(self.list_widget)
 
-        # 搜索命中计数（"匹配 N / 共 M 颗"）
+        # 搜索命中计数（"匹配 N / 共 M 颗"）；已选数量超限时转为醒目的红色提示
         self.count_label = QLabel('')
         self.count_label.setStyleSheet('color: gray;')
         lay.addWidget(self.count_label)
@@ -237,6 +279,8 @@ class SatelliteSelectDialog(QDialog):
 
         self._keys = []          # 归一化后的搜索关键词（空列表 = 不过滤）
         self._reordering = False  # 重排守卫，避免 itemChanged 递归触发
+        self._count_base = ''     # 计数标签的基数文本（重新构建时用，避免累加）
+        self._count_base_red = False  # 基数文本本身是否就该显示为红色（搜索无命中）
         self.search_edit.textChanged.connect(self._filter)
         self.list_widget.itemChanged.connect(self._on_item_changed)
         self._filter('')         # 初始化计数显示 + 未搜索时置顶已选
@@ -278,15 +322,33 @@ class SatelliteSelectDialog(QDialog):
         total = len(self.items)
         n_hit = len(self._visible_names())
         if not self._keys:
-            self.count_label.setText(f'共 {total} 颗')
-            self.count_label.setStyleSheet('color: gray;')
+            self._count_base = f'共 {total} 颗'
+            self._count_base_red = False
             # 未搜索时：把已勾选卫星置顶（保持各自原有相对顺序），便于快速查看/调整
             self._reorder_pin_selected()
         else:
-            self.count_label.setText(f'匹配 {n_hit} / 共 {total} 颗')
+            self._count_base = f'匹配 {n_hit} / 共 {total} 颗'
             # 无命中时用醒目颜色提示，便于用户确认是"没搜到"而非"没过滤"
-            self.count_label.setStyleSheet(
-                'color: gray;' if n_hit else 'color: #c0392b;')
+            self._count_base_red = not n_hit
+        self._refresh_selected_count()
+
+    def _refresh_selected_count(self):
+        """由缓存的基数文本重建计数标签（**不要读控件当前文字**，否则会不断累加）。
+
+        末尾追加"已选 N 颗"；超过上限时整条转为红色警告。
+        """
+        n = len(self.get_selected())
+        limit = sp.MAX_SELECTED_SATELLITES
+        base = getattr(self, '_count_base', '')
+        text = f'{base}　已选 {n} 颗'
+        if n > limit:
+            text += f'，超过上限 {limit} 颗'
+            self.count_label.setStyleSheet('color: #c0392b;')
+        elif getattr(self, '_count_base_red', False):
+            self.count_label.setStyleSheet('color: #c0392b;')
+        else:
+            self.count_label.setStyleSheet('color: gray;')
+        self.count_label.setText(text)
 
     def _visible_names(self):
         """当前搜索条件下可见的卫星名；无搜索时返回全部。"""
@@ -328,6 +390,7 @@ class SatelliteSelectDialog(QDialog):
             return
         if not self._keys:
             self._reorder_pin_selected()
+        self._refresh_selected_count()
 
     def _select_all(self):
         for n in self._visible_names():
@@ -340,6 +403,25 @@ class SatelliteSelectDialog(QDialog):
     def get_selected(self):
         return {n for n, item in self.items.items()
             if item.checkState() == Qt.CheckState.Checked}
+
+    def accept(self):
+        """确定前校验勾选数量：未超限直接通过；超限则弹统一提示框（`prompt_over_limit_selection`）。
+
+        选「清除所有选择」并二次确认后，**不全量重置当前对话框**（对数千项逐个
+        setCheckState + 逐次重排/刷新标签会明显卡顿），而是直接以 Rejected 关闭，
+        由调用方重建一个全新的选择窗口（构造期一次完成，等于把重排成本降到零）。
+        调用方据 `reset_requested` 判断这次关闭是「要重开」还是「用户取消」。
+        """
+        limit = sp.MAX_SELECTED_SATELLITES
+        n = len(self.get_selected())
+        if n <= limit:
+            super().accept()
+            return
+        if prompt_over_limit_selection(self, n, limit):
+            # 请求「清除后重开」：置标志并以 Rejected 关闭，交给调用方重建新窗口
+            self.reset_requested = True
+            super().reject()
+        # 「重新选择」与「取消」都只是留在对话框，让用户继续调整
 
 
 class DictEditorDialog(QDialog):
@@ -781,6 +863,12 @@ def main(parent_window, quick_log_callback=None, title='卫星过境'):
     selected_names = (set(sat_sats_raw)
                       if isinstance(sat_sats_raw, list)
                       else set())
+    # 超量选择兜底：设置文件 m_xml.txt 里可能留有历史的大规模选择（旧版本无上限），
+    # 先裁到上限，避免一打开窗口就因数千颗卫星的预测而长时间卡住。
+    # 但**不静默裁剪**：记下超限状态，等窗口显示、用户处理完首次引导之后再弹提示，
+    # 给出与「选择卫星」对话框完全一致的三条出路（重新选择 / 清除所有选择 / 取消）。
+    selected_names, _trimmed_selected = sp.clamp_selected_count(selected_names)
+    _oversized_from_settings = len(selected_names) + _trimmed_selected
     # 窗口打开后首次获取 TLE 时：若尚未选择任何卫星（包括曾显式清空的情况），
     # 自动弹出选择框引导用户；用户关闭对话框后本窗口会话内不再自动弹窗，
     # 避免每次刷新都打扰。
@@ -1055,13 +1143,21 @@ def main(parent_window, quick_log_callback=None, title='卫星过境'):
             QMessageBox.information(win, '暂无卫星', '请先刷新 TLE。')
             return
         names = [n for (n, s) in sats]
-        dlg = SatelliteSelectDialog(win, names, selected_names)
-        if dlg.exec() == QDialog.Accepted:
-            selected_names = dlg.get_selected()
-            _persist()
-            run_prediction()
-            _push_selection_to_mutual()
-            _push_sats_to_map()   # 自选卫星变化 → 地图同步显示新的一批卫星
+        # 「清除所有选择」后直接重建一个全新的选择窗口（而非在原窗口逐项重置，
+        # 数千颗时后者会因反复重排/刷新而明显卡顿）。循环直到用户确定或取消为止。
+        while True:
+            dlg = SatelliteSelectDialog(win, names, selected_names)
+            if dlg.exec() == QDialog.Accepted:
+                # 对话框已在 accept() 里拦住超量选择，这里再裁一次作兜底
+                selected_names, _ = sp.clamp_selected_count(dlg.get_selected())
+                break
+            if not dlg.reset_requested:
+                return   # 用户取消：什么都不做
+            selected_names = set()   # 已确认清除 → 以空选择重开新窗口
+        _persist()
+        run_prediction()
+        _push_selection_to_mutual()
+        _push_sats_to_map()   # 自选卫星变化 → 地图同步显示新的一批卫星
 
     def import_tle():
         nonlocal selected_names
@@ -1089,12 +1185,17 @@ def main(parent_window, quick_log_callback=None, title='卫星过境'):
                 '文件中 %d 颗卫星均已存在，无需更新。' % len(imported))
             return
         sats.extend(new_sats)
-        selected_names = set(n for n, _ in sats)
+        # 导入后默认全选，但同样受上限约束：超量时只保留前 500 颗并提示，
+        # 让用户到「选择卫星」里自行挑选，而不是静默把界面拖卡。
+        selected_names, _over = sp.clamp_selected_count(set(n for n, _ in sats))
         _persist()
-        QMessageBox.information(
-            win, '导入完成',
-            '已导入 %d 颗新卫星（跳过 %d 颗已存在），当前共 %d 颗。'
-            % (len(new_sats), duplicate_count, len(sats)))
+        msg = ('已导入 %d 颗新卫星（跳过 %d 颗已存在），当前共 %d 颗。'
+               % (len(new_sats), duplicate_count, len(sats)))
+        if _over:
+            msg += ('\n\n当前卫星总数已超过单次预测上限 %d 颗，'
+                    '本次仅默认选择前 %d 颗。\n请点击「选择卫星」自行挑选需要的卫星。'
+                    % (sp.MAX_SELECTED_SATELLITES, sp.MAX_SELECTED_SATELLITES))
+        QMessageBox.information(win, '导入完成', msg)
         run_prediction()
         _push_sats_to_map()
 
@@ -1281,6 +1382,15 @@ def main(parent_window, quick_log_callback=None, title='卫星过境'):
                 s['m_lon'] = lon_
                 s['m_alt'] = alt_
                 _save_settings(s)
+
+    # 设置文件里保存的自选卫星超限：同样给出提示（而非静默裁剪），
+    # 三条出路与「选择卫星」对话框一致。选「清除所有选择」则清空后落盘。
+    if _oversized_from_settings > sp.MAX_SELECTED_SATELLITES:
+        if prompt_over_limit_selection(
+                win, _oversized_from_settings, sp.MAX_SELECTED_SATELLITES,
+                source_hint='设置文件 file/m_xml.txt 中保存的自选卫星已超过上限。'):
+            selected_names.clear()
+            _persist()
 
     refresh_tle(force=False)  # 后台获取 TLE 并预测（界面已先显示）
     _open_windows.append(win)  # 保持引用，防止被回收

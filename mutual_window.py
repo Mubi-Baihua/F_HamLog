@@ -31,7 +31,7 @@ import satellite_pred as sp
 from satellite_window import (
     SatelliteSelectDialog, TleFetchWorker, LOCAL_TZ,
     _load_settings, _save_settings, _duration_str, _utc_to_local_str,
-    _log_date_str, _log_time_str,
+    _log_date_str, _log_time_str, prompt_over_limit_selection,
 )
 
 # 防止窗口在 main() 返回后被 Python 回收
@@ -317,6 +317,13 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
     selected_names = (set(mu_sats_raw)
                       if isinstance(mu_sats_raw, list) and mu_sats_raw
                       else None)
+    # 超量选择兜底：设置文件可能留有历史的大规模选择（旧版本无上限），裁到上限，
+    # 避免一打开窗口就因数千颗卫星的预测而长时间卡住。超限状态记下来，
+    # 等窗口显示后再提示（与「选择卫星」对话框一致的三条出路），不静默裁剪。
+    _oversized_from_settings = 0
+    if selected_names is not None:
+        selected_names, _trimmed = sp.clamp_selected_count(selected_names)
+        _oversized_from_settings = len(selected_names) + _trimmed
 
     # ---------- 逻辑 ----------
     def _persist():
@@ -520,15 +527,24 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
         if not sats:
             QMessageBox.information(win, '暂无卫星', '请先刷新 TLE。')
             return
-        dlg = SatelliteSelectDialog(win, [n for (n, s) in sats], selected_names)
-        if dlg.exec() == QDialog.Accepted:
-            selected_names = dlg.get_selected()
-            _persist()
-            run_prediction()  # 选择卫星后自动重新预测
-            _push_sats_to_map()   # 自选卫星变化 → 地图同步显示新的一批卫星
-            # 把选择实时同步回卫星过境预测窗口（若该窗口仍打开）
-            if on_selection_change is not None:
-                on_selection_change('自选卫星', selected_names)
+        names = [n for (n, s) in sats]
+        # 「清除所有选择」后直接重建一个全新的选择窗口（而非在原窗口逐项重置，
+        # 数千颗时后者会因反复重排/刷新而明显卡顿）。循环直到用户确定或取消为止。
+        while True:
+            dlg = SatelliteSelectDialog(win, names, selected_names)
+            if dlg.exec() == QDialog.Accepted:
+                # 对话框已在 accept() 里拦住超量选择，这里再裁一次作兜底
+                selected_names, _ = sp.clamp_selected_count(dlg.get_selected())
+                break
+            if not dlg.reset_requested:
+                return   # 用户取消：什么都不做
+            selected_names = set()   # 已确认清除 → 以空选择重开新窗口
+        _persist()
+        run_prediction()  # 选择卫星后自动重新预测
+        _push_sats_to_map()   # 自选卫星变化 → 地图同步显示新的一批卫星
+        # 把选择实时同步回卫星过境预测窗口（若该窗口仍打开）
+        if on_selection_change is not None:
+            on_selection_change('自选卫星', selected_names)
 
     def apply_remote_selection(filter_mode, sel):
         """由「卫星过境预测」窗口反向同步：更新范围/自选卫星并重新预测。
@@ -665,6 +681,14 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
     win.closeEvent = _on_close
 
     win.show()
+    # 设置文件里保存的自选卫星超限：给出与「选择卫星」对话框一致的提示（非静默裁剪）。
+    # 选「清除所有选择」则清空后落盘。
+    if (_oversized_from_settings > sp.MAX_SELECTED_SATELLITES
+            and prompt_over_limit_selection(
+                win, _oversized_from_settings, sp.MAX_SELECTED_SATELLITES,
+                source_hint='设置文件 file/m_xml.txt 中保存的自选卫星已超过上限。')):
+        selected_names.clear()
+        _persist()
     # 暴露反向同步接口，供「卫星过境预测」窗口在改选卫星时调用
     win.apply_remote_selection = apply_remote_selection
     # 台站 A（本站）位置在「卫星过境预测 → 观测站设置」中填写，

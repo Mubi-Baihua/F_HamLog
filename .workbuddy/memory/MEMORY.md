@@ -42,10 +42,45 @@
 ## 预测时长上限
 - `satellite_pred.MAX_PREDICT_HOURS=240`/`MIN_PREDICT_HOURS=1`/`clamp_predict_hours()`，算法层+spinbox+读写设置三处兜底，越界值打开即收敛。
 
+## 自选卫星数量上限
+- `satellite_pred.MAX_SELECTED_SATELLITES=500` + `clamp_selected_count(n)` → `(保留集合, 裁掉数)`；裁剪取**排序后前 N 个**（set 无序，保证结果可复现）。
+- **超限提示统一走 `satellite_window.prompt_over_limit_selection(parent, n, limit, source_hint='')`**
+  → 返回 True=用户确认「清除所有选择」（已过二次确认）/ False=「重新选择」或「取消」。
+  提示框与二次确认的文案、按钮（**重新选择** / **清除所有选择** / 取消，**文案不含"一键"**）全集中此处。
+  `source_hint` 附来源说明。**两个入口共用它**：① `SatelliteSelectDialog.accept()`；
+  ② 打开窗口读 `m_xml` 发现超限（见下）。改文案只改这里。
+- `SatelliteSelectDialog.accept()`：超限不关闭，调上述函数；**选「是」后不原地重置，而是关窗重开新窗口**（性能）：
+  置 `self.reset_requested=True` + `super().reject()`；两处调用方（`satellite_window`/`mutual_window` 的 `open_select`）用
+  `while True:` 循环——`Accepted`→裁剪+break；`Rejected && reset_requested`→`selected_names=set()`
+  后重开；否则 `return`。`_persist()/run_prediction()/推地图` 移出循环只跑一次。
+  原因：原地对数千项 `setCheckState` 会逐次触发 `itemChanged`→重排+刷新标签，O(N²) 卡顿。
+  旧的 `_clear_all_selected()` 已删除。
+- **`m_xml` 保存的自选卫星超限时不再静默裁剪**：`satellite_window.main()` / `mutual_window.main()`
+  读 `sat_sats`/`mu_sats` 后先 `clamp_selected_count` 兜底（防卡），并记 `_oversized_from_settings`；
+  在 `win.show()` 之后弹 `prompt_over_limit_selection(..., source_hint='设置文件 file/m_xml.txt …')`，
+  选清除则 `selected_names.clear()` + `_persist()`。
+- 计数标签 = `self._count_base` 缓存基数 + `　已选 N 颗`，超限追加「，超过上限 500 颗」并转红。
+  **改动时务必由缓存重建标签，不要读 `count_label.text()` 当基数**——否则每次勾选变化都会累加。
+- 兜底三处：对话框 accept()、两处调用方（satellite_window / mutual_window 的 open_select）、
+  以及加载设置（`sat_sats` / `mu_sats`）后立即裁剪。`import_tle()` 默认全选同样受上限约束。
+- 测试 `test_max_selected_smoke.py`（36 项）含**重开循环模拟**（新窗口不继承旧选择 `已选 0`）
+  与 **m_xml 超限提示**（重新选择/二次确认否/是）三组用例。
+
 ## 验证环境
 - 沙箱 venv 已装 PySide6-Essentials+cryptography+skyfield+numpy，可 `QT_QPA_PLATFORM=offscreen` 做真实 GUI 冒烟（建窗/后台线程/读表/点按钮）。
 - **`project.py` 主窗口在 offscreen 下硬崩溃（无回溯、exit 1）**——环境限制非代码问题；`main/satellite_window/mutual_window/batch_project` 均可正常离屏。
 - 离屏测 GUI 完毕务必核对并还原 `file/m_xml.txt`（测试脚本可能写入坐标残留）。
+  另注意：m_xml 里 `m_lat/m_lon=0,0` 时打开卫星窗口会先弹「设置观测站」引导框，会抢在待测提示框前面。
+- **离屏测「嵌套模态消息框」的要点**（`QMessageBox.exec()` 由 `accept()` 内部弹出时）：
+  ① 必须显式触发 `QTimer.singleShot(150, dlg.accept)`，否则消息框不出现；
+  ② 点击用**独立 `QTimer()` 对象**轮询（`setInterval(50)`+`timeout.connect`），**不要用链式 `singleShot`**（模态嵌套后不再触发→挂死）；
+  ③ 找按钮**必须限定 `isinstance(w, QMessageBox) and w.isVisible()`**（`topLevelWidgets()` 会返回主对话框自身，点到隐藏控件不触发槽）；
+  ④ 被拦下后对话框**故意保持打开**，测试需再补一次点击（如「取消」）结束 `exec()`；
+  ⑤ 抓第二个框要用 `delay_ms` 跳过第一个框；
+  ⑥ **标准按钮 `text()` 带助记符**（实测 `'&Yes'`/`'&No'`），按文本 `=='Yes'` **点不到**，
+     必须用 `w.button(QMessageBox.StandardButton.Yes)` 按 role 匹配（自定义 `addButton` 的按钮无 `&`，可按文本）；
+  ⑦ 测「开窗即弹提示」时，`main()` 里的同步模态会阻塞主线程 → 用 `QTimer.singleShot(80, lambda: main(None))` 延迟触发。
+  测试见 `test_max_selected_smoke.py`（36 项）。
 
 ## 呼号输入统一大写（call_upper 模块）
 - 新增 `call_upper.py`（统一方案）：`UpperCallDelegate`（QTableWidget 呼号行单元格编辑实时转大写）+ `connect_callsign_upper(edit, field_getter)`（QLineEdit，仅当字段为 `m_call`/`o_call` 时实时转大写；恒定字段用 `lambda: 'm_call'`）。
@@ -97,7 +132,7 @@
 - **客户端心跳（大日志保活的关键）**：`RemoteConnection._start_heartbeat()`（`start_sync` 里启动 / `_close_socket` 里停）每秒发 `NEXT`，服务端回 PONG（同步线程忽略）。同步线程改为**固定 1 秒周期**（`sleep(max(0, 1.0 - 本轮耗时))`），并对瞬时异常**重试 3 次**才报断开；`recv_frame` 返回 None（对端关闭）仍立即报断开。
 - **`main.py` 只保留一个 `project_window` 引用**：新建项目窗口会回收旧窗口 → 旧窗口若开着多人日志房间，房间会静默死掉（其他端再也收不到更新）。已加 `_confirm_replace_session()` 先确认。**改动窗口管理时必须保留这个确认**。
 - **两进程真机回归脚本**：仓库根的 `__mp_host.py`（房主：开房→写端口+指纹→轮询状态）与 `__mp_guest.py`（客户端：等端口→**经 `verify_fingerprint` 走真实核对路径**→加入→经真实表格加记录→轮询）；先跑 host（后台）再跑 guest，读 `__host_log.txt`/`__guest_log.txt`。**单进程无法验证同步**（`project.file` 是模块级全局，两个窗口共用）。
-- **离屏 GUI 点击坑**：`app.topLevelWidgets()` 会同时返回对话框**和不可见的 parent**，`findChildren(QPushButton)` 会把两边按钮都捞出来；若点到隐藏控件上**不会触发槽函数**（表现为测试挂死在 `dlg.exec()`）。自动点按钮必须限定 `isinstance(w, QDialog) and w.isVisible()`，且只点 `btn.isVisible()` 的按钮。诊断挂死位置用 `faulthandler.dump_traceback_later(N, exit=True)`。
+- **离屏 GUI 点击坑**：`app.topLevelWidgets()` 会同时返回对话框**和不可见的 parent**，`findChildren(QPushButton)` 会把两边按钮都捞出来；若点到隐藏控件上**不会触发槽函数**（表现为测试挂死在 `dlg.exec()`）。自动点按钮必须限定窗口**可见**（点 `QMessageBox` 就限定 `isinstance(w, QMessageBox) and w.isVisible()`），且只点 `btn.isVisible()` 的按钮。涉及嵌套模态消息框的完整要点见上方「验证环境」。诊断挂死位置用 `faulthandler.dump_traceback_later(N, exit=True)`。
 - **shell 在本机基本不可用**：PortableGit shim 缺 `dirname`/`cat`/`head`/`tail`/`sleep`/`grep`。一律改用 `Glob`/`Grep`/`Read`/`Edit` 工具，或经 `"C:/Users/13577/.workbuddy/binaries/python/envs/default/Scripts/python.exe"` 执行；调试输出重定向到文件后用 `Read` 看，不要用 `cat`。`__mp_*.py` 跑完的 `exit=127`/`3221226505` 常是环境产物，以输出的成功哨兵为准。
 - **「未保存更改」判定（双基线，important）**：`_bk_state = {'last': 已持久化基线, 'local': 最近一次写入本机文件的内容}`；`_bk_snapshot()` 里 `last` 总更新、**只有 `_rc() is None`（非多人日志）才更新 `local`**（所以既有 save/osave/打开 等调用点无需改动）。多人日志语义：服务端=已保存 → `_on_sync` 采纳服务端内容后（含「内容与服务端一致」的自愈分支）补 `_bk_snapshot()`；`_bk_write` 在多人日志下不写 `project_backup.fhl`（`force=True` 仅供关闭守卫「不保存」分支）；`_bk_tick` 多人日志下直接 return。退出会话（`_detach_remote` / `_on_disconnect`）调 `_bk_on_remote_exit()`：`last = snap if snap == local else ''`（'' 为恒脏哨兵）→ 只有内容相对本机文件确有变化才提示保存。关闭守卫文案由可选 `texts()` 回调定制：多人日志＝「未同步到服务端 / 同步 / 不同步」。
 - **本机数据文件不是测试的 playground**：`file/project_backup.fhl` 属用户真实数据（可能是未保存内容）。任何会跑 `project.main` 的测试都必须先备份该文件字节、finally 还原。
