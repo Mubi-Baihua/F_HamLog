@@ -40,7 +40,8 @@ def raw_client(host, port, password):
 def test_engine_and_broadcast():
     tmp = tempfile.mkdtemp()
     fhl = os.path.join(tmp, 'room.fhl')
-    srv = remote_server.LogServer(password='pw', port=0, fhl_path=fhl)
+    srv = remote_server.LogServer(password='pw', port=0, fhl_path=fhl,
+                                  encrypt=False)
     srv.start()
     ip, port = srv.address
     assert port != 0, '端口未分配'

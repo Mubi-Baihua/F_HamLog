@@ -48,7 +48,7 @@ def main():
     fhl = os.path.join(tmp, 'room.fhl')
 
     # 房间已有 1 条记录
-    srv = rs.LogServer(password='pw', port=0, fhl_path=fhl)
+    srv = rs.LogServer(password='pw', port=0, fhl_path=fhl, encrypt=False)
     srv.start(seed_list=[{'m_call': 'EXIST'}])
     ip, port = srv.address
     print('server', ip, port)

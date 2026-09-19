@@ -176,7 +176,11 @@ def main():
         except ValueError:
             port = 8000
         password = pw_e.text()
-        conn = RemoteConnection(host, port, password, role='guest')
+        # 建立连接前先构造指纹核对回调：首次连接/指纹变化时会弹窗请用户核对。
+        # 传 None 则不做核对（不推荐），这里始终启用。
+        verify = project.make_fingerprint_verifier(window, host, port)
+        conn = RemoteConnection(host, port, password, role='guest',
+                                verify_fingerprint=verify)
         try:
             conn.connect()
         except Exception as e:

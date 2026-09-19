@@ -33,7 +33,7 @@ def connect_handshake(host, port, password):
 
 
 def main():
-    srv = rs.LogServer(password='pw', port=0)
+    srv = rs.LogServer(password='pw', port=0, encrypt=False)
     srv.start()
     ip, port = srv.address
     print(f'server {ip} {port}')

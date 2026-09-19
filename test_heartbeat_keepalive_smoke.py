@@ -56,14 +56,15 @@ def drain(sock, seconds=0.3):
 
 
 def rec(i):
+    # notes 用大段文本撑出「大日志」场景（原用 record 字段，该功能已移除）
     return {'date': '2026-01-01', 'time': '00:%02d' % i, 'm_call': 'BG1', 'o_call': 'BG%d' % i,
             'freq': '145', 'freq_rx': '', 'mode': 'FM', 'prop_mode': '', 'sat_name': '',
             'm_rst': '59', 'o_rst': '59', 'm_qth': '', 'o_qth': '', 'm_dig': '', 'o_dig': '',
-            'm_ant': '', 'o_ant': '', 'm_pow': '', 'o_pow': '', 'notes': '', 'record': 'H' * 300000}
+            'm_ant': '', 'o_ant': '', 'm_pow': '', 'o_pow': '', 'notes': 'H' * 300000}
 
 
 def body():
-    srv = LogServer(password='', port=0, fhl_path=None)
+    srv = LogServer(password='', port=0, fhl_path=None, encrypt=False)
     srv.start(seed_list=[rec(i) for i in range(5)])
     ip, port = srv.address
     say('服务端载荷约 %.1f MB' % (len(json.dumps(srv.file)) / 1e6))

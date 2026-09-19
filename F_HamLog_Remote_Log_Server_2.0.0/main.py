@@ -83,6 +83,19 @@ class ServerGUI(QMainWindow):
         self.clients_label = QLabel('在线用户：0')
         lay.addWidget(self.clients_label)
 
+        # 服务端密钥指纹：客户端首次加入时需与这串短码核对，确认没有中间人
+        self.fp_label = QLabel('密钥指纹：—')
+        self.fp_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.fp_label.setWordWrap(True)
+        self.fp_label.setStyleSheet('font-family: Consolas, monospace;')
+        lay.addWidget(self.fp_label)
+        self.fp_note = QLabel(
+            '加密传输已启用：客户端加入时请核对上面这串指纹。\n'
+            '（客户端会记住首次核对的指纹，之后若与本机不一致会提示风险。）')
+        self.fp_note.setWordWrap(True)
+        self.fp_note.setStyleSheet('color: #555; font-size: 11px;')
+        lay.addWidget(self.fp_note)
+
         # 启动 / 停止
         h2 = QHBoxLayout()
         self.start_btn = QPushButton('启动')
@@ -179,20 +192,29 @@ class ServerGUI(QMainWindow):
         password = self.pass_edit.text()
         self._save_password()   # 保存密码，下次启动自动带入
         fhl_path = os.path.join(_app_dir(), 'main.fhl')
+        # 独立服务端把长期密钥放在自己的程序目录下（<程序目录>/keys/server_<端口>.fhlkey），
+        # 与「开放多人日志」内嵌服务端的 file/keys/ 相互独立——换端口即换身份，两者不能混用。
         self.server = remote_server.LogServer(
-            password=password, port=port, fhl_path=fhl_path, on_event=self._emit)
+            password=password, port=port, fhl_path=fhl_path,
+            key_dir=_app_dir(), on_event=self._emit)
         try:
             self.server.start()
         except Exception as e:
             QMessageBox.warning(self, '启动失败', f'无法启动服务端：{e}')
             self.server = None
             return
+        # 启动完成后展示本机长期密钥指纹，供客户端核对（换端口即换身份，重装即换指纹）
+        fp = getattr(self.server, 'fingerprint_short', '') or ''
+        self.fp_label.setText(f'密钥指纹：{fp}' if fp else '密钥指纹：（未启用加密）')
+        if fp:
+            self._ev.log.emit(f'密钥指纹：{fp}')
 
     def stop_server(self):
         if self.server is None:
             return
         self.server.stop()
         self.server = None
+        self.fp_label.setText('密钥指纹：—')
 
     def closeEvent(self, event):
         self._save_password()   # 关闭时再保存一次密码

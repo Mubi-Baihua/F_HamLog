@@ -55,7 +55,9 @@ w('after_open', server=srv is not None, is_host=win._is_host,
 if srv is not None:
     with open('__host_port.txt', 'w', encoding='utf-8') as f:
         f.write(str(srv.address[1]))
-    w('port_written', port=srv.address[1])
+    w('port_written', port=srv.address[1],
+      fp=getattr(srv, 'fingerprint_short', ''), encrypt=getattr(srv, 'encrypt', None),
+      key_path=getattr(srv, 'key_path', None))
 
 # 8 秒后房主自己也新增一条记录
 added = {'done': False}

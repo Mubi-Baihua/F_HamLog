@@ -12,3 +12,25 @@ main.dist/
 F HamLog 2.1/F HamLog 2.1 setup.exe
 __pycache__/
 *.pyc
+
+# 多人日志加密：运行时密钥与信任记录（绝不可入库）
+# 服务端长期私钥（每端口一份，泄露即可被冒名顶替）
+#   内嵌服务端（「开放多人日志」）→ file/keys/
+#   独立服务端（F_HamLog_Remote_Log_Server_2.0.0）→ 其程序目录下的 keys/
+file/keys/
+keys/
+*.fhlkey
+# 客户端「已知服务端公钥」记录（TOFU 信任库，各机器不同）
+file/known_server_keys.txt
+
+# 多人日志房间的会话日志：每次「开放多人日志」新建一份，属运行时数据
+file/remote_rooms/
+F_HamLog_Remote_Log_Server_2.0.0/main.fhl
+F_HamLog_Remote_Log_Server_2.0.0/keys/
+
+# 密钥迁移备份（手工清理）
+file/_key_backup_*/
+
+# 临时调试产物
+__*_out.txt
+__*.log

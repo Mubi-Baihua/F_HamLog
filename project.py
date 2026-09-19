@@ -17,7 +17,13 @@ import fhl_rw
 import copy
 import call_upper
 import backup
+import remote_crypto
+import remote_server
 from remote_server import send_frame, recv_frame, LogServer, get_lan_ip
+
+# 本机「开放多人日志」的默认端口：与「加入多人日志」对话框的默认端口保持一致，
+# 便于同一局域网内不同客户端按默认值直接对接。
+DEFAULT_ROOM_PORT = 8000
 
 # 复制/粘贴使用的字段顺序（与表格列对应，英文键名作为剪贴板表头，便于跨窗口/跨软件解析）
 COPY_FIELDS = ['date', 'time', 'm_call', 'o_call', 'freq', 'freq_rx', 'mode',
@@ -77,10 +83,98 @@ def _upgrade_file_records(file_list):
 # 都直接操作内存中的 file 列表，仅落盘改为经此连接发送到服务端——因此无需重复编写。
 # ---------------------------------------------------------------------------
 
-class RemoteConnection:
-    """到多人日志服务端的连接（客户端侧）。"""
+def _fingerprint_verify_dialog(parent, host, port, short_fp, status):
+    """服务端身份核对对话框：返回 True 表示用户确认继续连接。
 
-    def __init__(self, host, port, password, role='guest', display_ip=''):
+    status：
+      'new'      首次连接该地址 → 提示核对指纹；
+      'mismatch' 指纹变了 → 强提示（可能是换了服务端，也可能遭中间人替换）。
+    """
+    dlg = QDialog(parent)
+    dlg.setWindowTitle('服务端身份核对')
+    dlg.setMinimumWidth(430)
+    lay = QVBoxLayout(dlg)
+
+    if status == 'mismatch':
+        warn = QLabel('服务端密钥指纹与上次记录不一致！')
+        warn.setStyleSheet('color: #c0392b; font-weight: bold;')
+        lay.addWidget(warn)
+        tip = QLabel(
+            '这可能意味着服务端重装/更换了机器（正常），\n'
+            '也可能是局域网内有人冒名顶替（中间人攻击）。\n\n'
+            '请向服务端持有者当面确认下面这串指纹后再继续。')
+    else:
+        tip = QLabel(
+            '这是首次连接该服务端，请向服务端持有者核对下面这串指纹。\n'
+            '核对通过后会被记住，以后同一地址自动校验。')
+    tip.setWordWrap(True)
+    lay.addWidget(tip)
+
+    fp_label = QLabel(short_fp)
+    f = fp_label.font()
+    f.setPointSize(f.pointSize() + 3)
+    f.setBold(True)
+    f.setFamily('Consolas')
+    fp_label.setFont(f)
+    fp_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+    fp_label.setAlignment(Qt.AlignCenter)
+    fp_label.setStyleSheet('padding: 8px; background: #f0f0f0; border: 1px solid #ccc;')
+    lay.addWidget(fp_label)
+
+    host_label = QLabel(f'服务端：{host}:{port}')
+    host_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+    lay.addWidget(host_label)
+
+    if status == 'mismatch':
+        btn_ok = QPushButton('确认已核对，继续连接')
+        btn_cancel = QPushButton('取消连接')
+    else:
+        btn_ok = QPushButton('指纹一致，继续连接')
+        btn_cancel = QPushButton('取消')
+    row = QHBoxLayout()
+    row.addWidget(btn_cancel)
+    row.addWidget(btn_ok)
+    lay.addLayout(row)
+
+    result = {'ok': False}
+    btn_ok.clicked.connect(lambda: (result.update(ok=True), dlg.accept()))
+    btn_cancel.clicked.connect(dlg.reject)
+    dlg.exec()
+    return result['ok']
+
+
+def make_fingerprint_verifier(parent, host, port):
+    """构造 RemoteConnection 用的指纹核对回调。
+
+    首次连接：弹窗请用户核对，确认后记住该地址的公钥；
+    指纹一致：静默通过（不打扰用户）；
+    指纹变化：强提示，用户确认则更新记录，否则拒绝连接。
+    """
+    def _verify(short_fp, raw_pub):
+        status, _old = remote_crypto.check_known_key(host, port, raw_pub)
+        if status == 'match':
+            return True
+        ok = _fingerprint_verify_dialog(parent, host, port, short_fp, status)
+        if ok:
+            remote_crypto.remember_key(host, port, raw_pub)
+        return ok
+    return _verify
+
+
+class RemoteConnection:
+    """到多人日志服务端的连接（客户端侧）。
+
+    传输加密（见 remote_crypto.py）：connect() 先与服务端做 X25519 密钥交换，程序自主
+    生成一个随机会话密钥并用密钥交换结果加密后交给服务端；此后所有帧正文都是密文。
+    密码只用于身份认证，不参与内容加密。
+    """
+
+    def __init__(self, host, port, password, role='guest', display_ip='',
+                 verify_fingerprint=None):
+        """
+        :param verify_fingerprint: 指纹核对回调 (指纹短码, 是否已知且一致) -> bool。
+            返回 False 表示用户拒绝连接。为 None 时不做核对（供 headless 测试使用）。
+        """
         self.host = host
         self.port = int(port)
         self.password = password
@@ -100,13 +194,38 @@ class RemoteConnection:
         # 心跳线程：见 _start_heartbeat 的说明。
         self._hb_thread = None
         self._hb_stop = threading.Event()
+        # 加密会话状态
+        self.verify_fingerprint = verify_fingerprint
+        self.server_key = b''          # 服务端长期公钥（32 字节）
+        self.server_fingerprint = ''   # 服务端指纹短码
+        self.encrypted = False         # 本次连接是否已启用传输加密
+        self.cipher = None             # 会话加解密器（SessionCipher）
 
     def _locked_send(self, msg_type, payload=''):
+        """发送一帧。加密会话建立后自动把正文加密（与旧协议兼容）。"""
         with self._send_lock:
+            if self.cipher is not None:
+                payload = remote_server.make_enc_payload(self.cipher, payload)
             send_frame(self.sock, msg_type, payload)
 
+    def _recv(self):
+        """收一帧。返回 (type, plain_body)；连接关闭返回 None。"""
+        resp = recv_frame(self.sock)
+        if resp is None:
+            return None
+        t, body = resp
+        # HELLO / DENY 是握手期的明文帧；其余在加密会话下都是密文包。
+        if t in ('HELLO', 'DENY'):
+            return (t, body)
+        if self.cipher is not None:
+            try:
+                body = remote_server.open_enc_payload(self.cipher, body)
+            except ValueError as e:
+                raise RuntimeError(f'收到无法解密的帧（{t}）：{e}')
+        return (t, body)
+
     def connect(self):
-        """完成鉴权并拉取初始日志列表；失败抛出 RuntimeError。"""
+        """完成「密钥交换 + 鉴权」并拉取初始日志列表；失败抛出 RuntimeError。"""
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.sock.settimeout(10)
         try:
@@ -114,21 +233,21 @@ class RemoteConnection:
         except Exception as e:
             self.sock = None
             raise RuntimeError(f'无法连接到服务端 {self.host}:{self.port}（{e}）')
-        self._locked_send('AUTH', json.dumps(
-            {'password': self.password, 'role': self.role, 'ip': self.display_ip},
-            ensure_ascii=False))
-        resp = recv_frame(self.sock)
-        if resp is None or resp[0] != 'LOGIN':
-            self.sock.close(); self.sock = None
-            raise RuntimeError('登录失败：密码错误或服务端拒绝连接。')
+        try:
+            self._handshake()
+        except RuntimeError:
+            raise
+        except Exception as e:
+            self._abort_connect()
+            raise RuntimeError(f'密钥交换失败：{e}')
         self._locked_send('FETCH', '')
         # 服务端在 LOGIN 后可能立刻下发 PEERS 广播帧，FETCH 与 FILE 之间可能夹着它，
         # 因此循环读取，跳过 PEERS / SYNC 等广播帧，直到拿到 FILE。
         # 同时把途中收到的 PEERS 记下来，供同步线程首次刷新在线客户端使用。
         while True:
-            resp = recv_frame(self.sock)
+            resp = self._recv()
             if resp is None:
-                self.sock.close(); self.sock = None
+                self._abort_connect()
                 raise RuntimeError('获取日志数据失败。')
             if resp[0] == 'FILE':
                 break
@@ -144,6 +263,61 @@ class RemoteConnection:
             self.initial_file = []
         _upgrade_file_records(self.initial_file)
         return True
+
+    def _abort_connect(self):
+        try:
+            self.sock.close()
+        except Exception:
+            pass
+        self.sock = None
+        self.cipher = None
+        self.encrypted = False
+
+    def _handshake(self):
+        """与（新）服务端做加密握手；对方是旧版明文服务端时自动回退。
+
+        流程：
+          1. 服务端发 HELLO（长期公钥 + 指纹）；
+          2. 本地核对指纹（首次/变更由 verify_fingerprint 决定是否继续）；
+          3. 程序生成随机会话密钥，与登录信息一起用 X25519 派生的密钥加密后回 HELLO_ACK；
+          4. 服务端回 LOGIN 表示握手与鉴权都通过。
+        若首帧不是 HELLO（旧服务端在等 AUTH），则退回明文 AUTH，保证向后兼容。
+        """
+        first = self._recv()
+        if first is None:
+            self._abort_connect()
+            raise RuntimeError('服务端未响应。')
+        if first[0] == 'LOGIN':
+            # 极端情况：旧服务端直接认了（不会发生，但别崩）
+            self.encrypted = False
+            return
+        if first[0] != 'HELLO':
+            self._abort_connect()
+            raise RuntimeError('服务端响应异常，无法建立连接。')
+        try:
+            pub, raw_pub, short = remote_crypto.parse_hello(first[1])
+        except ValueError as e:
+            self._abort_connect()
+            raise RuntimeError(f'服务端公钥无效：{e}')
+        self.server_key = raw_pub
+        self.server_fingerprint = short
+        # 指纹核对：回调返回 False 表示用户拒绝（或指纹与记录不符且用户选择中止）
+        if self.verify_fingerprint is not None:
+            if not self.verify_fingerprint(short, raw_pub):
+                self._abort_connect()
+                raise RuntimeError('已取消连接：未通过服务端身份核对。')
+        session_key = remote_crypto.new_session_key()
+        client_priv = remote_crypto.generate_server_key()   # 每次连接一对临时密钥
+        ack, _ = remote_crypto.make_hello_ack(raw_pub, client_priv, session_key,
+                                             self.password, self.role, self.display_ip)
+        self._locked_send('HELLO_ACK', ack)
+        # cipher 必须在收到 LOGIN 之前挂上：服务端在 LOGIN 之后发的帧都是密文
+        self.cipher = remote_crypto.SessionCipher(session_key)
+        self.encrypted = True
+        resp = self._recv()
+        if resp is None or resp[0] != 'LOGIN':
+            self._abort_connect()
+            raise RuntimeError('登录失败：密码错误或服务端拒绝连接。')
 
     def send_save(self, file_list):
         """把当前全部日志覆盖式保存到服务端。"""
@@ -165,7 +339,7 @@ class RemoteConnection:
     def _start_heartbeat(self, interval=1.0):
         """启动轻量心跳：每 interval 秒补发一帧 NEXT，让服务端始终在空闲阈值内收到本客户端数据。
 
-        必要性：同步方式是「发 FETCH → 读取整份日志」。日志较大时（例如含通联录音的
+        必要性：同步方式是「发 FETCH → 读取整份日志」。日志较大时（例如包含大量历史条目，
         base64 数据），读取会占用较长时间，期间同步线程发不出 FETCH；服务端按
         「2 秒未收到任何信息即视为退出」的规则就会把客户端踢掉，客户端随之中止同步
         （表现为「日志无法同步」）。心跳线程独立于日志传输，可避免这种误判。
@@ -271,7 +445,7 @@ class _SyncThread(QThread):
                 self.conn._locked_send('FETCH', '')
                 self.conn.sock.settimeout(10.0)
                 while self._running:
-                    resp = recv_frame(self.conn.sock)
+                    resp = self.conn._recv()
                     if resp is None:
                         # 对端已关闭连接（服务端结束/被断开）：明确上报断开。
                         # 主动退出（关闭窗口 / 关闭多人日志）已把 _running 置 False，
@@ -545,7 +719,7 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
             
 
         file_length = len(file)
-        # 创建表格部件，增加到15列（含“选择”复选框与“通联录音”列）
+        # 创建表格部件：14 列（含「选择」复选框列与末列「更多」）
         table = QTableWidget(file_length, 14)
         table.setHorizontalHeaderLabels(["选择","日期","时间","己方呼号","对方呼号","频率","调制模式","传播模式","卫星名称", "己方接收信号", "对方接收信号", "己方QTH", "对方QTH","更多"])
         table.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -785,7 +959,7 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
                 key = keys_list[row]
                 cell = table_others.item(row, 1)
                 if cell is None:
-                    continue  # 通联录音行使用 cell widget，跳过
+                    continue  # 该行由 cell widget 承载（非文本单元格），跳过校验与写回
                 text = cell.text()
                 if key == 'date':
                     if not re.search(r'^\d{4}-\d{2}-\d{2}$', text):
@@ -2315,6 +2489,15 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         iv.addLayout(_make_row('局域网地址：', lbl_ip))
         iv.addLayout(_make_row('端口：', lbl_port))
         iv.addLayout(_make_row('密码：', lbl_pw))
+        # 服务端密钥指纹：客户端首次加入时需与这串短码核对，确认没有中间人
+        lbl_fp = QLabel('')
+        lbl_fp.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        lbl_fp.setWordWrap(True)
+        iv.addLayout(_make_row('密钥指纹：', lbl_fp))
+        fp_note = QLabel('加密传输已启用：客户端加入时请核对上面这串指纹。')
+        fp_note.setWordWrap(True)
+        fp_note.setStyleSheet('color: #555; font-size: 11px;')
+        iv.addWidget(fp_note)
         info_w.setVisible(False)
         # 服务端信息归属于「服务端」分类：放进服务端分组内直接显示（不再单独成栏）
         sv.addWidget(info_w)
@@ -2350,6 +2533,11 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
                 lbl_ip.setText(rc.display_ip or get_lan_ip())
                 lbl_port.setText(str(rc.port))
                 lbl_pw.setText(rc.password or '（无）')
+                srv_obj = getattr(window, '_server', None)
+                if srv_obj is not None and getattr(srv_obj, 'fingerprint_short', ''):
+                    lbl_fp.setText(srv_obj.fingerprint_short)
+                else:
+                    lbl_fp.setText('（未启用加密）')
                 info_w.setVisible(True)
             else:
                 status.setText(f'状态：客户端 {rc.host}:{rc.port}')
@@ -2387,8 +2575,15 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
             os.makedirs(rooms_dir, exist_ok=True)
             name = '多人日志_' + _t.strftime('%Y%m%d_%H%M%S')
             fhl_path = os.path.join(rooms_dir, f'{name}.fhl')
-            # 以当前日志作为多人日志初始内容（深拷贝，避免后续修改污染服务端副本）
-            srv = LogServer(password=password, port=0, fhl_path=fhl_path)
+            # 以当前日志作为多人日志初始内容（见下方 start(seed_list=...) 的深拷贝）。
+            # 长期密钥统一放在 file/keys/（与各房间的会话日志分开），便于查找与清理；
+            # 端口默认 8000（与「加入多人日志」对话框的默认端口一致，便于相互对接）；
+            # 若 8000 已被占用，则自动更换一个空闲端口，保证开放多日志不会因此失败。
+            srv = LogServer(password=password, port=DEFAULT_ROOM_PORT,
+                            fhl_path=fhl_path, key_dir='file')
+            if srv.port_status == 'occupied':
+                srv = LogServer(password=password, port=0,
+                                fhl_path=fhl_path, key_dir='file')
             try:
                 srv.start(seed_list=copy.deepcopy(file))
             except Exception as e:
@@ -2396,9 +2591,15 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
                 return
             ip, real_port = srv.address
             lan = get_lan_ip()
-            # 本机即服务端：以 role=host 连回本机，并上报局域网 IP 作为对外展示地址
+            # 本机即服务端：以 role=host 连回本机，并上报局域网 IP 作为对外展示地址。
+            # 这是自己刚启动的服务端，无需（也不应）弹指纹核对；仍会记住公钥，
+            # 以便日后以客户端身份连同一地址时能自动校验。
+            def _self_verify(short_fp, raw_pub):
+                remote_crypto.remember_key('127.0.0.1', real_port, raw_pub)
+                return True
             conn = RemoteConnection('127.0.0.1', real_port, password,
-                                    role='host', display_ip=lan)
+                                    role='host', display_ip=lan,
+                                    verify_fingerprint=_self_verify)
             try:
                 conn.connect()
             except Exception as e:

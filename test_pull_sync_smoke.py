@@ -34,7 +34,7 @@ def pull_once(s, password, timeout=3.0):
 
 
 def main():
-    srv = rs.LogServer(password='000000', port=0)
+    srv = rs.LogServer(password='000000', port=0, encrypt=False)
     srv.start()
     ip, port = srv.address
     print('server', ip, port)

@@ -71,7 +71,7 @@ def pull_peers(s):
 
 
 def main():
-    srv = rs.LogServer(password='000000', port=0)
+    srv = rs.LogServer(password='000000', port=0, encrypt=False)
     srv.start()
     ip, port = srv.address
     print('server', ip, port)

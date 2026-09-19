@@ -32,7 +32,27 @@ def try_join():
     except Exception:
         return
     state['port'] = port
-    conn = RemoteConnection('127.0.0.1', port, '', role='guest')
+    # 走真实的指纹核对路径（与 main.join_server 一致）：首次连接弹窗、之后静默。
+    # 离屏环境下用自动核对器代替人工点击，并在核对通过后写入 known_server_keys.txt。
+    try:
+        print(f'[guest] 准备加入 127.0.0.1:{port}', flush=True)
+    except Exception:
+        pass
+    verify = None
+    try:
+        import remote_crypto
+
+        def _auto_verify(short_fp, raw_pub):
+            status, _old = remote_crypto.check_known_key('127.0.0.1', port, raw_pub)
+            w('fingerprint_checked', status=status, fp=short_fp)
+            remote_crypto.remember_key('127.0.0.1', port, raw_pub)
+            return True
+
+        verify = _auto_verify
+    except Exception as e:
+        w('verify_setup_fail', err=repr(e))
+    conn = RemoteConnection('127.0.0.1', port, '', role='guest',
+                            verify_fingerprint=verify)
     try:
         conn.connect()
     except Exception as e:
@@ -43,6 +63,7 @@ def try_join():
     state['win'] = win
     project.main(win, filee=conn.initial_file, key_=None, remote=conn)
     w('joined', port=port, initial=len(conn.initial_file),
+      encrypted=conn.encrypted, server_fp=conn.server_fingerprint,
       o_calls=[r.get('o_call') for r in conn.initial_file])
     QTimer.singleShot(3000, guest_add)
 

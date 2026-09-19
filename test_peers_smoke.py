@@ -67,7 +67,7 @@ def host_of(peers):
 
 
 def main():
-    srv = rs.LogServer(password='000000', port=0)
+    srv = rs.LogServer(password='000000', port=0, encrypt=False)
     srv.start()
     ip, port = srv.address
     print('server', ip, port)
@@ -106,7 +106,7 @@ def main():
     srv.stop()
 
     # 兼容性：旧版明文密码 AUTH 仍可登录（role 视作 guest）
-    srv2 = rs.LogServer(password='pw2', port=0)
+    srv2 = rs.LogServer(password='pw2', port=0, encrypt=False)
     srv2.start()
     ip2, port2 = srv2.address
     s2 = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

@@ -43,12 +43,12 @@ def main(file):
         'notes': '备注'
     }
 
-    # 动态收集数据中实际出现的全部字段（排除 record），保证不遗漏任何日志条目字段
+    # 动态收集数据中实际出现的全部字段，保证不遗漏任何日志条目字段
     seen_keys = []
     for entry in (file or []):
         if isinstance(entry, dict):
             for k in entry.keys():
-                if k != 'record' and k not in seen_keys:
+                if k not in seen_keys:
                     seen_keys.append(k)
     # 列顺序：已知字段优先（按其定义顺序），其余未知字段按出现顺序追加在后
     ordered_keys = [k for k in translation_dict if k in seen_keys]
