@@ -68,7 +68,7 @@
 
 ## 验证环境（离屏 GUI 冒烟）
 - 项目 venv 可 `QT_QPA_PLATFORM=offscreen` 真实冒烟（建窗/后台线程/读表/点按钮）。
-- **`project.py` 主窗口 offscreen 下硬崩溃**（无回溯、exit 1）——环境限制；`main/satellite_window/mutual_window/batch_project`、独立服务端 `main.py` 可正常离屏。
+- **`project.py` 主窗口可以 offscreen 离屏**（旧记录的“硬崩溃”不成立）：`project.main(QMainWindow(), 数据, 路径, key_=…, recovered=…)` 同步跑完建表/自动保存/关闭守卫，实测 exit 0；配 patch `QMessageBox.exec/clickedButton`（模拟点按钮）、`QMessageBox.information/warning`、`QFileDialog.getSaveFileName`、`fhl_rw.write_fhl_file`（统计落盘）即可端到端测保存与关闭流程（样例 `test_recover_save_smoke.py`）。槽里的 `sys.exit()`（如 esave）会从 PySide6 的 C++ 边界直接终止进程（finally 都不跑）→ 测试前临时 `sys.exit = lambda *a, **k: None`。`main/satellite_window/mutual_window/batch_project`、独立服务端 `main.py` 亦可离屏。
 - 测完核对并还原 `file/m_xml.txt`；`m_lat/m_lon=0,0` 时卫星窗口会先弹「设置观测站」抢在待测提示前。
 - 离屏「嵌套模态消息框」与「两进程真机回归」（`__mp_host.py`/`__mp_guest.py`）的步骤与 7 条踩坑见 `DETAILS.md`。
 - 约定：新增冒烟脚本命名 `__*_smoke.py`，结果写 `__*_out.txt`（两者已被 `.gitignore` 的 `__*_out.txt` 覆盖）。

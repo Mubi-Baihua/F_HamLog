@@ -38,7 +38,9 @@
 
 ## 验证环境（离屏 GUI 冒烟）
 - venv 已装 PySide6-Essentials+cryptography+skyfield+numpy，可 `QT_QPA_PLATFORM=offscreen` 做真实 GUI 冒烟（建窗/后台线程/读表/点按钮）。
-- **`project.py` 主窗口在 offscreen 下硬崩溃**（无回溯、exit 1）——环境限制非代码问题；`main/satellite_window/mutual_window/batch_project` 均可正常离屏。
+- **`project.py` 主窗口也可以离屏跑**（旧记录的“硬崩溃”不成立，实测 exit 0）：`project.main(QMainWindow(), 数据, 路径, key_=…, recovered=…)` 同步跑完建表 / `table_update` 自动保存 / close guard 关闭分支。做法是 patch 掉全部模态与 IO：`QMessageBox.exec`+`clickedButton`（在 exec 里按按钮文本记下 `_fake_clicked` 再返回）、`QMessageBox.information/warning`、`QFileDialog.getSaveFileName`（返回预定路径并计数）、`fhl_rw.write_fhl_file`（记录 `(path, data)` 以统计落盘次数）。样例见 `test_recover_save_smoke.py`。
+  **坑**：槽函数里的 `sys.exit()`（如 `esave`）会从 PySide6 的 C++ 边界直接终止进程，`try/except SystemExit` 与 `finally` 都拦不到 → 测试前临时 `sys.exit = lambda *a, **k: None`（该场景必须用 if/else 分支而非依赖 `sys.exit()` 中断流程）。
+- `main/satellite_window/mutual_window/batch_project`、独立服务端 `main.py` 均可正常离屏。
 - 测完务必核对并还原 `file/m_xml.txt`（测试脚本可能写入坐标残留）。注意 `m_lat/m_lon=0,0` 时打开卫星窗口会先弹「设置观测站」引导框，抢在待测提示框前面。
 - **离屏测「嵌套模态消息框」**（`QMessageBox.exec()` 由 `accept()` 内部弹出）：
   ① 必须显式触发 `QTimer.singleShot(150, dlg.accept)`，否则消息框不出现；

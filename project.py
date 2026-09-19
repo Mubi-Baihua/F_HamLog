@@ -1059,8 +1059,14 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
 
         if (not(message) and aouto_save_b) or message:
             global key
-            # 无保存路径：恢复项目弹“保存恢复的文件”，普通新建项目弹“另存为”
+            # 无保存路径：恢复项目弹“保存恢复的文件”，普通新建项目弹“另存为”。
+            # 只有用户显式保存（message=True）才允许弹对话框；静默自动保存（message=False，
+            # 由 table_update 等触发）没有目标文件可写，直接跳过——绝不能弹界面，否则
+            # 恢复项目一打开就会自己弹出“保存恢复的文件”，随后关闭时再提示一次保存
+            # （即“保存了两遍”）。静默保存失败不影响状态，仍由「未保存更改」流程兜底。
             if save_path == '':
+                if not message:
+                    return False
                 if recovered:
                     return _save_recovered_as()
                 return osave()
@@ -1100,10 +1106,17 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
             return
         import json
         global key
-        fhl_rw.write_fhl_file(save_path,file,key)
-        backup.clear_backup(backup.PROJECT_BACKUP)
-        _bk_snapshot()
-        QMessageBox.information(window, "保存成功", "保存成功！")
+        if save_path == '':
+            # 无保存路径（恢复项目 / 新建后尚未落盘）：交给统一的保存流程
+            # （恢复场景弹「保存恢复的文件」）；用户取消则保持窗口打开，
+            # 避免以空路径写文件（open('') 会直接抛 FileNotFoundError）。
+            if not _do_save():
+                return
+        else:
+            fhl_rw.write_fhl_file(save_path,file,key)
+            backup.clear_backup(backup.PROJECT_BACKUP)
+            _bk_snapshot()
+            QMessageBox.information(window, "保存成功", "保存成功！")
         sys.exit()
 
     def input_HAM_tolls_():
@@ -2099,7 +2112,14 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
             except Exception as e:
                 QMessageBox.warning(window, '保存失败', str(e))
         else:
-            fhl_rw.write_fhl_file(save_path, file, key)
+            if save_path:
+                fhl_rw.write_fhl_file(save_path, file, key)
+            else:
+                # 恢复项目 / 尚未落盘的新建项目：没有目标文件可写 → 交给统一的保存流程
+                # （恢复场景弹「保存恢复的文件」）；用户取消则提前返回，内容继续以
+                # 「未保存」状态留在内存与备份中，不清空备份也不复位快照。
+                if not _do_save():
+                    return
         # 追加即落盘：视为已保存，清空备份并更新快照
         backup.clear_backup(backup.PROJECT_BACKUP)
         _bk_snapshot()
@@ -2213,17 +2233,20 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
     table_update()
 
     # ---------- 未保存内容自动备份 / 关闭守卫 ----------
-    # 打开项目时：把当前（已保存）内容写入备份作为基线；若为空则清空
+    # 打开项目时：把当前（已保存）内容写入备份作为基线；若为空则清空。
+    # 恢复场景例外：恢复进来的内容尚未落盘到真实项目文件，必须保持「未保存更改」状态
+    # （快照置为永不等的哨兵值，使 _bk_is_dirty() 恒为 True，关闭时会提示保存/不保存/取消），
+    # 且**不回写备份**——内容本就来自备份文件；若在此回写，即便用户刚刚已把恢复内容保存
+    # 成项目文件，后面的哨兵仍会把状态判脏，关闭时又被要求保存一次（即“保存了两遍”），
+    # 并让下次启动再次提示恢复同一份内容。
     _bk_snapshot()
-    if file:
-        _bk_write()
-    else:
-        _bk_clear()
-    # 恢复场景：恢复进来的内容尚未落盘到真实项目文件，强制标记为「未保存更改」
-    # （快照置为永不等的哨兵值，使 _bk_is_dirty() 恒为 True，关闭时会再次提示保存/不保存/取消）
     if recovered:
         _bk_state['last'] = ''
         _bk_state['local'] = ''
+    elif file:
+        _bk_write()
+    else:
+        _bk_clear()
 
     # 周期定时器：存在未保存更改时即时备份，覆盖意外关闭/崩溃场景
     def _bk_tick():
