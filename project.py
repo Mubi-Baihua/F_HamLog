@@ -17,6 +17,7 @@ import fhl_rw
 import copy
 import call_upper
 import backup
+import theme
 import remote_crypto
 import remote_server
 from remote_server import send_frame, recv_frame, LogServer, get_lan_ip
@@ -97,7 +98,7 @@ def _fingerprint_verify_dialog(parent, host, port, short_fp, status):
 
     if status == 'mismatch':
         warn = QLabel('服务端密钥指纹与上次记录不一致！')
-        warn.setStyleSheet('color: #c0392b; font-weight: bold;')
+        warn.setStyleSheet(theme.warn_css('font-weight: bold;'))
         lay.addWidget(warn)
         tip = QLabel(
             '这可能意味着服务端重装/更换了机器（正常），\n'
@@ -118,7 +119,10 @@ def _fingerprint_verify_dialog(parent, host, port, short_fp, status):
     fp_label.setFont(f)
     fp_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
     fp_label.setAlignment(Qt.AlignCenter)
-    fp_label.setStyleSheet('padding: 8px; background: #f0f0f0; border: 1px solid #ccc;')
+    # 指纹框：底色/边框跟随主题（写死 #f0f0f0 在深色模式下会与白色文字撞底）
+    fp_label.setStyleSheet('padding: 8px; background: %s; border: 1px solid %s;'
+                           % (theme.subtle_bg(dlg).name(),
+                              theme.border_color(dlg).name()))
     lay.addWidget(fp_label)
 
     host_label = QLabel(f'服务端：{host}:{port}')
@@ -1729,7 +1733,7 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         # 顶部提示栏（已取消 全选 / 全不选 按钮）
         top_row = QHBoxLayout()
         hint = QLabel('勾选下方记录，选择结果会自动同步到主页面的选择框（Ctrl+A 全选 / Ctrl+I 反选 / Ctrl+D 取消选择）')
-        hint.setStyleSheet('color: gray;')
+        hint.setStyleSheet(theme.hint_css())
         top_row.addWidget(hint)
         top_row.addStretch(1)
         lay.addLayout(top_row)
@@ -2185,7 +2189,10 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         pack_list = eval(f.read())
     # 在菜单栏上显示插件状态（若无插件则显示“未安装插件”）
     plugin_label = QLabel()
-    plugin_label.setStyleSheet("color: gray; padding: 4px;")
+    plugin_label.setStyleSheet(theme.hint_css('padding: 4px;'))
+    # 主题变化时重刷插件状态标签颜色（写死 gray 在深色底上偏暗）
+    theme.watch_theme(window, lambda: plugin_label.setStyleSheet(
+        theme.hint_css('padding: 4px;')))
     plugin_label.setAlignment(Qt.AlignCenter)
     plugin_action = QWidgetAction(window)
     plugin_action.setDefaultWidget(plugin_label)
@@ -2521,7 +2528,7 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         iv.addLayout(_make_row('密钥指纹：', lbl_fp))
         fp_note = QLabel('加密传输已启用：客户端加入时请核对上面这串指纹。')
         fp_note.setWordWrap(True)
-        fp_note.setStyleSheet('color: #555; font-size: 11px;')
+        fp_note.setStyleSheet(theme.hint_css('font-size: 11px;'))
         iv.addWidget(fp_note)
         info_w.setVisible(False)
         # 服务端信息归属于「服务端」分类：放进服务端分组内直接显示（不再单独成栏）

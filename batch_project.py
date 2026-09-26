@@ -11,6 +11,7 @@ import datetime
 import json
 import fhl_rw
 import backup
+import theme
 
 
 # --------------------------------------------------------------------------
@@ -88,7 +89,7 @@ class FrozenTableWidget(QTableWidget):
         self._frozen.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._frozen.setFocusPolicy(Qt.NoFocus)
         self._frozen.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self._frozen.setStyleSheet("QTableView{ border:none; background-color:#f3f3f3; }")
+        self._apply_frozen_theme()
         self.viewport().stackUnder(self._frozen)
         self._frozen.raise_()
         self._frozen.show()
@@ -99,6 +100,28 @@ class FrozenTableWidget(QTableWidget):
         # 垂直滚动同步（双向，带防抖）
         self.verticalScrollBar().valueChanged.connect(self._sync_from_main)
         self._frozen.verticalScrollBar().valueChanged.connect(self._sync_from_frozen)
+
+    def _apply_frozen_theme(self):
+        """冻结层底色跟随主题取色。
+
+        曾写死 background-color:#f3f3f3，在 Windows 深色模式下文字仍取主题的
+        白色 → 白字压浅灰底，整列内容不可见。这里改为从调色板推导：浅色主题
+        取浅灰、深色主题取深灰，两种主题下都与文字形成对比。
+
+        注意：取色必须用主表（self）的调色板 —— 下面这条 stylesheet 的
+        background-color 会被 Qt 反写进冻结层自身的调色板，用冻结层取色会
+        在首次设置后就锁死在那个颜色，系统切换深浅色时不会跟着变。
+        """
+        css = ('QTableView{ border:none; background-color:%s; }'
+               % theme.subtle_bg(self).name())
+        if css != self._frozen.styleSheet():
+            self._frozen.setStyleSheet(css)
+
+    def changeEvent(self, event):
+        # 系统深浅色切换时重新取色（Qt 会把调色板/主题变化事件发给控件）
+        if event.type() in theme.THEME_EVENTS:
+            self._apply_frozen_theme()
+        super().changeEvent(event)
 
     def _sync_frozen_from_main(self, logical_index, old_size, new_size):
         if logical_index != 0 or self._syncing:
@@ -321,7 +344,8 @@ def main(window, preset=None, on_saved=None, preset_records=None, recovered=Fals
 
     # 实时时钟：显示当前 UTC 与本地时间（每秒刷新一次），置于窗口上方
     clock_label = QLabel()
-    clock_label.setStyleSheet('color:#444; font-size:9pt; padding:2px 0;')
+    # 颜色在下方 apply_theme_colors() 里按当前主题设置（写死颜色会在深色模式下看不清）
+    clock_label.setStyleSheet('font-size:9pt; padding:2px 0;')
     clock_label.setAlignment(Qt.AlignLeft)
 
     def update_clock():
@@ -729,7 +753,8 @@ def main(window, preset=None, on_saved=None, preset_records=None, recovered=Fals
 
         summary_label = QLabel(f'已成功录入 {len(fhl_list)} 条记录，请选择保存方式：')
         summary_label.setAlignment(Qt.AlignCenter)
-        summary_label.setStyleSheet('font-size: 10pt; color: #555;')
+        summary_label.setStyleSheet('font-size: 10pt; color: %s;'
+                                    % theme.hint_color().name())
         finish_layout.addWidget(summary_label)
 
         finish_layout.addSpacing(6)
@@ -920,8 +945,17 @@ def main(window, preset=None, on_saved=None, preset_records=None, recovered=Fals
     # 快捷键说明（始终可见）：列出全部按钮与导航快捷键
     hint = QLabel('快捷键：Ctrl+←/→ 上一条/下一条 · Ctrl+N 新建 · Ctrl+D 删除 · '
                   'Ctrl+Z 撤销 · Ctrl+Y 重做 · Ctrl+S 完成')
-    hint.setStyleSheet('color:#666; font-size:9pt;')
+    hint.setStyleSheet('font-size:9pt;')
     layout.addWidget(hint)
+
+    # 次要文字色（时钟、快捷键提示）统一跟随系统主题：深浅色下都保持可读
+    def apply_theme_colors():
+        _hint = theme.hint_color().name()
+        clock_label.setStyleSheet('color:%s; font-size:9pt; padding:2px 0;' % _hint)
+        hint.setStyleSheet('color:%s; font-size:9pt;' % _hint)
+
+    apply_theme_colors()
+    theme.watch_theme(window, apply_theme_colors)
 
     # 让 Ctrl+S 在未编辑（按钮/窗口聚焦）与编辑中（编辑器聚焦）时都能触发保存
     nav_filter.do_save = _finish_save

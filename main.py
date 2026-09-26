@@ -8,6 +8,7 @@ import re
 import json
 import fhl_rw
 import backup
+import theme
 from dialog_defaults import desktop_dir
 
 # 各窗口的强引用必须声明在模块级：
@@ -229,6 +230,8 @@ def main():
     
     app = QApplication(sys.argv)
     app.setWindowIcon(QIcon("file/F_HamLog.ico"))
+    # 颜色模式：跟随系统／浅色／深色（保存在设置文件，见 theme.py）
+    theme.init_app(app)
 
     global window
     window = QMainWindow()
@@ -265,7 +268,13 @@ def main():
     sub.setAlignment(Qt.AlignCenter)
     f = sub.font(); f.setPointSize(10)
     sub.setFont(f)
-    sub.setStyleSheet('color:#7a8190;')
+
+    # 副标题用次要文字色（跟随主题；写死颜色在深色模式下会看不清）
+    def _refresh_theme():
+        sub.setStyleSheet(theme.hint_css())
+
+    _refresh_theme()
+    theme.watch_theme(window, _refresh_theme)
     main_layout.addWidget(title)
     main_layout.addWidget(sub)
     main_layout.addSpacing(50)

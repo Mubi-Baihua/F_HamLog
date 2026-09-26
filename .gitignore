@@ -35,6 +35,7 @@ F_HamLog_Remote_Log_Server_2.0.0/password_xml.txt
 
 # 临时调试产物
 __*_out.txt
+__*_out.png
 __*.log
 
 # 发布流程（GitHub Actions / 本地用 CI 脚本打包）的中间产物

@@ -1,5 +1,6 @@
 from PySide6.QtWidgets import *
 import call_upper
+import theme
 from dialog_defaults import desktop_dir
 
 # 「星历数据源」独立窗口的引用（防止被回收；非模态，可重复打开）
@@ -100,8 +101,9 @@ def main(window):
                 QMessageBox.warning(window, "从之前版本导入数据", "请选择之前版本 F HamLog.exe 所在的文件夹！")
                 back_set()
 
-    window.resize(770, 505)
-    window.setFixedSize(770, 505)
+    # 颜色模式与自动保存合并成一行后，内容高度减少约 30px，窗口高度同步收回
+    window.resize(770, 475)
+    window.setFixedSize(770, 475)
     window.setWindowTitle('设置')
     central_widget = QWidget()
     window.setCentralWidget(central_widget)
@@ -137,7 +139,7 @@ def main(window):
     aouto_save.setChecked(aouto_save_b)
     aouto_list_ = QCheckBox("自动按时间排序", central_widget)
     aouto_list_.setChecked(aouto_list_b)
-    sat_auto_update = QCheckBox("卫星星历自动更新", central_widget)
+    sat_auto_update = QCheckBox("星历自动更新", central_widget)
     sat_auto_update.setChecked(sat_auto_update_b)
     sat_auto_update.setToolTip("开启后，程序会在后台按设定间隔自动刷新卫星星历(TLE)")
     sat_update_hours_spin = QSpinBox(central_widget)
@@ -145,6 +147,27 @@ def main(window):
     sat_update_hours_spin.setValue(sat_update_hours)
     sat_update_hours_spin.setSuffix(" 小时")
     sat_update_label = QLabel("更新间隔:", central_widget)
+
+    # ---------- 颜色模式（即改即生效并落盘，与「星历数据源」窗口同样的即时风格） ----------
+    theme_mode_label = QLabel('颜色模式:', central_widget)
+    theme_mode_box = QComboBox(central_widget)
+    for _value, _label in theme.MODE_LABELS:
+        theme_mode_box.addItem(_label, _value)
+    _idx = theme_mode_box.findData(theme.load_mode())
+    if _idx >= 0:
+        theme_mode_box.setCurrentIndex(_idx)
+    theme_mode_box.setToolTip('跟随系统：随系统深浅色自动切换；浅色/深色：固定外观。'
+                              '改动立即生效并保存，无需点「保存更改」。')
+
+    def on_theme_mode_changed(_index=None):
+        mode = theme_mode_box.currentData()
+        theme.set_mode(mode)    # 立即生效（全部已打开窗口一起刷新）
+        theme.save_mode(mode)   # 立即落盘（不必点「保存更改」）
+        print('颜色模式:', theme.MODE_LABEL_OF.get(mode, mode))
+
+    theme_mode_box.currentIndexChanged.connect(on_theme_mode_changed)
+
+    # 开关型选项与颜色模式并作一行，省下一行高度留给窗口整体（770px 下合计约 660px）
     h_layout = QHBoxLayout()
     h_layout.addWidget(aouto_save)
     h_layout.addWidget(aouto_list_)
@@ -152,6 +175,9 @@ def main(window):
     h_layout.addWidget(sat_auto_update)
     h_layout.addWidget(sat_update_label)
     h_layout.addWidget(sat_update_hours_spin)
+    h_layout.addSpacing(15)
+    h_layout.addWidget(theme_mode_label)
+    h_layout.addWidget(theme_mode_box)
 
     # ---------- 星历数据源：按钮与「插件设置」同一行（数据源配置在独立窗口） ----------
     src_set_btn = QPushButton("设置星历数据源", central_widget)
@@ -248,18 +274,24 @@ def main(window):
     layout.addWidget(line)
 
 
-    fk_l = QLabel()
-    fk_l.setText('''<html><head/>
+    def _link_html():
+        """反馈/更新链接的 HTML：链接色跟随主题（写死 #0066cc 在深色底上偏暗）。"""
+        return '''<html><head/>
                 <style>a {text-decoration: none; 
-                        color: #0066cc;}
+                        color: %s;}
                 .t {margin-top: 5px;}</style>
                 </head><body>
                 <div class="t">问题反馈到：BI8SQL@outlook.com</div>
                 <div class="t">版本更新请访问：<a href="https://mubi-baihua.github.io/f_hamlog.html">https://mubi-baihua.github.io/f_hamlog.html</a></div>
                 <div class="t">Github项目：<a href="https://github.com/Mubi-Baihua/F_HamLog/">https://github.com/Mubi-Baihua/F_HamLog/</a></div>
-                </body></html>''')
+                </body></html>''' % theme.link_color().name()
+
+    fk_l = QLabel()
+    fk_l.setText(_link_html())
     fk_l.setOpenExternalLinks(True)
     layout.addWidget(fk_l)
+    # 颜色模式切换后重刷链接色
+    theme.watch_theme(window, lambda: fk_l.setText(_link_html()))
 
     line = QFrame(central_widget)
     line.setFrameShape(QFrame.HLine)
@@ -283,6 +315,7 @@ def main(window):
 
 if __name__ == '__main__':
     app = QApplication()
+    theme.init_app(app)
     window=QMainWindow()
     main(window)
     app.exec()

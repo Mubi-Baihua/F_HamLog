@@ -9,7 +9,22 @@
 - 持久化 `.fhl`（utf-8 JSON，可选 AES-GCM）走 `fhl_rw.py`。
 - 设置 `file/m_xml.txt` 是 `eval` 的 dict，**一律 `.get` 读**；键：m_call/m_qth/m_dig/aouto_save/aouto_list、m_lat/m_lon/m_alt、sat_auto_update/sat_update_hours(1–168)/sat_last_update、sat_b_lat/lon/alt、sat_mu_el_a/b、sat_mu_dur/filter/sats、sat_map_hours/sat_dur、sat_sats/mu_sats。**星历数据源不在其中**（见下）。
 - 版本 2.4；Nuitka 打包独立 exe。
-- **本机 shell 不可用**（PortableGit shim 缺 dirname/cat/head/grep）：用 Glob/Grep/Read/Edit，或项目 venv `D:\F-Dev\BIG\F_HamLog\.venv\Scripts\python.exe`；命令输出写文件再 Read。
+- **界面颜色一律走 `theme.py` 取色，禁止写死颜色**（深色模式下 `#444` 字/`#f3f3f3` 底会不可读）：
+  `hint_css()/warn_css()/link_css()`、`hint_color()/warn_color()/link_color()`、`subtle_bg()`、
+  `border_color()`、`is_dark()`；长期窗口要 `theme.watch_theme(控件, 回调)` 注册主题变化重刷。
+  坑：给控件设 `background-color` 的 QSS 会**反写进该控件自己的调色板**，用它自己取色会锁死在
+  首次颜色 → 取色要用未被 QSS 染色的父/兄弟控件。
+- **颜色模式**（跟随系统/浅色/深色）存 `file/m_xml.txt` 的 `theme_mode` 键：`theme.init_app(app)`
+  在 main.py 启动时应用；「设置」窗口下拉**即改即生效并落盘**（不必点「保存更改」）；该下拉与
+  「自动保存/自动按时间排序/星历自动更新/更新间隔」**同行**（`set.py` 固定 770×475）。
+  `system` = `setColorScheme(Unknown)` + `setPalette(QPalette())` 交回 Qt；`light/dark` =
+  `setColorScheme` + 自建调色板（深 Window #353535 / Base #252525，浅 Window #f0f0f0）。
+- 不纳入主题化（勿误改）：`#remote_project.py`（历史备份、无引用）、
+  `F_HamLog_Remote_Log_Server_2.0.0/main.py`（独立服务端，改后须重打包）；地图画布绘制色
+  （satellite_map_window 的 QColor/QPen/QBrush 常量）是地图语义色，深色下地图仍浅色是刻意的。
+- **本机 shell 部分可用**（PortableGit shim 缺 dirname/cat）：`ls/head/tail/wc/rm/git` 实测可用
+  （2026-09-26）；文件读写仍优先 Glob/Grep/Read/Edit；命令输出写文件再 Read。项目 venv
+  `D:\F-Dev\BIG\F_HamLog\.venv\Scripts\python.exe`（worktree 在 C 盘、venv 在 D 盘，直接用绝对路径即可）。
 
 ## 卫星功能
 - `satellite_pred.py`（skyfield+numpy 离线）。`parse_tle_text` 的名字已 `.strip()`，与 satrec/表格按名匹配才不错位。

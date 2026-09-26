@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import QThread, Signal
 
 import satellite_pred as sp
+import theme
 from satellite_window import (
     SatelliteSelectDialog, TleFetchWorker, LOCAL_TZ,
     _load_settings, _save_settings, _duration_str, _utc_to_local_str,
@@ -81,10 +82,14 @@ class StationBox(QGroupBox):
         grid.addWidget(QLabel('最低仰角:'), 1, 4)
         grid.addWidget(self.el_spin, 1, 5)
 
+        self.hint_label = None
         if hint:
             lbl = QLabel(hint)
-            lbl.setStyleSheet('color: gray;')
+            # 次要提示文字：深色模式下写死的 gray 会看不清，改为随主题取色
+            lbl.setStyleSheet(theme.hint_css())
             grid.addWidget(lbl, 2, 0, 1, 6)
+            # 留存引用，供主题切换时重刷颜色
+            self.hint_label = lbl
 
         # 任意输入变更（坐标/网格编辑完成）都向外发信号，用于自动重算
         self.lat_edit.editingFinished.connect(self._coord_to_grid)
@@ -306,7 +311,8 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
     layout.addWidget(sep)
 
     status = QLabel('准备中…')
-    status.setStyleSheet('color: gray;')
+    # 次要提示文字：深色模式下写死的 gray 会看不清，改为随主题取色
+    status.setStyleSheet(theme.hint_css())
     layout.addWidget(status)
 
     # ---------- 结果表 ----------
@@ -694,6 +700,15 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
             setattr(win, attr, None)
         QMainWindow.closeEvent(win, event)
     win.closeEvent = _on_close
+
+    # 主题（跟随系统/浅色/深色）变化时重刷本窗口的次要文字色
+    def refresh():
+        status.setStyleSheet(theme.hint_css())
+        for box in (box_a, box_b):
+            hint_label = getattr(box, 'hint_label', None)
+            if hint_label is not None:
+                hint_label.setStyleSheet(theme.hint_css())
+    theme.watch_theme(win, refresh)
 
     win.show()
     # 设置文件里保存的自选卫星超限：给出与「选择卫星」对话框一致的提示（非静默裁剪）。

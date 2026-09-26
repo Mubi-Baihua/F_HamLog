@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QThread, Signal, QTimer
 
 import satellite_pred as sp
+import theme
 from dialog_defaults import desktop_dir
 
 SETTINGS_PATH = sp.app_path('file/m_xml.txt')
@@ -269,7 +270,8 @@ class SatelliteSelectDialog(QDialog):
 
         # 搜索命中计数（"匹配 N / 共 M 颗"）；已选数量超限时转为醒目的红色提示
         self.count_label = QLabel('')
-        self.count_label.setStyleSheet('color: gray;')
+        # 次要提示文字：深色模式下写死的 gray 会看不清，改为随主题取色
+        self.count_label.setStyleSheet(theme.hint_css())
         lay.addWidget(self.count_label)
 
         btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
@@ -343,11 +345,12 @@ class SatelliteSelectDialog(QDialog):
         text = f'{base}　已选 {n} 颗'
         if n > limit:
             text += f'，超过上限 {limit} 颗'
-            self.count_label.setStyleSheet('color: #c0392b;')
+            # 警告文字：深色主题下写死的红色偏暗，改用随主题提亮的 warn 色
+            self.count_label.setStyleSheet(theme.warn_css())
         elif getattr(self, '_count_base_red', False):
-            self.count_label.setStyleSheet('color: #c0392b;')
+            self.count_label.setStyleSheet(theme.warn_css())
         else:
-            self.count_label.setStyleSheet('color: gray;')
+            self.count_label.setStyleSheet(theme.hint_css())
         self.count_label.setText(text)
 
     def _visible_names(self):
@@ -770,7 +773,7 @@ def main(parent_window, quick_log_callback=None, title='卫星过境'):
         '自当前时刻起的地面轨迹与实时位置，以及本台站。\n'
         '在结果表中点选一行，该卫星会在地图上聚焦高亮。')
     # 星历自动更新实时开关（等价于“设置”中的复选框）
-    auto_cb = QCheckBox('卫星星历自动更新')
+    auto_cb = QCheckBox('星历自动更新')
     _auto_on = bool(settings.get('sat_auto_update', False))
     _auto_hours = int(settings.get('sat_update_hours', 24) or 24)
     auto_cb.setChecked(_auto_on)
@@ -789,7 +792,8 @@ def main(parent_window, quick_log_callback=None, title='卫星过境'):
     # 星历最近更新时间：取本地缓存文件 file/amateur.tle 的修改时间（手动刷新或后台
     # 自动更新写入后均会刷新）。放在「数据与设置」框内，窗口打开即显示，获取完成后再次刷新。
     tle_time_label = QLabel('星历更新时间：—')
-    tle_time_label.setStyleSheet('color: gray;')
+    # 次要提示文字：深色模式下写死的 gray 会看不清，改为随主题取色
+    tle_time_label.setStyleSheet(theme.hint_css())
     top_vlay.addWidget(tle_time_label)
     layout.addWidget(top_grp)
 
@@ -832,7 +836,8 @@ def main(parent_window, quick_log_callback=None, title='卫星过境'):
     layout.addWidget(bot_grp)
 
     status = QLabel('准备中…')
-    status.setStyleSheet('color: gray;')
+    # 次要提示文字：深色模式下写死的 gray 会看不清，改为随主题取色
+    status.setStyleSheet(theme.hint_css())
     layout.addWidget(status)
 
     # 卫星星历下载进度条 + 取消按钮：仅在「刷新TLE」下载期间显示，平时隐藏
@@ -1385,6 +1390,12 @@ def main(parent_window, quick_log_callback=None, title='卫星过境'):
             setattr(win, attr, None)  # 断开引用，避免后续访问已停止/已删除的线程
         QMainWindow.closeEvent(win, event)
     win.closeEvent = _on_close
+
+    # 主题（跟随系统/浅色/深色）变化时重刷本窗口的次要文字色
+    def _refresh_theme():
+        tle_time_label.setStyleSheet(theme.hint_css())
+        status.setStyleSheet(theme.hint_css())
+    theme.watch_theme(win, _refresh_theme)
 
     # ---------- 先显示界面，再后台获取 TLE（加速打开） ----------
     win.show()

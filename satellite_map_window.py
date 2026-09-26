@@ -42,6 +42,7 @@ from PySide6.QtGui import (
 )
 
 import satellite_pred as sp
+import theme
 # 复用卫星过境预测窗口的设置读写（单向依赖：satellite_window 只在函数内部
 # 延迟 import 本模块，因此这里的顶层 import 不会造成循环导入）
 from satellite_window import _load_settings, _save_settings
@@ -1375,7 +1376,8 @@ class MapWindow(QMainWindow):
 
         # ---------- 信息条 ----------
         self._info = QLabel('准备中…')
-        self._info.setStyleSheet('color: gray;')
+        # 次要文字色跟随主题：写死 gray 在深色底上偏暗，看不清
+        self._info.setStyleSheet(theme.hint_css())
         # 关键：允许自动换行。否则 QLabel 默认不换行，其 minimumSizeHint 宽度
         # 等于整段状态文字「单行」所需宽度，会把窗口最小宽度顶到上千像素，
         # 导致 resize(960,600) 被最小约束覆盖、窗口被异常撑宽。
@@ -1399,6 +1401,9 @@ class MapWindow(QMainWindow):
         self._timer.timeout.connect(self._tick)
         self._timer.start(1000)
         self._tick()
+
+        # 主题变化时重刷信息条颜色（地图画布本身保持浅色地图，不随主题变）
+        theme.watch_theme(self, lambda: self._info.setStyleSheet(theme.hint_css()))
 
     def showEvent(self, event):
         """首次显示时把窗口高度锁定为画布 2:1 所需值。

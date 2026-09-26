@@ -20,14 +20,28 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import *
 
 import satellite_pred as sp
+import theme
 
 WINDOW_W, WINDOW_H = 660, 430
 
 # 列表里长地址的省略方式：中间省略，保证「协议+主机」和「文件名」都看得见
 _ELIDE = Qt.TextElideMode.ElideMiddle
 
-_HINT_COLOR = 'color: gray;'
-_WARN_COLOR = 'color: #c0392b;'
+
+def _hint_css():
+    """次要提示色：跟随主题（写死 gray 在深色底上偏暗）。"""
+    return theme.hint_css()
+
+
+def _warn_css():
+    """警告提示色：深色主题下自动提亮，写死 #c0392b 会看不清。"""
+    return theme.warn_css()
+
+
+def _list_qss():
+    """选中项用主题链接色 + 透明背景（保留斑马纹底色）。"""
+    return ("QListWidget::item:selected { background: transparent; color: %s; }"
+            % theme.link_color().name())
 
 
 def _display_path(path):
@@ -64,7 +78,7 @@ def main(window=None, on_save=None):
         '以列表中先出现的数据源为准。\n'
         '双击某一行即可直接编辑地址（回车确认、Esc 取消）；点「保存」后写入：%s'
         % path_text, central)
-    tip.setStyleSheet(_HINT_COLOR)
+    tip.setStyleSheet(_hint_css())
     tip.setWordWrap(True)
     layout.addWidget(tip)
 
@@ -79,14 +93,22 @@ def main(window=None, on_save=None):
     src_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
     src_list.setToolTip(
         '双击某一项即可编辑；地址需以 http:// 或 https:// 开头。')
-    # 选中行不整行填充蓝色：用蓝色文字 + 透明背景表示选中（保留斑马纹底色）
-    src_list.setStyleSheet(
-        "QListWidget::item:selected { background: transparent; color: #1f5bb5; }")
+    # 选中行不整行填充蓝色：用主题链接色文字 + 透明背景表示选中（保留斑马纹底色）
+    src_list.setStyleSheet(_list_qss())
     layout.addWidget(src_list, 1)
 
     status = QLabel('', central)
-    status.setStyleSheet(_HINT_COLOR)
+    status.setStyleSheet(_hint_css())
     layout.addWidget(status)
+
+    # 记住最后一次状态文字与是否为警告，主题切换时据此重刷颜色
+    _status = {'text': '双击某行即可编辑；更改后点「保存」写入文件。', 'warn': False}
+
+    def _set_status(text, warn=False):
+        """统一设置状态文字与颜色（记住状态，便于主题切换时重刷）。"""
+        _status['text'], _status['warn'] = text, warn
+        status.setText(text)
+        status.setStyleSheet(_warn_css() if warn else _hint_css())
 
     # ---------- 按钮 ----------
     btn_row = QHBoxLayout()
@@ -161,13 +183,11 @@ def main(window=None, on_save=None):
         try:
             saved = sp.save_tle_sources(_urls())
         except Exception as e:
-            status.setStyleSheet(_WARN_COLOR)
-            status.setText('保存失败：%s' % e)
+            _set_status('保存失败：%s' % e, True)
             return False
         _dirty['flag'] = False
         _refresh_buttons()
-        status.setStyleSheet(_HINT_COLOR)
-        status.setText('已保存：%d 个数据源' % len(saved))
+        _set_status('已保存：%d 个数据源' % len(saved))
         # 规整后与界面不一致（例如全被删空而回落到默认）时，以文件内容为准刷新界面
         if saved != _urls():
             _reload(saved)
@@ -182,8 +202,7 @@ def main(window=None, on_save=None):
         """界面已改动但尚未写文件：置脏标记并提示。"""
         _dirty['flag'] = True
         _refresh_buttons()
-        status.setStyleSheet(_HINT_COLOR)
-        status.setText('%s（未保存，点「保存」写入文件）' % note)
+        _set_status('%s（未保存，点「保存」写入文件）' % note)
 
     def on_item_changed(item):
         """就地编辑提交后的校验：规范化文本、拒绝非法/重复地址并回滚。"""
@@ -215,8 +234,7 @@ def main(window=None, on_save=None):
 
     def _revert(item, old, why):
         _set_item_text(item, old)
-        status.setStyleSheet(_WARN_COLOR)
-        status.setText('未修改：%s' % why)
+        _set_status('未修改：%s' % why, True)
         try:
             QApplication.beep()
         except Exception:
@@ -245,8 +263,7 @@ def main(window=None, on_save=None):
     def del_source():
         row = _row()
         if row < 0:
-            status.setStyleSheet(_WARN_COLOR)
-            status.setText('请先选中要删除的数据源。')
+            _set_status('请先选中要删除的数据源。', True)
             return
         if src_list.count() <= 1:
             QMessageBox.information(win, '删除星历数据源',
@@ -298,7 +315,15 @@ def main(window=None, on_save=None):
     close_btn.clicked.connect(lambda: win.close())
 
     _reload()
-    status.setText('双击某行即可编辑；更改后点「保存」写入文件。')
+    _set_status('双击某行即可编辑；更改后点「保存」写入文件。')
+
+    # 主题变化时重刷提示/选中/状态颜色（写死颜色在深色主题下会看不清）
+    def _refresh_theme():
+        tip.setStyleSheet(_hint_css())
+        src_list.setStyleSheet(_list_qss())
+        _set_status(_status['text'], _status['warn'])
+
+    theme.watch_theme(win, _refresh_theme)
     win.show()
     return win
 
