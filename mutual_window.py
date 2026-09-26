@@ -575,10 +575,12 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
             QMessageBox.information(win, '暂无卫星', '请先刷新 TLE。')
             return
         names = [n for (n, s) in sats]
+        # 卫星名 → NORAD 编号，供选择窗口的「使用卫星编号搜索」使用
+        satnums = sp.satellite_number_map(sats)
         # 「清除所有选择」后直接重建一个全新的选择窗口（而非在原窗口逐项重置，
         # 数千颗时后者会因反复重排/刷新而明显卡顿）。循环直到用户确定或取消为止。
         while True:
-            dlg = SatelliteSelectDialog(win, names, selected_names)
+            dlg = SatelliteSelectDialog(win, names, selected_names, satnums)
             if dlg.exec() == QDialog.Accepted:
                 # 对话框已在 accept() 里拦住超量选择，这里再裁一次作兜底
                 selected_names, _ = sp.clamp_selected_count(dlg.get_selected())

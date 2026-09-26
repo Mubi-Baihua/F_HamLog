@@ -26,6 +26,7 @@ import os
 import subprocess
 import re
 import sys
+import unicodedata
 import urllib.request
 from datetime import datetime, timezone, timedelta
 
@@ -144,8 +145,10 @@ def norad_key(field):
     不同数据源的补位方式不同：Celestrak 用 0 补足 5 位（`1 00694U`），
     有的数据源用空格补位（`1   694U`）。两者必须视为同一颗卫星，故统一
     去掉前导 0；启用 Alpha-5 编码（首字符为字母）时保持原样并大写。
+
+    同样先做 NFKC 兼容折叠，使中文输入法「全角」下打出的 ６１７８１ 等价于 61781。
     """
-    text = (field or '').strip()
+    text = unicodedata.normalize('NFKC', (field or '').strip())
     if not text:
         return ''
     if text.isdigit():
@@ -1228,8 +1231,15 @@ def normalize_sat_name(name):
 
     只保留字母数字（其余字符一律丢弃），因此 ``SAUDISAT 1C (SO-50)``
     归一化后为 ``SAUDISAT1CSO50``，用 ``so50`` 也能搜到。
+
+    额外做一次 NFKC 兼容折叠（``unicodedata.normalize``）：把**全角**字符折成半角，
+    例如 ``ＡＳＲＴＵ－１`` → ``ASRTU-1``。中文输入法切到「全角」时打出来的字母/数字
+    看起来和半角几乎一样，但 ``str.isalnum()`` 对全角字母/数字同样返回 True，
+    于是它们能通过下面的过滤、却永远匹配不上半角名称，表现为
+    「明明输入了 ASRTU-1 却搜不到」。按半角/全角折叠后这类输入即可正常工作。
     """
-    return ''.join(ch for ch in (name or '').upper() if ch.isalnum())
+    text = unicodedata.normalize('NFKC', name or '')
+    return ''.join(ch for ch in text.upper() if ch.isalnum())
 
 
 def sat_name_match(name, keywords):
@@ -1251,6 +1261,40 @@ def parse_sat_keywords(text):
     """
     return [k for k in (normalize_sat_name(t) for t in (text or '').split())
             if k]
+
+
+def sat_number_match(number, keywords):
+    """按卫星编号（NORAD ID）宽松匹配：编号里包含任一关键词即命中。
+
+    与 :func:`sat_name_match` 的「与」关系不同，编号是一串数字、没有「词」的概念，
+    多个关键词之间取「或」——输入 ``61 781`` 同样能命中 ``61781``。
+
+    归一化沿用 :func:`norad_key`：去掉前导 0（``061781`` → ``61781``），从而兼容
+    不同数据源的补位写法；关键词也先过一遍，使输入写法差异被抹平。
+
+    用途：TLE 名称行里的卫星名往往不含编号（如 ``ASRTU-1 (RS64S/BJ2CR)`` 对应编号
+    ``61781``），只按名称搜是搜不到编号的，需配合「使用卫星编号搜索」开关。
+    """
+    if not keywords:
+        return True
+    num = norad_key(str(number if number is not None else ''))
+    if not num:
+        return False
+    return any(norad_key(k) in num for k in keywords if k)
+
+
+def satellite_number_map(sats):
+    """由 ``[(name, Satrec), ...]`` 构建「卫星名 → NORAD 编号」映射，供按编号搜索。
+
+    取不到编号时（极少见的手工数据）回退为空串，该星即不参与编号匹配，
+    与 :func:`sat_key` 的兜底思路一致——但这里宁可「搜不到」也不拿名称冒充编号，
+    避免按编号搜索时出现莫名其妙的命中。
+    """
+    out = {}
+    for name, sat in (sats or []):
+        num = getattr(sat, 'satnum', '')
+        out[name] = '' if num is None else num
+    return out
 
 
 def lookup_transponder(bands, name):

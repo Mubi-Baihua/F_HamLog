@@ -229,9 +229,12 @@ class SatelliteSelectDialog(QDialog):
     勾选上限为 sp.MAX_SELECTED_SATELLITES（当前 %d 颗）。超过时点“确定”会拦下并提示，
     可选择「重新选择」留在对话框继续调整，或「清除所有选择」把已勾选的全部清空（需二次确认）；
     选后者时本对话框直接关闭（`reset_requested=True`），由调用方重建一个全新的选择窗口。
+
+    搜索框默认只匹配卫星名；勾选「使用卫星编号搜索」后，额外按 NORAD 编号匹配
+    （satnums 为「卫星名 → 编号」映射，缺省 None 时编号匹配不可用）。
     """ % sp.MAX_SELECTED_SATELLITES
 
-    def __init__(self, parent, names, selected):
+    def __init__(self, parent, names, selected, satnums=None):
         super().__init__(parent)
         self.setWindowTitle('选择卫星')
         self.resize(360, 480)
@@ -248,6 +251,20 @@ class SatelliteSelectDialog(QDialog):
         top.addWidget(self._mk_btn('全不选', self._select_none))
         lay.addLayout(top)
 
+        # 「使用卫星编号搜索」（默认关闭）：勾选后搜索框除卫星名外，还按 NORAD 编号
+        # 匹配。TLE 名称行里通常不带编号（如 ASRTU-1 (RS64S/BJ2CR) 的编号是 61781），
+        # 因此拿编号搜之前必须先打开这个开关。
+        # 单独占一行：与搜索框挤在同一行时，开关文字会把搜索框压到只剩几十像素宽。
+        self.by_number_chk = QCheckBox('使用卫星编号搜索')
+        self.by_number_chk.setToolTip(
+            '勾选后，搜索框除卫星名外还会按卫星编号（NORAD ID）匹配。\n'
+            '例如输入 61781 可找到「ASRTU-1 (RS64S/BJ2CR)」。\n'
+            '输入 6178 也能模糊命中 61781。')
+        num_row = QHBoxLayout()
+        num_row.addWidget(self.by_number_chk)
+        num_row.addStretch(1)
+        lay.addLayout(num_row)
+
         self.list_widget = QListWidget()
         self.list_widget.setUniformItemSizes(True)
         self.list_widget.setUpdatesEnabled(False)
@@ -255,6 +272,10 @@ class SatelliteSelectDialog(QDialog):
         self.items = {}
         # 预先算好归一化名，搜索时无需反复处理（卫星数量可达数千）
         self._norm = {n: sp.normalize_sat_name(n) for n in names}
+        # 归一化编号（NORAD）：同样预先算好。「使用卫星编号搜索」勾选后按此匹配；
+        # 调用方未提供编号表（satnums=None）时全部为空串，编号匹配自然不命中。
+        self._norm_num = {n: sp.norad_key(str((satnums or {}).get(n, '')))
+                          for n in names}
         # 记录 (行号 → 卫星名)，过滤时按行号隐藏，避免每次反查
         self._row_names = []
         init = selected if isinstance(selected, set) else None
@@ -286,8 +307,19 @@ class SatelliteSelectDialog(QDialog):
         self._count_base = ''     # 计数标签的基数文本（重新构建时用，避免累加）
         self._count_base_red = False  # 基数文本本身是否就该显示为红色（搜索无命中）
         self.search_edit.textChanged.connect(self._filter)
+        self.by_number_chk.toggled.connect(self._on_number_toggled)
         self.list_widget.itemChanged.connect(self._on_item_changed)
         self._filter('')         # 初始化计数显示 + 未搜索时置顶已选
+
+    def _on_number_toggled(self, checked):
+        """「使用卫星编号搜索」开关切换：同步搜索框提示语并立即重跑一次过滤。
+
+        仅切换开关、不改搜索词时也要重新过滤，否则用户会以为设置没生效
+        （勾上开关却还停留在上次「按名称搜索」的结果上）。
+        """
+        self.search_edit.setPlaceholderText(
+            '搜索卫星名或编号…' if checked else '搜索卫星名…')
+        self._filter(self.search_edit.text())
 
     def _mk_btn(self, text, slot):
         b = QPushButton(text)
@@ -302,6 +334,11 @@ class SatelliteSelectDialog(QDialog):
         多个关键词（空格分隔）之间是「与」关系。
         例如输入 "so50"、"so 50"、"SO-50" 都能命中 "SO-50" 与
         "SAUDISAT 1C (SO-50)"。
+
+        再叠加「使用卫星编号搜索」（默认关闭）开关：勾选后，除上面的名称匹配外，
+        还按 NORAD 编号匹配（sp.sat_number_match），二者取「或」——因此
+        输入 "61781" 能命中名称里根本不含编号的 "ASRTU-1 (RS64S/BJ2CR)"，
+        而输入 "asrtu" 依然照常命中，勾选开关不会削减原有的名称搜索能力。
         """
         self._keys = sp.parse_sat_keywords(text)
         lw = self.list_widget
@@ -314,10 +351,14 @@ class SatelliteSelectDialog(QDialog):
         # 避免对数千颗卫星重复跑一遍 sat_name_match。
         keys = self._keys
         norm = self._norm
+        by_num = self.by_number_chk.isChecked()
+        norm_num = self._norm_num
         first_hit_row = -1
         visible = []
         for row, n in enumerate(self._row_names):
             matched = sp.sat_name_match(norm[n], keys)
+            if not matched and by_num:
+                matched = sp.sat_number_match(norm_num[n], keys)
             lw.setRowHidden(row, not matched)
             if matched:
                 visible.append(n)
@@ -1229,10 +1270,12 @@ def main(parent_window, quick_log_callback=None, title='卫星过境'):
             QMessageBox.information(win, '暂无卫星', '请先刷新 TLE。')
             return
         names = [n for (n, s) in sats]
+        # 卫星名 → NORAD 编号，供选择窗口的「使用卫星编号搜索」使用
+        satnums = sp.satellite_number_map(sats)
         # 「清除所有选择」后直接重建一个全新的选择窗口（而非在原窗口逐项重置，
         # 数千颗时后者会因反复重排/刷新而明显卡顿）。循环直到用户确定或取消为止。
         while True:
-            dlg = SatelliteSelectDialog(win, names, selected_names)
+            dlg = SatelliteSelectDialog(win, names, selected_names, satnums)
             if dlg.exec() == QDialog.Accepted:
                 # 对话框已在 accept() 里拦住超量选择，这里再裁一次作兜底
                 selected_names, _ = sp.clamp_selected_count(dlg.get_selected())
