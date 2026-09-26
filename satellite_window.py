@@ -1221,9 +1221,9 @@ def main(parent_window, quick_log_callback=None, title='卫星过境'):
         msg = ('已导入 %d 颗卫星：更新 %d 颗、新增 %d 颗，当前共 %d 颗。'
                % (len(imported), n_updated, n_added, len(sats)))
         # 需求：导入不自动选择。保持用户原有勾选不变，新导入的卫星需自行勾选。
-        msg += '\n\n导入不会自动勾选卫星，如需跟踪请在「选择卫星」中勾选。'
-        if sats and not selected_names:
-            msg += '\n当前尚未勾选任何卫星。'
+        #msg += '\n\n导入不会自动勾选卫星，如需跟踪请在「选择卫星」中勾选。'
+        #if sats and not selected_names:
+            #msg += '\n当前尚未勾选任何卫星。'
         QMessageBox.information(win, '导入完成', msg)
         run_prediction()
         _push_sats_to_map()
