@@ -17,8 +17,11 @@
 - **颜色模式**（跟随系统/浅色/深色）存 `file/m_xml.txt` 的 `theme_mode` 键：`theme.init_app(app)`
   在 main.py 启动时应用；「设置」窗口下拉**即改即生效并落盘**（不必点「保存更改」）；该下拉与
   「自动保存/自动按时间排序/星历自动更新/更新间隔」**同行**（`set.py` 固定 770×475）。
-  `system` = `setColorScheme(Unknown)` + `setPalette(QPalette())` 交回 Qt；`light/dark` =
-  `setColorScheme` + 自建调色板（深 Window #353535 / Base #252525，浅 Window #f0f0f0）。
+- **以跟随系统的观感为准**：`apply()` = 清掉本应用调色板覆盖 → `setColorScheme(方案)` →
+  **采用平台给出的调色板**（Win11 深色 `#1e1e1e/#2d2d2d/#0078d4`、浅色 `#f3f3f3`），只有平台不认请求
+  （离屏/旧 Qt，`_palette_is_dark` 与目标明暗不符）才用 `_DARK_ROLES/_LIGHT_ROLES` 兜底；
+  `colorSchemeChanged` 监听器只在**强制模式**重放。坑：**`app.palette()` 的拷贝不能拿去
+  `setPalette`**（Qt 视为「颜色未变」直接忽略），要改调色板必须手工 `QPalette()` 构造。
 - 不纳入主题化（勿误改）：`#remote_project.py`（历史备份、无引用）、
   `F_HamLog_Remote_Log_Server_2.0.0/main.py`（独立服务端，改后须重打包）；地图画布绘制色
   （satellite_map_window 的 QColor/QPen/QBrush 常量）是地图语义色，深色下地图仍浅色是刻意的。
