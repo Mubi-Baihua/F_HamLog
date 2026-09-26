@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
     QLineEdit, QMessageBox, QFrame, QGroupBox, QAbstractItemView,
     QHeaderView, QDialog,
 )
-from PySide6.QtCore import QThread, Signal
+from PySide6.QtCore import QThread, Signal, QTimer
 
 import satellite_pred as sp
 import theme
@@ -381,29 +381,55 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
         mw.set_min_elev(box_a.min_elev())
         mw.set_min_elev_b(box_b.min_elev())
 
+    # 结果可能多达数千行；分批填充、每批之间让出事件循环，避免单次长阻塞
+    # 让本窗口与同时打开的其他窗口一起白屏 / 无响应（与「卫星过境」一致）。
+    _FILL_BATCH = 300
+    _fill_gen = [0]
+
     def populate(rows):
         last_rows[:] = rows
+        _fill_gen[0] += 1
+        gen = _fill_gen[0]
+        table.setUpdatesEnabled(False)
+        table.blockSignals(True)
         table.setRowCount(len(rows))
-        for i, r in enumerate(rows):
-            name_item = QTableWidgetItem(r['name'])
-            name_item.setToolTip(
-                'A 站方位 %.0f°→%.0f°\nB 站方位 %.0f°→%.0f°\n'
-                '最佳时刻两站仰角较低者：%.1f°'
-                % (r['a_az'][0], r['a_az'][1], r['b_az'][0], r['b_az'][1],
-                   r['best_min_elev']))
-            table.setItem(i, 0, name_item)
-            start_txt = r['start_str'] + ('（截断）' if r['clipped'] else '')
-            table.setItem(i, 1, QTableWidgetItem(start_txt))
-            table.setItem(i, 2, QTableWidgetItem(r['end_str']))
-            table.setItem(i, 3, QTableWidgetItem(_duration_str(r['duration'])))
-            table.setItem(i, 4, QTableWidgetItem(f"{r['a_max_elev']:.1f}°"))
-            table.setItem(i, 5, QTableWidgetItem(f"{r['b_max_elev']:.1f}°"))
-            table.setItem(i, 6, QTableWidgetItem(r['best_str']))
-            btn = QPushButton('记录')
-            btn.setToolTip('打开批量记录窗口并预填该卫星的卫星名/传播模式/收发频率等信息')
-            btn.clicked.connect(lambda _checked=False, i=i: log_row(i))
-            table.setCellWidget(i, 7, btn)
-        table.scrollToTop()
+        _fill_rows(rows, 0, gen)
+
+    def _fill_rows(rows, start, gen):
+        if gen != _fill_gen[0]:
+            return
+        try:
+            end = min(start + _FILL_BATCH, len(rows))
+            for i in range(start, end):
+                r = rows[i]
+                name_item = QTableWidgetItem(r['name'])
+                name_item.setToolTip(
+                    'A 站方位 %.0f°→%.0f°\nB 站方位 %.0f°→%.0f°\n'
+                    '最佳时刻两站仰角较低者：%.1f°'
+                    % (r['a_az'][0], r['a_az'][1], r['b_az'][0], r['b_az'][1],
+                       r['best_min_elev']))
+                table.setItem(i, 0, name_item)
+                start_txt = r['start_str'] + ('（截断）' if r['clipped'] else '')
+                table.setItem(i, 1, QTableWidgetItem(start_txt))
+                table.setItem(i, 2, QTableWidgetItem(r['end_str']))
+                table.setItem(i, 3, QTableWidgetItem(_duration_str(r['duration'])))
+                table.setItem(i, 4, QTableWidgetItem(f"{r['a_max_elev']:.1f}°"))
+                table.setItem(i, 5, QTableWidgetItem(f"{r['b_max_elev']:.1f}°"))
+                table.setItem(i, 6, QTableWidgetItem(r['best_str']))
+                btn = QPushButton('记录')
+                btn.setToolTip('打开批量记录窗口并预填该卫星的卫星名/传播模式/收发频率等信息')
+                btn.clicked.connect(lambda _checked=False, i=i: log_row(i))
+                table.setCellWidget(i, 7, btn)
+
+            if end < len(rows):
+                QTimer.singleShot(
+                    0, lambda end=end, gen=gen: _fill_rows(rows, end, gen))
+            else:
+                table.blockSignals(False)
+                table.setUpdatesEnabled(True)
+                table.scrollToTop()
+        except RuntimeError:
+            return
 
     def run_prediction():
         """按当前两站位置/最低仰角/时长重新计算可通联窗口。
@@ -711,19 +737,30 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
     theme.watch_theme(win, refresh)
 
     win.show()
-    # 设置文件里保存的自选卫星超限：给出与「选择卫星」对话框一致的提示（非静默裁剪）。
-    # 选「清除所有选择」则清空后落盘。
-    if (_oversized_from_settings > sp.MAX_SELECTED_SATELLITES
-            and prompt_over_limit_selection(
-                win, _oversized_from_settings, sp.MAX_SELECTED_SATELLITES,
-                source_hint='设置文件 file/m_xml.txt 中保存的自选卫星已超过上限。')):
-        selected_names.clear()
-        _persist()
+
+    def _post_show_init():
+        """窗口首次绘制之后再做的初始化（超限提示 + 拉取 TLE）。
+
+        推迟到事件循环真正开始执行：`win.show()` 只是投递显示事件，窗口要等
+        控制权交回事件循环后才首次绘制。若在 main() 内紧接着弹 exec() 模态框 /
+        跑耗时初始化，窗口在这段时间只显示白底（仅标题栏），即"打开先白屏一下"。
+        用 QTimer.singleShot(0) 让 main() 先返回、窗口先画出来，再处理这些。
+        """
+        # 设置文件里保存的自选卫星超限：给出与「选择卫星」对话框一致的提示（非静默裁剪）。
+        # 选「清除所有选择」则清空后落盘。
+        if (_oversized_from_settings > sp.MAX_SELECTED_SATELLITES
+                and prompt_over_limit_selection(
+                    win, _oversized_from_settings, sp.MAX_SELECTED_SATELLITES,
+                    source_hint='设置文件 file/m_xml.txt 中保存的自选卫星已超过上限。')):
+            selected_names.clear()
+            _persist()
+        # 台站 A（本站）位置在「卫星过境预测 → 观测站设置」中填写，
+        # 通联预测打开时不再弹窗提示“尚未设置位置”；未设置时 run_prediction 会静默跳过。
+        refresh_tle(force=False)
+
     # 暴露反向同步接口，供「卫星过境预测」窗口在改选卫星时调用
     win.apply_remote_selection = apply_remote_selection
-    # 台站 A（本站）位置在「卫星过境预测 → 观测站设置」中填写，
-    # 通联预测打开时不再弹窗提示“尚未设置位置”；未设置时 run_prediction 会静默跳过。
-    refresh_tle(force=False)
+    QTimer.singleShot(0, _post_show_init)
     _open_windows.append(win)
 
 

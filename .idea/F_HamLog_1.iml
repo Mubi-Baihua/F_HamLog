@@ -3,6 +3,7 @@
   <component name="NewModuleRootManager">
     <content url="file://$MODULE_DIR$">
       <excludeFolder url="file://$MODULE_DIR$/.venv" />
+      <excludeFolder url="file://$MODULE_DIR$/F_HamLog_Remote_Log_Server_1.1.0/.venv" />
     </content>
     <orderEntry type="jdk" jdkName="D:\F-Dev\BIG\F_HamLog\.venv" jdkType="Python SDK" />
     <orderEntry type="sourceFolder" forTests="false" />

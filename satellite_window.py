@@ -281,6 +281,8 @@ class SatelliteSelectDialog(QDialog):
 
         self._keys = []          # 归一化后的搜索关键词（空列表 = 不过滤）
         self._reordering = False  # 重排守卫，避免 itemChanged 递归触发
+        self._bulk = False        # 批量勾选/清空守卫（全选、全不选期间屏蔽逐项回调）
+        self._visible = []        # 当前搜索条件下可见的卫星名（与 _keys 同步缓存）
         self._count_base = ''     # 计数标签的基数文本（重新构建时用，避免累加）
         self._count_base_red = False  # 基数文本本身是否就该显示为红色（搜索无命中）
         self.search_edit.textChanged.connect(self._filter)
@@ -308,12 +310,20 @@ class SatelliteSelectDialog(QDialog):
         # 注意：必须用 QListWidget.setRowHidden()（内部触发 doItemsLayout 重排），
         # 单纯 QListWidgetItem.setHidden() 只改标志、不会让视图重新布局，
         # 表现为"过滤没生效、匹配项仍停在原来的位置"。
+        # 匹配结果（可见名列表）就地缓存，供 _visible_names / 全选·全不选复用，
+        # 避免对数千颗卫星重复跑一遍 sat_name_match。
+        keys = self._keys
+        norm = self._norm
         first_hit_row = -1
+        visible = []
         for row, n in enumerate(self._row_names):
-            matched = sp.sat_name_match(self._norm[n], self._keys)
+            matched = sp.sat_name_match(norm[n], keys)
             lw.setRowHidden(row, not matched)
-            if matched and first_hit_row < 0:
-                first_hit_row = row
+            if matched:
+                visible.append(n)
+                if first_hit_row < 0:
+                    first_hit_row = row
+        self._visible = visible
         # 把第一个匹配项滚到视口顶部，避免视口停在已隐藏区域
         if first_hit_row >= 0:
             lw.scrollToItem(self.items[self._row_names[first_hit_row]],
@@ -322,7 +332,7 @@ class SatelliteSelectDialog(QDialog):
             lw.scrollToTop()
         lw.setUpdatesEnabled(True)
         total = len(self.items)
-        n_hit = len(self._visible_names())
+        n_hit = len(visible)
         if not self._keys:
             self._count_base = f'共 {total} 颗'
             self._count_base_red = False
@@ -354,9 +364,8 @@ class SatelliteSelectDialog(QDialog):
         self.count_label.setText(text)
 
     def _visible_names(self):
-        """当前搜索条件下可见的卫星名；无搜索时返回全部。"""
-        return [n for n in self.items
-                if sp.sat_name_match(self._norm[n], self._keys)]
+        """当前搜索条件下可见的卫星名（在 _filter 时就地缓存，避免重复匹配）。"""
+        return self._visible
 
     def _reorder_pin_selected(self):
         """未搜索时把已勾选卫星置顶（保持各自原有相对顺序）。
@@ -389,19 +398,35 @@ class SatelliteSelectDialog(QDialog):
 
     def _on_item_changed(self, item):
         # 仅在未搜索时，勾选状态变化后把已选卫星重新置顶（搜索结果不打乱顺序）
-        if self._reordering:
+        if self._reordering or self._bulk:
             return
         if not self._keys:
             self._reorder_pin_selected()
         self._refresh_selected_count()
 
+    def _set_all_visible(self, state):
+        """把当前可见卫星一次性设为指定勾选状态（全选 / 全不选共用）。
+
+        逐项 ``setCheckState`` 会各自触发一次 ``itemChanged``；在未搜索状态下，
+        每次都触发一次「已选置顶」重排，整体退化成 O(N²)——实测 500 颗点「全不选」
+        就要 60 秒、数千颗直接未响应。这里用 ``_bulk`` 守卫屏蔽逐项回调，循环结束后
+        只统一重排一次、刷新计数一次，整体回到 O(N)。
+        """
+        self._bulk = True
+        try:
+            for n in self._visible_names():
+                self.items[n].setCheckState(state)
+        finally:
+            self._bulk = False
+        if not self._keys:
+            self._reorder_pin_selected()   # 未搜索：统一把已选置顶一次
+        self._refresh_selected_count()
+
     def _select_all(self):
-        for n in self._visible_names():
-            self.items[n].setCheckState(Qt.CheckState.Checked)
+        self._set_all_visible(Qt.CheckState.Checked)
 
     def _select_none(self):
-        for n in self._visible_names():
-            self.items[n].setCheckState(Qt.CheckState.Unchecked)
+        self._set_all_visible(Qt.CheckState.Unchecked)
 
     def get_selected(self):
         return {n for n, item in self.items.items()
@@ -1021,26 +1046,54 @@ def main(parent_window, quick_log_callback=None, title='卫星过境'):
         worker.done.connect(on_done)
         worker.start()
 
+    # 预测结果可能多达数千行；一次性填充会在主线程上长时间阻塞，期间本窗口与
+    # 同时打开的其他窗口都无法重绘（表现为白屏）。改为分批填充、每批之间让出
+    # 事件循环，把单次阻塞切碎到几乎无感。
+    _FILL_BATCH = 300
+    _fill_gen = [0]   # 填充代次：被新的 populate 取代后，旧的批次回调自动作废
+
     def populate(rows):
         last_rows[:] = rows
+        _fill_gen[0] += 1
+        gen = _fill_gen[0]
+        # 填表期间关闭重绘与信号，整表填完再一次性打开（避免边填边重绘造成闪烁）。
+        table.setUpdatesEnabled(False)
+        table.blockSignals(True)
         table.setRowCount(len(rows))
-        sel_col = 7
-        for i, r in enumerate(rows):
-            table.setItem(i, 0, QTableWidgetItem(r['name']))
-            table.setItem(i, 1, QTableWidgetItem(r['aos_str']))
-            table.setItem(i, 2, QTableWidgetItem(r['los_str']))
-            table.setItem(i, 3, QTableWidgetItem(f"{r['max_elev']:.1f}°"))
-            table.setItem(i, 4, QTableWidgetItem(
-                f"{r['aos_az']:.0f}°→{r['los_az']:.0f}°"))
-            table.setItem(i, 5, QTableWidgetItem(_duration_str(r['duration'])))
-            rec_btn = QPushButton('记录')
-            rec_btn.setToolTip('打开批量记录窗口并预填该卫星的卫星名/传播模式/收发频率等信息')
-            rec_btn.clicked.connect(
-                lambda _checked=False, i=i: log_row(i))
-            table.setCellWidget(i, 6, rec_btn)
-            # 第7列隐藏，仅占位（保持与其它记录窗口列风格一致）
-            table.setItem(i, sel_col, QTableWidgetItem(''))
-        table.scrollToTop()
+        _fill_rows(rows, 0, gen)
+
+    def _fill_rows(rows, start, gen):
+        if gen != _fill_gen[0]:
+            return  # 已被新的预测结果取代，放弃本次填充
+        try:
+            end = min(start + _FILL_BATCH, len(rows))
+            sel_col = 7
+            for i in range(start, end):
+                r = rows[i]
+                table.setItem(i, 0, QTableWidgetItem(r['name']))
+                table.setItem(i, 1, QTableWidgetItem(r['aos_str']))
+                table.setItem(i, 2, QTableWidgetItem(r['los_str']))
+                table.setItem(i, 3, QTableWidgetItem(f"{r['max_elev']:.1f}°"))
+                table.setItem(i, 4, QTableWidgetItem(
+                    f"{r['aos_az']:.0f}°→{r['los_az']:.0f}°"))
+                table.setItem(i, 5, QTableWidgetItem(_duration_str(r['duration'])))
+                rec_btn = QPushButton('记录')
+                rec_btn.setToolTip('打开批量记录窗口并预填该卫星的卫星名/传播模式/收发频率等信息')
+                rec_btn.clicked.connect(
+                    lambda _checked=False, i=i: log_row(i))
+                table.setCellWidget(i, 6, rec_btn)
+                # 第7列隐藏，仅占位（保持与其它记录窗口列风格一致）
+                table.setItem(i, sel_col, QTableWidgetItem(''))
+
+            if end < len(rows):
+                QTimer.singleShot(
+                    0, lambda end=end, gen=gen: _fill_rows(rows, end, gen))
+            else:
+                table.blockSignals(False)
+                table.setUpdatesEnabled(True)
+                table.scrollToTop()
+        except RuntimeError:
+            return  # 窗口已关闭、控件已销毁
 
     def refresh_tle(force=False):
         nonlocal sats
@@ -1400,34 +1453,45 @@ def main(parent_window, quick_log_callback=None, title='卫星过境'):
     # ---------- 先显示界面，再后台获取 TLE（加速打开） ----------
     win.show()
 
-    # 首次打开：若未设置观测站则引导
-    if observer_unset:
-        QMessageBox.information(
-            win, '设置观测站',
-            '尚未设置观测站位置。\n请在弹出的对话框中填写你的 QTH 经纬度与海拔，'
-            '否则过境预测不准确。')
-        dlg = ObserverDialog(win, 0.0, 0.0, 0.0)  # 默认 0,0
-        if dlg.exec() == QDialog.Accepted:
-            vals = dlg.get_values()
-            if vals:
-                lat_, lon_, alt_ = vals
-                set_observer(lat_, lon_, alt_)
-                s = _load_settings()
-                s['m_lat'] = lat_
-                s['m_lon'] = lon_
-                s['m_alt'] = alt_
-                _save_settings(s)
+    def _post_show_init():
+        """窗口首次绘制之后再做的初始化（弹框引导 + 拉取 TLE）。
 
-    # 设置文件里保存的自选卫星超限：同样给出提示（而非静默裁剪），
-    # 三条出路与「选择卫星」对话框一致。选「清除所有选择」则清空后落盘。
-    if _oversized_from_settings > sp.MAX_SELECTED_SATELLITES:
-        if prompt_over_limit_selection(
-                win, _oversized_from_settings, sp.MAX_SELECTED_SATELLITES,
-                source_hint='设置文件 file/m_xml.txt 中保存的自选卫星已超过上限。'):
-            selected_names.clear()
-            _persist()
+        必须在 show() 之后、且**推迟到事件循环真正开始**执行：`win.show()` 只是
+        投递显示事件，窗口要到控制权交回事件循环后才会首次绘制。若在 main() 内
+        紧接着执行耗时逻辑（尤其是 exec() 模态框），窗口在这段时间里只会显示成
+        白底（仅标题栏可见）——这正是"打开窗口先白屏一下"的成因。用
+        QTimer.singleShot(0) 让 main() 先返回、窗口先画出来，再做这些后续工作。
+        """
+        # 首次打开：若未设置观测站则引导
+        if observer_unset:
+            QMessageBox.information(
+                win, '设置观测站',
+                '尚未设置观测站位置。\n请在弹出的对话框中填写你的 QTH 经纬度与海拔，'
+                '否则过境预测不准确。')
+            dlg = ObserverDialog(win, 0.0, 0.0, 0.0)  # 默认 0,0
+            if dlg.exec() == QDialog.Accepted:
+                vals = dlg.get_values()
+                if vals:
+                    lat_, lon_, alt_ = vals
+                    set_observer(lat_, lon_, alt_)
+                    s = _load_settings()
+                    s['m_lat'] = lat_
+                    s['m_lon'] = lon_
+                    s['m_alt'] = alt_
+                    _save_settings(s)
 
-    refresh_tle(force=False)  # 后台获取 TLE 并预测（界面已先显示）
+        # 设置文件里保存的自选卫星超限：同样给出提示（而非静默裁剪），
+        # 三条出路与「选择卫星」对话框一致。选「清除所有选择」则清空后落盘。
+        if _oversized_from_settings > sp.MAX_SELECTED_SATELLITES:
+            if prompt_over_limit_selection(
+                    win, _oversized_from_settings, sp.MAX_SELECTED_SATELLITES,
+                    source_hint='设置文件 file/m_xml.txt 中保存的自选卫星已超过上限。'):
+                selected_names.clear()
+                _persist()
+
+        refresh_tle(force=False)  # 后台获取 TLE 并预测（界面已先显示）
+
+    QTimer.singleShot(0, _post_show_init)
     _open_windows.append(win)  # 保持引用，防止被回收
 
 
