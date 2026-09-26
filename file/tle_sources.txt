@@ -1,0 +1,8 @@
+# F HamLog 星历(TLE) 数据源列表
+# 每行一个地址，下载时按列表顺序依次读取；
+# 同一颗卫星（按 NORAD 编号）以靠前的数据源为准，本文件可在
+# 「设置 → 星历数据源」窗口中增删与排序，也可直接编辑。
+# 以 # 开头的行是注释，不会被当成数据源。
+# 内置默认（Celestrak 全部活动卫星）：https://celestrak.org/NORAD/elements/gp.php?GROUP=active&FORMAT=tle
+
+https://celestrak.org/NORAD/elements/gp.php?GROUP=active&FORMAT=tle

@@ -273,6 +273,16 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
 
     refresh_btn = QPushButton('刷新TLE')
 
+    def update_tle_tooltip():
+        """按最新配置生成「刷新TLE」的提示（数据源见独立窗口「设置 → 星历数据源…」）。"""
+        sources = sp.load_tle_sources()
+        refresh_btn.setToolTip(
+            '按下面列出的数据源依次下载卫星星历(TLE)，先列出的优先 '
+            '（可在「设置 → 星历数据源…」独立窗口中增删与排序）：\n'
+            + '\n'.join('%d. %s' % (i + 1, u) for i, u in enumerate(sources)))
+
+    update_tle_tooltip()
+
     par.addWidget(QLabel('开始时间:'))
     par.addWidget(start_edit)
     par.addSpacing(10)
@@ -475,6 +485,7 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
 
     def refresh_tle(force=False, then_predict=True):
         nonlocal sats
+        update_tle_tooltip()   # 反映「星历数据源」窗口里的最新改动
         status.setText('正在获取业余卫星 TLE…')
         refresh_btn.setEnabled(False)
         old = getattr(win, '_tle_worker', None)
@@ -488,13 +499,17 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
             nonlocal sats, selected_names
             if getattr(win, '_tle_worker', None) is worker:
                 win._tle_worker = None
-            sats = s
+            # 按 NORAD 编号增量并入：本次数据源里没有的旧卫星继续保留（不删除）
+            sats, _n_upd, _n_add = sp.merge_update_satellites(s, sats)
+            _kept = len(sats) - len(s)
+            _extra = f'（另保留 {_kept} 颗本次未取得的旧卫星）' if _kept > 0 else ''
             # 通联预测：若尚未选择卫星，不自动弹窗（仅在「卫星过境预测」中引导选择），
             # 置为空集合，由 run_prediction 在状态栏提示用户点击「选择卫星…」。
             if selected_names is None:
                 selected_names = set()
             refresh_btn.setEnabled(True)
-            status.setText('已载入 TLE，共 %d 颗卫星。' % len(sats))
+            status.setText('已载入 TLE：本次取得 %d 颗，共 %d 颗卫星%s。'
+                           % (len(s), len(sats), _extra))
             # 若地图窗口已打开，同步最新的「已选卫星」列表（名称/轨道根数）
             _push_sats_to_map()
             if then_predict:

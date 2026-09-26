@@ -4,7 +4,7 @@ satellite_window.py —— 业余卫星过境预测界面（PySide6）
 
 由 project.py 的“记录”菜单调用。提供：
   - 业余卫星未来过境列表（升起/落下时间、最大仰角、方位、时长）
-  - 刷新 TLE（从 Celestrak 下载并本地缓存）
+  - 刷新 TLE（从「设置 → 星历数据源…」中配置的数据源下载并本地缓存）
   - 设置观测站位置（纬度/经度/海拔）
   - 每行“快速记录”按钮：打开预填好的新建日志
 """
@@ -225,10 +225,10 @@ def prompt_over_limit_selection(parent, n, limit, source_hint=''):
 class SatelliteSelectDialog(QDialog):
     """从已加载卫星中勾选“自选”范围。
 
-    勾选上限为 sp.MAX_SELECTED_SATELLITES（500 颗）。超过时点“确定”会拦下并提示，
+    勾选上限为 sp.MAX_SELECTED_SATELLITES（当前 %d 颗）。超过时点“确定”会拦下并提示，
     可选择「重新选择」留在对话框继续调整，或「清除所有选择」把已勾选的全部清空（需二次确认）；
     选后者时本对话框直接关闭（`reset_requested=True`），由调用方重建一个全新的选择窗口。
-    """
+    """ % sp.MAX_SELECTED_SATELLITES
 
     def __init__(self, parent, names, selected):
         super().__init__(parent)
@@ -733,13 +733,33 @@ def main(parent_window, quick_log_callback=None, title='卫星过境'):
     tool_top = QHBoxLayout()
     top_vlay.addLayout(tool_top)
     refresh_btn = QPushButton('刷新TLE')
+
+    def update_tle_tooltip():
+        """按最新配置生成「刷新TLE」的提示。
+
+        「星历数据源」是独立窗口（保存到独立文件 file/tle_sources.txt），
+        改完立即生效；这里每次下载前重建提示，避免显示过期列表。
+        """
+        sources = sp.load_tle_sources()
+        refresh_btn.setToolTip(
+            '按下面列出的数据源依次下载卫星星历(TLE)，先列出的优先；'
+            '同一颗卫星以列表中先出现的数据源为准。\n'
+            '下载结果只按卫星编号更新，本地已有的卫星不会因为数据源里暂时没有而被删除。\n'
+            '数据源可在「设置 → 星历数据源…」独立窗口中增删与排序 '
+            '(文件 file/tle_sources.txt)：\n'
+            + '\n'.join('%d. %s' % (i + 1, u) for i, u in enumerate(sources)))
+
+    update_tle_tooltip()
     obs_btn = QPushButton('观测站设置')
     edit_radio_btn = QPushButton('编辑转发器')
     edit_radio_btn.setToolTip('使用记事本编辑卫星转发器数据 sat_radio_dict.txt（下行/上行频率与模式）')
     edit_tqsl_btn = QPushButton('编辑TQSL映射')
     edit_tqsl_btn.setToolTip('使用记事本编辑 TQSL/LoTW 卫星名称映射 tqsl_dict.txt')
     import_tle_btn = QPushButton('导入星历数据')
-    import_tle_btn.setToolTip('从 txt 或 tle 文件导入卫星星历数据（TLE 格式），追加到现有卫星列表中')
+    import_tle_btn.setToolTip(
+        '从 txt 或 tle 文件导入卫星星历数据（TLE 格式）。\n'
+        '只按卫星编号增量更新：同编号替换为新数据、新编号追加，'
+        '文件中没有的卫星保持原样；导入不会自动勾选卫星。')
     # 双站通联预测：从本窗口直接打开，无需再回到主页或菜单
     mutual_btn = QPushButton('通联预测')
     mutual_btn.setToolTip('打开双站通联预测：输入对方台站位置与各自最低仰角，预测两地可通过哪些卫星互相通联')
@@ -1019,6 +1039,7 @@ def main(parent_window, quick_log_callback=None, title='卫星过境'):
 
     def refresh_tle(force=False):
         nonlocal sats
+        update_tle_tooltip()   # 反映「星历数据源」窗口里的最新改动
         status.setText('正在获取全部活动卫星 TLE…')
         # 显示下载进度条（默认确定进度；若服务器未返回大小则转忙碌动画）
         progress_bar.setVisible(True)
@@ -1044,7 +1065,14 @@ def main(parent_window, quick_log_callback=None, title='卫星过境'):
             cancel_dl_btn.setEnabled(True)
             cancel_dl_btn.setText('取消下载')
             sats = s
-            status.setText(f'已更新 TLE，共 {len(sats)} 颗卫星。')
+            # 按 NORAD 编号增量并入：本次数据源里没有的旧卫星继续保留（不删除）。
+            # fetch_amateur_tle 已与磁盘缓存做过同口径合并，这里再兜一次，
+            # 覆盖「导入星历」后缓存未落盘等边界情况。
+            sats, _n_upd, _n_add = sp.merge_update_satellites(s, sats)
+            _kept = len(sats) - len(s)
+            _extra = f'（另保留 {_kept} 颗本次未取得的旧卫星）' if _kept > 0 else ''
+            status.setText(
+                f'已更新 TLE：本次取得 {len(s)} 颗，共 {len(sats)} 颗卫星{_extra}。')
             _show_tle_time()
             refresh_btn.setEnabled(True)
             # 窗口打开后首次获取 TLE：若尚未选择任何卫星，自动弹出选择框引导；
@@ -1160,8 +1188,13 @@ def main(parent_window, quick_log_callback=None, title='卫星过境'):
         _push_sats_to_map()   # 自选卫星变化 → 地图同步显示新的一批卫星
 
     def import_tle():
-        nonlocal selected_names
-        """从用户选择的 txt 或 tle 文件导入卫星星历数据，追加到现有卫星列表。"""
+        nonlocal sats
+        """从用户选择的 txt 或 tle 文件导入卫星星历数据。
+
+        导入只做「按卫星编号增量更新」：同一编号用文件里的新数据替换、新编号追加，
+        文件中没有的编号保持原样（不删除）；**不自动勾选自选卫星**。
+        导入结果写回星历缓存，重启后仍然可用。
+        """
         path, _ = QFileDialog.getOpenFileName(
             win, '导入卫星星历数据', desktop_dir(),
             '星历文件 (*.tle *.txt);;TLE 文件 (*.tle);;文本文件 (*.txt)')
@@ -1176,25 +1209,16 @@ def main(parent_window, quick_log_callback=None, title='卫星过境'):
         if not imported:
             QMessageBox.warning(win, '导入失败', '未从文件中解析到有效的 TLE 数据。')
             return
-        existing_names = {n for n, _ in sats}
-        new_sats = [(n, sat) for n, sat in imported if n not in existing_names]
-        duplicate_count = len(imported) - len(new_sats)
-        if not new_sats:
-            QMessageBox.information(
-                win, '导入完成',
-                '文件中 %d 颗卫星均已存在，无需更新。' % len(imported))
-            return
-        sats.extend(new_sats)
-        # 导入后默认全选，但同样受上限约束：超量时只保留前 500 颗并提示，
-        # 让用户到「选择卫星」里自行挑选，而不是静默把界面拖卡。
-        selected_names, _over = sp.clamp_selected_count(set(n for n, _ in sats))
-        _persist()
-        msg = ('已导入 %d 颗新卫星（跳过 %d 颗已存在），当前共 %d 颗。'
-               % (len(new_sats), duplicate_count, len(sats)))
-        if _over:
-            msg += ('\n\n当前卫星总数已超过单次预测上限 %d 颗，'
-                    '本次仅默认选择前 %d 颗。\n请点击「选择卫星」自行挑选需要的卫星。'
-                    % (sp.MAX_SELECTED_SATELLITES, sp.MAX_SELECTED_SATELLITES))
+        merged, n_updated, n_added = sp.merge_update_satellites(sats, imported)
+        sats = merged
+        # 写回星历缓存：导入的数据在重启后依然存在（依然只按编号更新，不动其它卫星）
+        sp.write_tle_cache(sats, TLE_CACHE)
+        msg = ('已导入 %d 颗卫星：更新 %d 颗、新增 %d 颗，当前共 %d 颗。'
+               % (len(imported), n_updated, n_added, len(sats)))
+        # 需求：导入不自动选择。保持用户原有勾选不变，新导入的卫星需自行勾选。
+        msg += '\n\n导入不会自动勾选卫星，如需跟踪请在「选择卫星」中勾选。'
+        if sats and not selected_names:
+            msg += '\n当前尚未勾选任何卫星。'
         QMessageBox.information(win, '导入完成', msg)
         run_prediction()
         _push_sats_to_map()

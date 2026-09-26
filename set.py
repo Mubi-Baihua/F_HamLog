@@ -1,6 +1,11 @@
 from PySide6.QtWidgets import *
 import call_upper
 from dialog_defaults import desktop_dir
+
+# 「星历数据源」独立窗口的引用（防止被回收；非模态，可重复打开）
+tle_source_win = None
+
+
 def main(window):
     import satellite_pred as sp
     with open('file/m_xml.txt', 'r', encoding='utf-8') as f:
@@ -31,7 +36,7 @@ def main(window):
         except ValueError:
             QMessageBox.warning(window, "输入错误", "观测站经纬度/海拔请填写数字。")
             return
-        print(f"保存设置: 我的呼号={m_call}, 我的QTH={m_qth}, 我的设备={m_dig}, 自动保存={aouto_save_b}, 自动按时间排序={aouto_list_b}, 观测站=({m_lat},{m_lon},{m_alt})")
+        print(f"保存设置: 我的呼号={m_call}, 我的QTH={m_qth}, 我的设备={m_dig}, 自动保存={aouto_save_b}, 自动按时间排序={aouto_list_b}, 观测站=({m_lat},{m_lon},{m_alt}), 星历数据源={sp.load_tle_sources()}")
         # 读取现有设置，仅更新本窗口管理的键，保留其它键（如卫星预测设置 sat_*）
         with open('file/m_xml.txt', 'r', encoding='utf-8') as f:
             data = eval(f.read())
@@ -95,8 +100,8 @@ def main(window):
                 QMessageBox.warning(window, "从之前版本导入数据", "请选择之前版本 F HamLog.exe 所在的文件夹！")
                 back_set()
 
-    window.resize(770, 475)
-    window.setFixedSize(770, 475)
+    window.resize(770, 505)
+    window.setFixedSize(770, 505)
     window.setWindowTitle('设置')
     central_widget = QWidget()
     window.setCentralWidget(central_widget)
@@ -134,7 +139,7 @@ def main(window):
     aouto_list_.setChecked(aouto_list_b)
     sat_auto_update = QCheckBox("卫星星历自动更新", central_widget)
     sat_auto_update.setChecked(sat_auto_update_b)
-    sat_auto_update.setToolTip("开启后，程序会在后台按设定间隔自动从 Celestrak 刷新卫星星历(TLE) 缓存")
+    sat_auto_update.setToolTip("开启后，程序会在后台按设定间隔自动刷新卫星星历(TLE)")
     sat_update_hours_spin = QSpinBox(central_widget)
     sat_update_hours_spin.setRange(1, 168)
     sat_update_hours_spin.setValue(sat_update_hours)
@@ -147,6 +152,30 @@ def main(window):
     h_layout.addWidget(sat_auto_update)
     h_layout.addWidget(sat_update_label)
     h_layout.addWidget(sat_update_hours_spin)
+
+    # ---------- 星历数据源：按钮与「插件设置」同一行（数据源配置在独立窗口） ----------
+    src_set_btn = QPushButton("设置星历数据源", central_widget)
+    src_set_btn.setToolTip(
+        "在独立的「星历数据源」窗口中增删与排序 TLE 下载地址，列表里双击即可编辑；"
+        "保存后立即生效。")
+
+    def set_sources():
+        """打开独立的「星历数据源」窗口（非模态；已打开则前置复用）。"""
+        global tle_source_win  # 保持引用，防止被回收
+        if tle_source_win is not None:
+            try:
+                if tle_source_win.isVisible():
+                    tle_source_win.raise_()
+                    tle_source_win.activateWindow()
+                    return
+            except RuntimeError:
+                tle_source_win = None   # 底层窗口已销毁
+        import tle_source_window
+        tle_source_win = QMainWindow()
+        tle_source_window.main(tle_source_win)
+
+    src_set_btn.clicked.connect(lambda: set_sources())
+
     sett_button = QPushButton("保存更改", central_widget)
     sett_button.clicked.connect(lambda: set())
     layout.addWidget(m_call_label)
@@ -206,8 +235,10 @@ def main(window):
     pack_button.clicked.connect(lambda: pack_set())
     back_button = QPushButton("从之前版本导入数据", central_widget)
     back_button.clicked.connect(lambda: back_set())
-    bottom_layout.addWidget(pack_button)
-    bottom_layout.addWidget(back_button)
+    # 三个按钮平分整行宽度（与「保存更改」同样的通栏样式）
+    bottom_layout.addWidget(pack_button, 1)
+    bottom_layout.addWidget(src_set_btn, 1)
+    bottom_layout.addWidget(back_button, 1)
     layout.addLayout(bottom_layout)
 
     line = QFrame(central_widget)

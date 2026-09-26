@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
-"""自选卫星数量上限（500）拦阻 + 清除所有选择 的 headless 烟测。
+"""自选卫星数量上限（250）拦阻 + 清除所有选择 的 headless 烟测。
 
 覆盖：
-1. MAX_SELECTED_SATELLITES == 500；clamp_selected_count 的裁剪语义与确定性
+1. MAX_SELECTED_SATELLITES == 250；clamp_selected_count 的裁剪语义与确定性
 2. 未超限时点「确定」正常关闭（Accepted），返回集合完整
 3. 超限时点「确定」不关闭，弹出「选择的卫星过多」，含三个按钮
 4. 超限 + 点「重新选择」→ 对话框仍在，选择不变
@@ -160,15 +160,16 @@ def click_later(btn_getter, msec=80):
 app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
 
 # ---------- 1. 常量与裁剪函数 ----------
-ok('上限常量为 500', LIMIT == 500, str(LIMIT))
+ok('上限常量为 250', LIMIT == 250, str(LIMIT))
 small = {f'X{i}' for i in range(100)}
 keep, over = sp.clamp_selected_count(small)
 ok('未超限时原样保留', keep == small and over == 0, f'{len(keep)}/{over}')
 big = {f'Y{i:04d}' for i in range(1200)}
 keep2, over2 = sp.clamp_selected_count(big)
-ok('超限时裁到 500 颗', len(keep2) == LIMIT and over2 == 700, f'{len(keep2)}/{over2}')
+ok('超限时裁到上限颗数', len(keep2) == LIMIT and over2 == 1200 - LIMIT,
+   f'{len(keep2)}/{over2}')
 ok('裁剪结果确定（同一输入两次一致）', keep2 == sp.clamp_selected_count(big)[0])
-ok('裁剪取的是排序后前 500', keep2 == set(sorted(big)[:LIMIT]))
+ok('裁剪取的是排序后前 %d 颗' % LIMIT, keep2 == set(sorted(big)[:LIMIT]))
 ok('空/None 安全', sp.clamp_selected_count(None)[0] == set() and
    sp.clamp_selected_count(set())[1] == 0)
 
@@ -249,7 +250,7 @@ def _round(sel):
     d2.show()
     app.processEvents()
     rounds.append(len(d2.get_selected()))
-    if len(d2.get_selected()) > 500:
+    if len(d2.get_selected()) > LIMIT:
         # 第一轮：触发确定 → 清除 → 二次确认「是」
         QTimer.singleShot(120, lambda: d2.accept())
         _clicker('清除所有选择', delay_ms=600)

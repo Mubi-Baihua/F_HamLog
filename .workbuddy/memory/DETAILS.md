@@ -7,6 +7,7 @@
 - `twoline2rv` 返回包装 `EarthSatellite` 的 `Satrec`，含 `.name/.satnum/._earth_sat`；另有 `observe`、`subpoint`（→lat/lon/alt）、`ground_track`（批量星下点+台站仰角）、`predict_passes`（find_events 求 AOS/MAX/LOS，`duration_sec` 秒级）、`fetch_amateur_tle`、`parse_tle_text`、`SATE_BANDS`、`app_path(rel)`。
 - `satellite_window.py`：过境预测 GUI，由 `project.py`「卫星」菜单或 `main.py`「卫星过境」按钮打开；每行「记录」按钮经 `quick_log_callback`→`project.new` 预填；工具栏「编辑转发器」(`sat_radio_dict.txt`)/「TQSL映射」(`tqsl_dict.txt`)/「星历自动更新」复选框。
 - `satellite_auto_update.py`：`main.py` 启动时 `AutoTleUpdater(window).start()` 常驻，QTimer 每小时巡检 `should_update_now()`，到间隔由后台线程 `_FetchThread` 调 `fetch_amateur_tle(force=True)` 刷新 `file/amateur.tle`。
+- 星历数据源（TLE 下载来源）：独立文件 `file/tle_sources.txt`（`TLE_SOURCES_PATH`，每行一个地址、`#` 注释），独立窗口 `tle_source_window.py`（`main(window=None, on_save=None)`；列表双击就地编辑、非法/重复地址回滚、改动即时落盘）。`parse_tle_sources_text`/`load_tle_source_file`/`save_tle_sources`/`drop_legacy_tle_sources`/`is_valid_tle_source` 均在 `satellite_pred.py`；`load_tle_sources()` 读取顺序 = 独立文件 → 旧设置键 `sat_tle_sources`（`m_xml.txt`，仅兼容读）→ `DEFAULT_TLE_SOURCES`。`fetch_amateur_tle(sources=[...])` 按序下载，同编号取靠前源。
 - 通联预测算法：`visibility_windows()`（按最低仰角的连续可见窗口）+ `predict_mutual_passes()`（两站窗口交集，交集内采样得两站最大仰角/方位/最佳时刻）+ `great_circle_km()`。
 - 地图：`open_map(parent, sats, home, station_b, selected_name, source, min_elev=0.0)`；纯 QPainter 等距圆柱投影（不引 matplotlib）；陆地 `file/world_land.json`；海洋/陆地/网格缓存成 QPixmap，动态层（轨迹/当前位置/覆盖区/台站/图例）每帧叠加。已修：多圈轨迹重合、南极洲接缝、极地覆盖区绘制。
 
@@ -52,11 +53,26 @@
   ⑦ 测「开窗即弹提示」时 `main()` 里的同步模态会阻塞主线程 → 用 `QTimer.singleShot(80, lambda: main(None))` 延迟触发。见 `test_max_selected_smoke.py`。
 - **两进程真机回归**：仓库根 `__mp_host.py`（房主：开房→写端口+指纹→轮询状态）与 `__mp_guest.py`（客户端：等端口→**经 `verify_fingerprint` 走真实核对路径**→加入→经真实表格加记录→轮询）；先跑 host（后台）再跑 guest，读 `__host_log.txt`/`__guest_log.txt`。**单进程无法验证同步**（`project.file` 是模块级全局，两个窗口共用）。
 
+## 独立服务端细节（F_HamLog_Remote_Log_Server_2.0.0）
+- 启动即自动创建 `keys/`（当前端口长期密钥 `server_<端口>.fhlkey`）、`main.fhl`（`[]`）、`password_xml.txt`（默认 `000000`）；`_ensure_runtime_files()` 返回失败项文字，由 `__init__` 写进事件日志（只读目录下也能开窗）。分发只需一个 exe。
+- `_app_dir()` 的正确解析顺序：① `os.environ['NUITKA_ONEFILE_DIRECTORY']`（引导程序给的 exe 目录）→ ② `sys.argv[0]`、`sys.executable` 的目录 → ③ `__file__` 目录。**不能信 `sys.executable`/`__file__`**：Nuitka onefile 下两者都指向 `%TEMP%\onefile_<PID>_…`（退出即清理），且 `sys.frozen` 不存在（只有 `'__compiled__' in globals()` 为 True）。启动时事件日志打印「数据目录：…」。
+- `main.py` **必须自己 `import remote_crypto`**（曾漏，导致密钥创建被静默跳过）。
+- 该 exe 带 `--windows-uac-admin`：非提权进程启动会 `WinError 740`；要端到端验证就另打一个**去掉 uac-admin** 的临时测试包（不覆盖 `dist/` 正式产物）。
+- 客户端「多人日志管理」窗：可最小化的非模态 `QDialog`（`project.open_multiplayer_manager`，640×640），`window._mp_dialog` 单例复用。
+
+## 发布流程细节（GitHub Actions）
+- `.github/workflows/main.yml` 手动 `workflow_dispatch`，一次跑完：Nuitka 打包 → Inno Setup 6 安装包 → 兼容版压缩包 → 发 Releases。仓库 `github.com/Mubi-Baihua/F_HamLog`，主分支 `develop`。
+- 命名由输入 `version` 推导（先 `-replace '\.0$',''` 得 display）：安装包 `F HamLog 2.4 setup.exe`、兼容版 `F HamLog 2.4兼容版.zip`；Release 附件沿用点号风格 `F.HamLog.2.4.setup.exe` / `F.HamLog.2.4.zip`，外加仓库内已打包的 `F_HamLog_Remote_Log_Server_2.0.0.exe`（不重打包）。安装包内部 AppVersion 仍用完整版本。
+- `.github/inno/F HamLog 2.iss` 为 CI 专用（AppId 与本地一致故升级关系不变；路径走 `RepoRoot`，版本/包名/ExeName 由 `/D` 注入）；`.github/inno/ChineseSimplified.isl` 内置中文语言文件（运行器 Inno 6.7.1 不带非官方中文包），`.gitattributes` 锁 CRLF。
+- 缓存：pip、Nuitka 辅助工具、`.venv`（按 `第三方模块.txt` 哈希）、`main.build`（按 `*.py` 哈希）。
+- **改脚本必记的坑**：① PowerShell 里紧跟中文的变量必须写 `${var}`（`"$display兼容版"` 会被当成一个变量名，值静默变空）；② `VersionInfo.ProductVersion` 由系统补尾部空格，比较前必须 `.Trim()`；③ `GITHUB_ENV`/摘要用 `[System.IO.File]::AppendAllLines`+`UTF8Encoding($false)`（统一 `shell: pwsh`）；④ 多行文本数组不要 `[string[]]` 强转（会被拼成一行），用 `List[string]` 逐行 `Add`；⑤ 7-Zip 打包 `Push-Location main.dist; 7z a -tzip <dst> *`；⑥ `nuitka.__version__` 在 4.x 已移除，用 `importlib.metadata.version('nuitka')`；⑦ `run:` 双引号串里别写 `${{ }}`，用 `$env:GITHUB_REPOSITORY`/`$env:GITHUB_SHA`。
+- 本地验证：PyYAML 解析工作流 → 抽 `run` → `[Parser]::ParseFile` 查语法（**目标路径必须内联进命令串**：`ParseFile('')` 恒「无错误」→ 假通过）；再用桩 `gh.cmd` 前置 `PATH` 演练各步。本机已装 Inno 6.7.3 与 7-Zip。
+
 ## 卫星选择对话框：搜索/置顶/超限机制
 - `SatelliteSelectDialog` 搜索过滤预计算 `self._norm`，计数显示「匹配 N / 共 M 颗」，全选/全不选**只作用于可见项**；维护 `self._row_names`（行号→卫星名）以便按行号隐藏；过滤后 `scrollToItem(首个匹配项, PositionAtTop)`。**搜索期间被隐藏但已勾选的项，点「确定」仍保留在 `get_selected()`（有意设计）**。
 - 未搜索时已选置顶：搜索框为空时 `_filter` 末尾调 `_reorder_pin_selected()` 把已勾选项物理重排到顶部（已选在前、保持各自原相对顺序）并同步 `_row_names`；`itemChanged`→`_on_item_changed` 勾选一变即重排（新勾选自动跳顶），`self._reordering` 守卫防递归；搜索中不重排。取出 item 用尾部 `takeItem(count-1)`（O(1)/次）而非 `takeItem(0)`（O(N)/次），整体 O(N)，避免数千颗时 O(N²)。
 - `clamp_selected_count(n)` → `(保留集合, 裁掉数)`。
 - `SatelliteSelectDialog.accept()` 超限不关闭：置 `self.reset_requested=True` + `super().reject()`；两处调用方（`satellite_window`/`mutual_window` 的 `open_select`）用 `while True:` 循环——`Accepted`→裁剪+break；`Rejected && reset_requested`→`selected_names=set()` 后**关窗重开**；否则 return。`_persist()/run_prediction()/推地图` 移出循环只跑一次。**原因**：原地对数千项 `setCheckState` 会逐次触发 `itemChanged`→重排+刷新标签，O(N²) 卡顿。旧的 `_clear_all_selected()` 已删除。
 - `m_xml` 中的自选超限不再静默裁剪：两处 `main()` 读 `sat_sats`/`mu_sats` 后先 `clamp_selected_count` 兜底（防卡）并记 `_oversized_from_settings`，`win.show()` 之后弹提示，选清除则 `selected_names.clear()` + `_persist()`。
-- 计数标签 = `self._count_base` 缓存基数 + `　已选 N 颗`，超限追加「，超过上限 500 颗」并转红。
-- `import_tle()` 默认全选同样受上限约束。测试 `test_max_selected_smoke.py`（36 项，含重开循环模拟与 m_xml 超限提示三分支）。
+- 计数标签 = `self._count_base` 缓存基数 + `　已选 N 颗`，超限追加「，超过上限 250 颗」并转红。
+- `import_tle()` **不再自动勾选**（保持用户原有勾选），导入结果按 NORAD 编号增量并入并写回星历缓存，同样受上限约束。测试 `test_max_selected_smoke.py`（36 项，含重开循环模拟与 m_xml 超限提示三分支）。
