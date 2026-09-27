@@ -4,7 +4,7 @@ satellite_window.py —— 业余卫星过境预测界面（PySide6）
 
 由 project.py 的“记录”菜单调用。提供：
   - 业余卫星未来过境列表（升起/落下时间、最大仰角、方位、时长）
-  - 刷新 TLE（从「设置 → 星历数据源…」中配置的数据源下载并本地缓存）
+  - 刷新星历（从「设置 → 星历数据源…」中配置的数据源下载并本地缓存）
   - 设置观测站位置（纬度/经度/海拔）
   - 每行“快速记录”按钮：打开预填好的新建日志
 """
@@ -804,7 +804,7 @@ class TleFetchWorker(QThread):
             return
         except Exception as e:
             if self.force:
-                self.error.emit(f'无法获取全部活动卫星 TLE：\n{e}')
+                self.error.emit(f'无法获取全部活动卫星星历：\n{e}')
                 return
             # 下载失败，回退到本地缓存
             try:
@@ -843,10 +843,10 @@ def main(parent_window, quick_log_callback=None, title='卫星过境'):
     top_vlay = QVBoxLayout(top_grp)
     tool_top = QHBoxLayout()
     top_vlay.addLayout(tool_top)
-    refresh_btn = QPushButton('刷新TLE')
+    refresh_btn = QPushButton('刷新星历')
 
     def update_tle_tooltip():
-        """按最新配置生成「刷新TLE」的提示。
+        """按最新配置生成「刷新星历」的提示。
 
         「星历数据源」是独立窗口（保存到独立文件 file/tle_sources.txt），
         改完立即生效；这里每次下载前重建提示，避免显示过期列表。
@@ -856,20 +856,23 @@ def main(parent_window, quick_log_callback=None, title='卫星过境'):
             '按下面列出的数据源依次下载卫星星历(TLE)，先列出的优先；'
             '同一颗卫星以列表中先出现的数据源为准。\n'
             '下载结果只按卫星编号更新，本地已有的卫星不会因为数据源里暂时没有而被删除。\n'
-            '数据源可在「设置 → 星历数据源…」独立窗口中增删与排序 '
-            '(文件 file/tle_sources.txt)：\n'
+            '数据源可在「设置 → 星历数据源…」独立窗口中增删与排序：\n'
             + '\n'.join('%d. %s' % (i + 1, u) for i, u in enumerate(sources)))
 
     update_tle_tooltip()
+    clear_tle_btn = QPushButton('清空星历')
+    clear_tle_btn.setToolTip(
+        '删除本地星历缓存并清空当前卫星列表；\n'
+        '自选卫星的选择保留，之后用「刷新星历」重新下载。')
     obs_btn = QPushButton('观测站设置')
     edit_radio_btn = QPushButton('编辑转发器')
     edit_radio_btn.setToolTip(
-        '编辑卫星转发器数据 sat_radio_dict.txt（下行/上行频率与模式）。\n'
+        '编辑卫星转发器数据（下行/上行频率与模式）。\n'
         '第一列填卫星名即可（可从本地星历搜索补全），保存时自动转成\n'
         '卫星编号(NORAD ID)写入文件；下次打开按当前星历显示回卫星名。')
     edit_tqsl_btn = QPushButton('编辑TQSL映射')
     edit_tqsl_btn.setToolTip(
-        '编辑 TQSL/LoTW 卫星名称映射 tqsl_dict.txt。\n'
+        '编辑 TQSL/LoTW 卫星名称映射。\n'
         '第一列填卫星名即可（可从本地星历搜索补全），保存时自动转成\n'
         '卫星编号(NORAD ID)写入文件；下次打开按当前星历显示回卫星名。')
     import_tle_btn = QPushButton('导入星历数据')
@@ -893,6 +896,7 @@ def main(parent_window, quick_log_callback=None, title='卫星过境'):
     auto_cb.setChecked(_auto_on)
     auto_cb.setToolTip('开启后按“设置”中的间隔（当前每 %d 小时）自动刷新卫星星历(TLE)。也可在“设置”中修改。' % _auto_hours)
     tool_top.addWidget(refresh_btn)
+    tool_top.addWidget(clear_tle_btn)
     tool_top.addWidget(obs_btn)
     tool_top.addSpacing(12)
     tool_top.addWidget(edit_radio_btn)
@@ -954,7 +958,7 @@ def main(parent_window, quick_log_callback=None, title='卫星过境'):
     status.setStyleSheet(theme.hint_css())
     layout.addWidget(status)
 
-    # 卫星星历下载进度条 + 取消按钮：仅在「刷新TLE」下载期间显示，平时隐藏
+    # 卫星星历下载进度条 + 取消按钮：仅在「刷新星历」下载期间显示，平时隐藏
     prog_layout = QHBoxLayout()
     progress_bar = QProgressBar()
     progress_bar.setRange(0, 100)
@@ -1089,7 +1093,7 @@ def main(parent_window, quick_log_callback=None, title='卫星过境'):
     def run_prediction():
         nonlocal sats, selected_numbers
         if not sats:
-            status.setText('没有可用的卫星数据，请先“刷新TLE”。')
+            status.setText('没有可用的卫星数据，请先“刷新星历”。')
             return
         active_sats = active_sats_list()
         if not selected_numbers:
@@ -1199,7 +1203,7 @@ def main(parent_window, quick_log_callback=None, title='卫星过境'):
     def refresh_tle(force=False):
         nonlocal sats
         update_tle_tooltip()   # 反映「星历数据源」窗口里的最新改动
-        status.setText('正在获取全部活动卫星 TLE…')
+        status.setText('正在获取全部活动卫星星历…')
         # 显示下载进度条（默认确定进度；若服务器未返回大小则转忙碌动画）
         progress_bar.setVisible(True)
         progress_bar.setRange(0, 100)
@@ -1231,7 +1235,13 @@ def main(parent_window, quick_log_callback=None, title='卫星过境'):
             _kept = len(sats) - len(s)
             _extra = f'（另保留 {_kept} 颗本次未取得的旧卫星）' if _kept > 0 else ''
             status.setText(
-                f'已更新 TLE：本次取得 {len(s)} 颗，共 {len(sats)} 颗卫星{_extra}。')
+                f'已更新星历：本次取得 {len(s)} 颗，共 {len(sats)} 颗卫星{_extra}。')
+            # 手动「刷新星历」成功同样算一次星历更新：写入时间戳。
+            # sat_last_update 原本只有后台自动更新会写；「清空星历」删除该键后，
+            # 若手动刷新不回写，「星历更新时间」会一直显示「尚未获取」。
+            _st = _load_settings()
+            _st['sat_last_update'] = datetime.datetime.now().timestamp()
+            _save_settings(_st)
             _show_tle_time()
             refresh_btn.setEnabled(True)
             # 窗口打开后首次获取 TLE：若尚未选择任何卫星，自动弹出选择框引导；
@@ -1262,7 +1272,7 @@ def main(parent_window, quick_log_callback=None, title='卫星过境'):
             cancel_dl_btn.setText('取消下载')
             refresh_btn.setEnabled(True)
             table.setRowCount(0)
-            QMessageBox.warning(win, 'TLE 获取失败', e)
+            QMessageBox.warning(win, '星历获取失败', e)
 
         def on_canceled():
             # 用户主动取消：清理状态，不弹错误框
@@ -1292,6 +1302,44 @@ def main(parent_window, quick_log_callback=None, title='卫星过境'):
         worker.canceled.connect(on_canceled)
         worker.finished.connect(worker.deleteLater)
         worker.start()
+
+    def clear_tle():
+        """「清空星历」：删除本地星历缓存并清空当前卫星列表。
+
+        确认后先停掉仍在跑的下载线程（避免清空后被旧结果覆盖），再删除
+        缓存文件 file/amateur.tle、清空内存卫星列表与结果表，并复位
+        「星历更新时间」标签（旧时间戳随缓存一起失效）。自选卫星的选择
+        不动，之后用「刷新星历」重新下载即可。
+        """
+        if QMessageBox.question(
+                win, '清空星历',
+                '确定清空本地星历吗？\n\n'
+                '将删除本地星历缓存并清空当前卫星列表；\n'
+                '自选卫星的选择保留，之后可用「刷新星历」重新下载。'
+        ) != QMessageBox.Yes:
+            return
+        # 若星历获取线程仍在跑，先中断，避免清空后被旧结果覆盖
+        old = getattr(win, '_tle_worker', None)
+        if old is not None and old.isRunning():
+            old.requestInterruption()
+            old.wait(3000)
+        try:
+            if os.path.exists(TLE_CACHE):
+                os.remove(TLE_CACHE)
+        except Exception as e:
+            QMessageBox.warning(win, '清空失败', '无法删除星历缓存文件：%s' % e)
+            return
+        nonlocal sats
+        sats = []
+        last_rows.clear()
+        table.setRowCount(0)
+        # 复位「星历更新时间」：缓存已删除，旧时间戳不再有意义
+        s = _load_settings()
+        if s.pop('sat_last_update', None) is not None:
+            _save_settings(s)
+        _show_tle_time()
+        status.setText('星历已清空，自选卫星的选择已保留；点击「刷新星历」重新下载。')
+        _push_sats_to_map()
 
     def edit_observer():
         dlg = ObserverDialog(win, lat, lon, alt)
@@ -1327,7 +1375,7 @@ def main(parent_window, quick_log_callback=None, title='卫星过境'):
     def open_select():
         nonlocal selected_numbers
         if not sats:
-            QMessageBox.information(win, '暂无卫星', '请先刷新 TLE。')
+            QMessageBox.information(win, '暂无卫星', '请先刷新星历。')
             return
         names = [n for (n, s) in sats]
         # 卫星名 → NORAD 编号，供选择窗口的「使用卫星编号搜索」使用
@@ -1513,6 +1561,7 @@ def main(parent_window, quick_log_callback=None, title='卫星过境'):
                 '未设置记录回调，无法自动添加到项目。')
 
     refresh_btn.clicked.connect(lambda: refresh_tle(force=True))
+    clear_tle_btn.clicked.connect(clear_tle)
     obs_btn.clicked.connect(edit_observer)
     sel_btn.clicked.connect(open_select)
     import_tle_btn.clicked.connect(import_tle)
@@ -1590,7 +1639,7 @@ def main(parent_window, quick_log_callback=None, title='卫星过境'):
         if _oversized_from_settings > sp.MAX_SELECTED_SATELLITES:
             if prompt_over_limit_selection(
                     win, _oversized_from_settings, sp.MAX_SELECTED_SATELLITES,
-                    source_hint='设置文件 file/m_xml.txt 中保存的自选卫星已超过上限。'):
+                    source_hint='设置中保存的自选卫星已超过上限。'):
                 selected_numbers.clear()
                 _persist()
 

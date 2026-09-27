@@ -81,8 +81,8 @@ try:
     buttons = {b.text(): b for b in win.findChildren(QPushButton)}
     ok('窗口构建成功且含「导入星历数据」按钮', '导入星历数据' in buttons,
        str(sorted(buttons)[:8]))
-    tip = buttons['刷新TLE'].toolTip()
-    ok('「刷新TLE」提示列出数据源（读设置生效）',
+    tip = buttons['刷新星历'].toolTip()
+    ok('「刷新星历」提示列出数据源（读设置生效）',
        sp.DEFAULT_TLE_SOURCES[0] in tip, tip.splitlines()[0])
     ok('提示说明只按编号更新、不删除已有卫星',
        '不会因为数据源里暂时没有而被删除' in tip)
@@ -93,8 +93,11 @@ try:
        '%d 颗' % len(before))
 
     # --- 造导入文件：① 一颗已存在（只改历元） ② 一颗全新 ---
+    # 只挑 5 位以内编号的星：TLE 编号字段固定 5 列，≥100000 的星在真实
+    # 数据里写作 Alpha-5（如 100093 → 'A0093'）；'%05d' 直写 6 位数会
+    # 溢出错位、被解析成另一个编号，fixture 自己就错了。
     exist_id = sorted(k[1] for k in before if k[0] == 'num'
-                      and k[1].isdigit())[10]
+                      and k[1].isdigit() and int(k[1]) <= 99999)[10]
     exist_name = next(n for k, (n, _) in before.items() if k == ('num', exist_id))
 
     def _mktle(name, num_field, epoch):
@@ -122,7 +125,11 @@ try:
     text = '\n'.join(t for _, t in info_msgs)
     ok('报告按编号增量结果（更新 1 / 新增 1）',
        ('更新 1 颗' in text and '新增 1 颗' in text), text.replace('\n', ' | '))
-    ok('不自动勾选：文案已说明', '导入不会自动勾选' in text)
+    # 导入完成弹窗正文已不含勾选说明（历史提交将其注释），
+    # 「不自动勾选」的约定改由按钮 tooltip 承载，故这里校验 tooltip。
+    ok('不自动勾选：tooltip 已说明',
+       '导入不会自动勾选卫星' in buttons['导入星历数据'].toolTip(),
+       buttons['导入星历数据'].toolTip().splitlines()[-1])
     ok('不再出现「仅默认选择前 N 颗」', '仅默认选择' not in text, text)
 
     after = by_key(open(TLE_CACHE, encoding='utf-8', errors='replace').read())

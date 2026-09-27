@@ -146,9 +146,17 @@
   随时可能被用户手工改过。宁可保留改动也不要 checkout。
 - 约定：冒烟脚本命名 `__*_smoke.py`，结果写 `__*_out.txt`（已被 `.gitignore` 覆盖）。
   **优先把路径常量 monkeypatch 到临时文件**（`sp.TLE_SOURCES_PATH`/`sp.SETTINGS_PATH`/`smw.MARKERS_PATH`）。
+- 造「导入星历」fixture：exist 星必须选 `int(编号) <= 99999`——≥100000 的星在 TLE 里是 Alpha-5
+  （100093 写作 `A0093`），`'%05d'` 直写 6 位数会溢出 5 列编号位、被错位解析成别的编号。
 - **离屏跑卫星窗口**：必须 patch `ObserverDialog.exec`/`SatelliteSelectDialog.exec` 返回 `Rejected`，
   再 patch `QMessageBox.information/warning` 抓文案、`QFileDialog.getOpenFileName` 喂文件；
   `win.findChildren(QPushButton)` 按文字点按钮。
+- FakeWorker 必须带 `finished` Signal（refresh_tle 有 `worker.finished.connect(deleteLater)`）；
+  `TleFetchWorker` 补丁要同打 sw+mw 两个命名空间（mutual_window 从 satellite_window import，
+  类绑定发生在导入时）。
+- satellite `on_fetched` 回写时间戳后，自选非空会自动 `run_prediction`——「已更新星历」状态栏是
+  **瞬态文案**（随即被预测状态覆盖），断言用链路标志（已更新星历/正在计算过境/已选 N 颗）；
+  mutual 刷新成功文案是「已**载入**星历」，satellite 才是「已**更新**星历」。
 - `mutual_window` 的 `win` 是 `main()` 里的局部 `QMainWindow()`：离屏拿控件需临时替换模块的
   `QMainWindow` 为注册实例的子类。
 

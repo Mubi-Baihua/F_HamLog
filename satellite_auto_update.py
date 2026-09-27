@@ -97,7 +97,7 @@ def should_update_now(settings=None, now=None):
 # ---------------------------------------------------------------------------
 
 class _FetchThread(QThread):
-    """在后台线程中强制刷新 TLE 缓存。done(ok: bool, msg: str)。"""
+    """在后台线程中强制刷新星历缓存。done(ok: bool, msg: str)。"""
 
     done = Signal(bool, str)
 
@@ -161,7 +161,7 @@ class AutoTleUpdater:
         if ok:
             epoch = time.time()
             _save_last_fetch(epoch)
-            print('[卫星星历] 自动更新成功：TLE 已刷新到 %s。' % TLE_CACHE)
+            print('[卫星星历] 自动更新成功：星历已刷新到 %s。' % TLE_CACHE)
             print('[卫星星历] 时间戳已写入 sat_last_update=%s' % epoch)
         else:
             # 失败不更新 sat_last_update，下一小时巡检会重试；

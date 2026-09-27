@@ -1418,7 +1418,7 @@ class MapWindow(QMainWindow):
 
         self._marker_mgr_btn = QPushButton('标记点管理')
         self._marker_mgr_btn.setToolTip(
-            '使用记事本编辑地图标记点（名称/网格/纬度/经度/颜色）file/sat_map_markers.txt')
+            '使用记事本编辑地图标记点（名称/网格/纬度/经度/颜色）。')
         self._marker_mgr_btn.clicked.connect(self._open_marker_manager)
         ctl.addWidget(self._marker_mgr_btn)
 
@@ -1520,7 +1520,7 @@ class MapWindow(QMainWindow):
 
     # ---- 对外同步接口（由卫星过境 / 通联预测窗口调用） ----
     def set_sats(self, sats):
-        """更新「已选卫星」列表（来源窗口刷新 TLE / 修改自选卫星时调用）。"""
+        """更新「已选卫星」列表（来源窗口刷新星历 / 修改自选卫星时调用）。"""
         self._sats = dict(sats)
         self._sats_order = [n for (n, _) in sats]
         if self._focus not in self._sats:
@@ -1860,7 +1860,7 @@ class MapWindow(QMainWindow):
                     elev_b, '可见' if elev_b >= self._min_elev_b else '不可见')
             parts.append(s)
         elif not self._sats_order:
-            parts.append('未选择卫星（请在来源窗口刷新 TLE 或选择卫星）')
+            parts.append('未选择卫星（请在来源窗口刷新星历或选择卫星）')
         self._info.setText('  |  '.join(parts))
 
     def _tick(self):
