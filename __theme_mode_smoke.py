@@ -117,20 +117,45 @@ for mode in (theme.MODE_DARK, theme.MODE_LIGHT):
     ok('%s: 链接色对比度≥4.5' % mode, c >= 4.5, '%.2f:1 %s' % (
         c, theme.link_color().name()))
 
-# ---- 平台优先：平台给的调色板符合目标明暗时必须原样采用（这才是「以系统为准」） ----
+# ---- 平台调色板完整性校验：只有 AlternateBase 也是中性灰才原样采用 ----
+# 实测：Qt 的 Windows 平台调色板**深浅都坏**——windows11 深色 AlternateBase=#ffffff（纯白）、
+# 浅色 AlternateBase=#000000（纯黑）；Fusion 深色又给 #001a68（深蓝）。故要求
+# 「明暗正确 + 中性灰（RGB 极差 ≤24）」才认；否则用手工构造的兜底调色板。
+
+# ① 平台深色但 AlternateBase 是纯白（不完整）→ 必须走自建兜底
 p = QPalette()
-p.setColor(QPalette.Window, QColor('#1e1e1e'))       # 模拟 Windows 11 深色
+p.setColor(QPalette.Window, QColor('#1e1e1e'))
 p.setColor(QPalette.WindowText, QColor('#ffffff'))
+p.setColor(QPalette.Base, QColor('#2d2d2d'))
+p.setColor(QPalette.AlternateBase, QColor('#ffffff'))
 app.setPalette(p)
 src = theme._adopt_platform_palette(app, True)
-ok('平台已是深色 → 不覆盖（手动深色=系统深色）',
+ok('平台深色但 AlternateBase 纯白 → 判不完整、用自建兜底',
+   src == 'fallback' and app.palette().color(QPalette.Window).name() == '#353535',
+   '%s %s' % (src, app.palette().color(QPalette.Window).name()))
+
+# ② 平台深色且 AlternateBase 为中性灰（完整）→ 原样采用
+p = QPalette()
+p.setColor(QPalette.Window, QColor('#1e1e1e'))
+p.setColor(QPalette.WindowText, QColor('#ffffff'))
+p.setColor(QPalette.Base, QColor('#2d2d2d'))
+p.setColor(QPalette.AlternateBase, QColor('#333333'))
+app.setPalette(p)
+src = theme._adopt_platform_palette(app, True)
+ok('平台深色且 AlternateBase 中性灰 → 原样采用',
    src == 'platform' and app.palette().color(QPalette.Window).name() == '#1e1e1e',
    '%s %s' % (src, app.palette().color(QPalette.Window).name()))
 
-app.setPalette(QPalette())
+# ---- 平台优先：平台给的调色板符合目标明暗且 AlternateBase 中性时才原样采用 ----
+p = QPalette()
+p.setColor(QPalette.Window, QColor('#1e1e1e'))
+p.setColor(QPalette.WindowText, QColor('#ffffff'))
+p.setColor(QPalette.Base, QColor('#2d2d2d'))
+p.setColor(QPalette.AlternateBase, QColor('#333333'))   # 中性灰 → 完整
+app.setPalette(p)
 src = theme._adopt_platform_palette(app, True)
-ok('平台给不出深色 → 用兜底深色',
-   src == 'fallback' and app.palette().color(QPalette.Window).name() == '#353535',
+ok('平台已是完整深色 → 不覆盖（手动深色=系统深色）',
+   src == 'platform' and app.palette().color(QPalette.Window).name() == '#1e1e1e',
    '%s %s' % (src, app.palette().color(QPalette.Window).name()))
 
 app.setPalette(QPalette())

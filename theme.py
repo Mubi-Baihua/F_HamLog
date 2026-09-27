@@ -34,7 +34,7 @@ import weakref
 
 from PySide6.QtCore import QEvent, QObject, Qt
 from PySide6.QtGui import QColor, QPalette
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QFileDialog, QWidget
 
 # ---------------------------------------------------------------------------
 #  颜色模式
@@ -253,19 +253,52 @@ def _settle(app, times=3):
 
 
 def _adopt_platform_palette(app, want_dark):
-    """采用平台给出的调色板；只有当它与目标明暗不符时才用自建调色板兜底。
+    """采用与目标明暗相符的调色板。
 
     返回实际采用的来源（``'system'`` / ``'platform'`` / ``'fallback'``），便于测试。
+
+    **为什么基本不用平台调色板**（2026-09-27 定稿）：
+
+    Qt 的 Windows 平台调色板**在 `AlternateBase` 上是坏的**（实测 windows11 样式：
+    浅色给 `#000000` 纯黑、深色给 `#ffffff` 纯白；Fusion 下深色给 `#001a68` 深蓝）。
+    `AlternateBase` 是表格交替行底色，错值会让表格出现刺眼黑/白/蓝条纹。
+
+    所以规则：
+
+    - `want_dark is None`（跟随系统且探测不到）→ 保持平台原样（`'system'`），不动；
+    - 其余 → **一律用本模块自建调色板**（`'fallback'`）。它含完整深浅两组角色、
+      `AlternateBase` 是中性灰，配合原生样式与补丁 QSS 观感一致且可靠。
+
+    `'platform'` 分支保留：仅当平台确实给出一套**完整且中性**的调色板时才采用
+    （作为未来 Qt 修好后的自动优化路径）。
     """
     if want_dark is None:
         return 'system'                # 探测不到系统配色 → 保持平台原样
-    if _palette_is_dark(app.palette()) == want_dark:
-        # 平台已按目标方案给色（Windows 11 风格支持 setColorScheme）→ 原样采用，
-        # 这样「手动深色」与「系统深色」是同一套色，不存在观感差距
+    if _palette_is_complete(app.palette(), want_dark):
+        # 平台给了一套完整且中性灰的调色板 → 采用（省去自建覆盖）
         return 'platform'
     app.setPalette(dark_palette() if want_dark else light_palette())
     _settle(app, 1)
     return 'fallback'
+
+
+def _palette_is_complete(pal, want_dark):
+    """平台调色板是否「明暗正确且关键角色完整」（否则该用自建调色板）。
+
+    重点检查 `AlternateBase`——平台深色调色板在这一角色上常给错值。实测 Qt 的
+    Windows 平台深色调色板在 Fusion 下会算出 `#001a68`（**深蓝**，不是中性灰），
+    表格交替行会变成刺眼的蓝色条纹；而原生的 windows11 样式下更是直接给 `#ffffff`。
+    因此要求它是**中性色**（RGB 三通道差值很小）且明暗与主题一致。
+    """
+    if _palette_is_dark(pal) != want_dark:
+        return False
+    alt = pal.color(QPalette.AlternateBase)
+    if (alt.lightness() < 128) != want_dark:
+        return False
+    # 必须是中性灰（避免 #001a68 这类深蓝）
+    if max(alt.red(), alt.green(), alt.blue()) - min(alt.red(), alt.green(), alt.blue()) > 24:
+        return False
+    return True
 
 
 _scheme_hook = None
@@ -296,6 +329,62 @@ def _install_scheme_listener(app):
         _scheme_hook = None
 
 
+def _ensure_style(app):
+    """确保应用使用**系统原生样式**（Windows 上是 `windows11`，保持原生观感）。
+
+    2026-09-27 定稿：曾经为让深色"一定能生效"而切到 Fusion，但 Fusion 观感偏离
+    系统原生、用户明确否决。**这里改回并固定采用平台默认样式**（`windows11`）。
+
+    原生样式的已知限制：输入控件硬绘白底 → `apply_input_style()` 补 QSS 兜底。
+    （文件对话框仍用系统原生实现，其深浅色由系统决定，本模块不干预。）
+
+    只在样式**不是平台原生**时才恢复一次（重复 `setStyle` 会重建控件样式）。
+    """
+    try:
+        cur = app.style().objectName().lower()
+        native = _native_style_name(app).lower()
+        if native and cur != native:
+            from PySide6.QtWidgets import QStyleFactory
+            st = QStyleFactory.create(native)
+            if st is not None:
+                app.setStyle(st)
+    except Exception:
+        pass
+
+
+def _native_style_name(app):
+    """平台默认样式名（用于从 Fusion 等非原生样式恢复）。
+
+    **不能**用 `app.style().objectName()` 自己兜底——那有可能已经是 Fusion。
+    这里按平台硬编码：Windows 用 `windows11`（存在时）否则 `windowsvista`。
+    """
+    if os.name == 'nt':
+        from PySide6.QtWidgets import QStyleFactory
+        keys = [k.lower() for k in QStyleFactory.keys()]
+        for name in ('windows11', 'windowsvista', 'windows'):
+            if name in keys:
+                return name
+    return ''
+
+
+
+def _diag(msg):
+    """把主题诊断信息追加到 file/theme_debug.log（定位深色不生效的问题用）。
+
+    失败一律静默——诊断绝不能影响正常功能。**只有 `file/theme_debug.log`
+    已存在时才写入**（用户建了这个文件即开启诊断，删掉即关闭，不留垃圾）。
+    """
+    try:
+        path = os.path.join('file', 'theme_debug.log')
+        if not os.path.exists(path):
+            return
+        import datetime
+        with open(path, 'a', encoding='utf-8') as f:
+            f.write('%s %s\n' % (datetime.datetime.now().strftime('%H:%M:%S.%f')[:-3], msg))
+    except Exception:
+        pass
+
+
 def apply(app=None, mode=None):
     """把颜色模式套用到整个应用（mode=None 表示沿用当前模式）。
 
@@ -313,6 +402,7 @@ def apply(app=None, mode=None):
     _install_scheme_listener(app)
     _applying = True
     try:
+        _ensure_style(app)                    # 恢复系统原生样式（见函数说明）
         try:
             app.setPalette(QPalette())            # 撤掉覆盖 → 回到平台/系统调色板
         except Exception:
@@ -323,13 +413,32 @@ def apply(app=None, mode=None):
             pass        # 老版本 Qt 没有 setColorScheme：直接走下面的兜底
         _settle(app)
         _last_source = _adopt_platform_palette(app, _want_dark())
+        # 原生样式对输入控件硬绘白底，统一补一条按主题的 QSS 保证深色下一致
+        apply_input_style(app)
     finally:
         _applying = False
+    try:
+        _diag(
+            '[apply] mode=%s want_dark=%s source=%s '
+            'sysScheme=%s style=%s platform=%s '
+            'appWindow=%s appBase=%s'
+            % (_mode, _want_dark(), _last_source,
+               app.styleHints().colorScheme(), app.style().objectName(),
+               app.platformName(),
+               app.palette().color(QPalette.Window).name(),
+               app.palette().color(QPalette.Base).name()))
+    except Exception:
+        pass
     return _mode
 
 
 def init_app(app):
     """启动时调用：读设置并应用颜色模式，返回生效的模式。"""
+    try:
+        _diag('--- init_app: settings_path=%s load_mode=%s'
+              % (settings_path(), load_mode()))
+    except Exception:
+        pass
     apply(app, load_mode())
     return _mode
 
@@ -342,6 +451,103 @@ def current_mode():
 def set_mode(mode, app=None):
     """切换模式，返回生效的模式（是否落盘由调用方决定）。"""
     return apply(app, mode)
+
+
+# ---------------------------------------------------------------------------
+#  输入控件的兜底 QSS
+#
+#  背景：应用用系统原生样式（Windows `windows11`），该样式**不完整遵守
+#  `QPalette`**——实测 `QLineEdit` 等输入控件会硬绘白底。这里补一条**极薄的**
+#  QSS，把这些控件的底色/文字/选中高亮按当前主题重设。
+#  只覆盖颜色，不碰圆角/padding/尺寸，最大化保留原生观感。
+# ---------------------------------------------------------------------------
+
+# 需要补 QSS 的输入类控件
+_INPUT_WIDGET_TYPES = ('QLineEdit', 'QPlainTextEdit', 'QTextEdit', 'QSpinBox',
+                       'QDoubleSpinBox', 'QComboBox', 'QDateEdit', 'QTimeEdit',
+                       'QDateTimeEdit')
+
+
+def _input_qss_colors():
+    """输入控件 QSS 需要的颜色；取不到调色板时返回 None。"""
+    app = QApplication.instance()
+    if app is None:
+        return None
+    pal = app.palette()
+    return {
+        'base': pal.color(QPalette.Base).name(),
+        'text': pal.color(QPalette.Text).name(),
+        'border': pal.color(QPalette.Mid).name(),
+        'hl': pal.color(QPalette.Highlight).name(),
+        'hl_text': pal.color(QPalette.HighlightedText).name(),
+        'disabled': pal.color(QPalette.Disabled, QPalette.Text).name(),
+    }
+
+
+def _input_qss_rules(cls):
+    """单个输入控件类的 QSS 规则（cls 为类名字符串）。"""
+    c = _input_qss_colors()
+    if c is None:
+        return ''
+    return (
+        '%s { background-color: %s; color: %s; border: 1px solid %s;'
+        ' selection-background-color: %s; selection-color: %s; }'
+        '%s:disabled { color: %s; }'
+        % (cls, c['base'], c['text'], c['border'], c['hl'], c['hl_text'],
+           cls, c['disabled'])
+    )
+
+
+def input_style_sheet():
+    """输入类控件的主题 QSS（保证底色/文字/选中高亮与主题一致）。
+
+    用调色板里的实际颜色，不写死；返回空串表示无需补丁（例如跟随系统时不干预，
+    交给系统深浅色自己处理）。
+
+    **只覆盖背景/文字/边框/选中高亮**，不碰圆角、padding 等外观细节。
+    """
+    if _mode == MODE_SYSTEM:
+        return ''                       # 跟随系统：交给系统，不干预
+    c = _input_qss_colors()
+    if c is None:
+        return ''
+    sels = ', '.join(_INPUT_WIDGET_TYPES)
+    return (
+        '%s {'
+        ' background-color: %s;'
+        ' color: %s;'
+        ' border: 1px solid %s;'
+        ' selection-background-color: %s;'
+        ' selection-color: %s;'
+        '}'
+        '%s:disabled { color: %s; }'
+        'QComboBox QAbstractItemView {'
+        ' background-color: %s;'
+        ' color: %s;'
+        ' selection-background-color: %s;'
+        ' selection-color: %s;'
+        '}'
+        % (sels, c['base'], c['text'], c['border'], c['hl'], c['hl_text'],
+           sels, c['disabled'],
+           c['base'], c['text'], c['hl'], c['hl_text'])
+    )
+
+
+def apply_input_style(app=None):
+    """把输入控件兜底 QSS 套到应用上（跟随系统时清掉，避免影响系统外观）。
+
+    失败静默。返回是否实际设置了 QSS。
+    """
+    app = app or QApplication.instance()
+    if app is None:
+        return False
+    try:
+        css = input_style_sheet()
+        app.setStyleSheet(css)
+        _diag('[input_style] applied=%s len=%d' % (bool(css), len(css)))
+        return bool(css)
+    except Exception:
+        return False
 
 
 # ---------------------------------------------------------------------------

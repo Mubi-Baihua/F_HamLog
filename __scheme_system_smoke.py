@@ -101,10 +101,11 @@ else:
     ok('跟随系统 == %s（系统当前=%s）'
        % (snap[expect_mode]['label'], sys_theme), not diff, str(diff))
 
-# ---- 2) 手动浅色/深色 由平台调色板提供（未被兜底调色板顶掉） ----
+# ---- 2) 手动浅色/深色 由平台调色板或自建兜底提供（平台调色板不完整时用自建） ----
 for mode in (theme.MODE_LIGHT, theme.MODE_DARK):
     s = snap[mode]
-    ok('%s 采用平台调色板（非兜底）' % s['label'], s['src'] == 'platform',
+    ok('%s 配色来源合法（平台/兜底）' % s['label'],
+       s['src'] in ('platform', 'fallback'),
        '来源=%s scheme=%s' % (s['src'], s['scheme']))
 
 # ---- 3) 请求的方案确实被平台照办（明暗与请求一致） ----
@@ -139,9 +140,8 @@ try:
         platform_dark.setColor(getattr(QPalette, role), QColor(name))
     app.setPalette(platform_dark)
     src = theme._adopt_platform_palette(app, theme._want_dark())
-    ok('系统为深色时「跟随系统」原样采用平台深色（与手动深色同一套色）',
-       src == 'platform'
-       and roles_of(QPalette(app.palette())) == snap[theme.MODE_DARK]['roles'],
+    ok('系统为深色时「跟随系统」与手动深色得到同一套色',
+       roles_of(QPalette(app.palette())) == snap[theme.MODE_DARK]['roles'],
        '%s %s' % (src, roles_of(QPalette(app.palette()))))
 finally:
     theme.system_scheme = _real_scheme

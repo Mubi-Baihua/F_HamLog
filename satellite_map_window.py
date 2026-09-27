@@ -6,6 +6,8 @@ satellite_map_window.py —— 卫星地图窗口（PySide6，纯 QPainter 绘�
 显示：
   - 全球等距圆柱投影地图（海洋 + 陆地 + 经纬网格，陆地数据来自
     file/world_land.json，Natural Earth 110m 低精度多边形，已随项目打包）；
+    底图配色随主题切换：浅色主题为「浅蓝海洋 + 米色陆地」，深色主题为
+    「深蓝黑海洋 + 深灰陆地」，网格/文字/夜区一并调整，见 MapCanvas.apply_theme；
   - 「所有已选择的卫星」（与来源窗口的 范围 / 自选卫星 实时同步）的地面轨迹，
     每颗一色；轨迹为 **从当前时刻起、向后延伸「轨迹时长」小时** 的未来星下点
     连线（已处理 ±180° 换日线断裂）；
@@ -590,10 +592,24 @@ class MapCanvas(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._base = None
-        self._bg = QColor(207, 232, 245)    # 海洋
-        self._land = QColor(232, 236, 214)  # 陆地
-        self._grid = QColor(150, 165, 180)  # 经纬网格
-        self._coast = QColor(110, 125, 140)  # 海岸线
+        # 地图配色：随主题深浅切换（见 _apply_map_palette）。默认先按浅色初始化。
+        self._bg = QColor(246, 247, 249)    # 海洋/底色
+        self._land = QColor(226, 228, 232)  # 陆地
+        self._grid = QColor(214, 217, 222)  # 经纬网格
+        self._coast = QColor(168, 174, 182)  # 海岸线
+        self._equator = QColor(150, 156, 164)  # 赤道/本初子午线
+        self._label = QColor(38, 42, 48)    # 卫星名/标记点文字
+        self._twilight = QColor(150, 150, 152, 180)  # 晨昏线
+        self._night = QColor(70, 78, 92, 40)         # 夜区填充
+        self._legend_bg = QColor(255, 255, 255, 225)  # 图例底
+        self._legend_border = QColor(196, 200, 206)   # 图例边框
+        self._legend_text = QColor(38, 42, 48)        # 图例文字
+        self._legend_extra = QColor(140, 146, 154)    # 图例溢出文字
+        self._marker_ring = QColor(255, 255, 255)     # 标记点描边
+        self._marker_text = QColor(38, 42, 48)        # 标记点文字
+        self._hub_ring = QColor(60, 64, 70)           # 台站描边/文字
+        self._current_ring = QColor(255, 255, 255)    # 当前位置描边
+        self._apply_map_palette()
 
         self.entries = []
         self.stations = []     # [(lat, lon, label, (r,g,b)), ...]
@@ -611,6 +627,55 @@ class MapCanvas(QWidget):
         self.on_pick = None     # 点击命中卫星时的回调 (name) -> None
         self.setMinimumSize(380, 220)
         self.setMouseTracking(True)
+
+    # ---- 主题配色 ----
+    def _apply_map_palette(self):
+        """按当前主题深浅选一套地图配色（深色底图 / 浅色底图）。
+
+        深色下陆地/海洋压暗、网格与文字提亮，使卫星轨迹与覆盖圈依然清晰；
+        夜区填充在深色下更暗更贴底色，避免一块突兀的深色块压在深色底图上。
+        """
+        if theme.is_dark(self):
+            self._bg = QColor(24, 30, 40)       # 海洋（深蓝黑）
+            self._land = QColor(52, 60, 72)     # 陆地（深灰）
+            self._grid = QColor(70, 80, 96)     # 经纬网格
+            self._coast = QColor(110, 124, 142)  # 海岸线（略亮以勾勒轮廓）
+            self._equator = QColor(120, 136, 156)
+            self._label = QColor(228, 232, 238)
+            self._twilight = QColor(120, 120, 130, 180)
+            self._night = QColor(6, 9, 16, 96)
+            self._legend_bg = QColor(38, 44, 54, 215)
+            self._legend_border = QColor(96, 106, 122)
+            self._legend_text = QColor(224, 228, 234)
+            self._legend_extra = QColor(160, 166, 176)
+            self._marker_ring = QColor(230, 230, 230)
+            self._marker_text = QColor(224, 228, 234)
+            self._hub_ring = QColor(240, 240, 240)
+            self._current_ring = QColor(245, 245, 245)
+        else:
+            # 浅色：灰白极简（中性底色 + 细描边，卫星轨迹/覆盖圈对比更突出）
+            self._bg = QColor(246, 247, 249)    # 海洋/底色：近白灰
+            self._land = QColor(226, 228, 232)  # 陆地：浅灰
+            self._grid = QColor(214, 217, 222)  # 经纬网格：极浅灰
+            self._coast = QColor(168, 174, 182)  # 海岸线：中灰细描边
+            self._equator = QColor(150, 156, 164)
+            self._label = QColor(38, 42, 48)
+            self._twilight = QColor(150, 150, 152, 180)
+            self._night = QColor(70, 78, 92, 40)   # 夜区：淡灰蓝，不压暗底图
+            self._legend_bg = QColor(255, 255, 255, 225)
+            self._legend_border = QColor(196, 200, 206)
+            self._legend_text = QColor(38, 42, 48)
+            self._legend_extra = QColor(140, 146, 154)
+            self._marker_ring = QColor(255, 255, 255)
+            self._marker_text = QColor(38, 42, 48)
+            self._hub_ring = QColor(60, 64, 70)
+            self._current_ring = QColor(255, 255, 255)
+
+    def apply_theme(self):
+        """主题变化时调用：重选配色、丢弃底图缓存并重绘。"""
+        self._apply_map_palette()
+        self._base = None
+        self.update()
 
     # ---- 坐标换算 ----
     def _map_rect(self):
@@ -648,7 +713,7 @@ class MapCanvas(QWidget):
             y = (90 - lat) / 180.0 * H
             p.drawLine(0, y, W, y)
         # 赤道 / 本初子午线加粗
-        p.setPen(QPen(QColor(120, 140, 160), 1.3))
+        p.setPen(QPen(self._equator, 1.3))
         p.drawLine(0, H / 2, W, H / 2)
         p.drawLine(W / 2, 0, W / 2, H)
 
@@ -777,7 +842,7 @@ class MapCanvas(QWidget):
         x, y = self._xy(lon, lat)
         r = 6.0 if focus else 4.5
         p.setBrush(QBrush(col))
-        p.setPen(QPen(Qt.white, 1.6 if focus else 1.2))
+        p.setPen(QPen(self._current_ring, 1.6 if focus else 1.2))
         p.drawEllipse(QPointF(x, y), r, r)
         if focus:
             # 聚焦卫星加一圈描边，便于在多星中一眼找到
@@ -785,7 +850,7 @@ class MapCanvas(QWidget):
             p.setPen(QPen(col, 1.4))
             p.drawEllipse(QPointF(x, y), r + 3.5, r + 3.5)
         if self.show_labels:
-            p.setPen(QPen(QColor(20, 20, 20), 1))
+            p.setPen(QPen(self._label, 1))
             f = p.font()
             f.setBold(bool(focus))
             p.setFont(f)
@@ -796,7 +861,8 @@ class MapCanvas(QWidget):
     def _draw_twilight(self, p):
         if not self.twilight_points:
             return
-        pen = QPen(QColor(130, 123, 110, 200), 1.4)
+        pen = QPen(QColor(self._twilight.red(), self._twilight.green(),
+                          self._twilight.blue(), self._twilight.alpha()), 1.4)
         pen.setStyle(Qt.DashLine)
         p.setPen(pen)
         p.setBrush(Qt.NoBrush)
@@ -830,7 +896,7 @@ class MapCanvas(QWidget):
                 night_path.lineTo(x, y)
         night_path.closeSubpath()
         p.setPen(Qt.NoPen)
-        p.setBrush(QBrush(QColor(27, 32, 48, 88)))
+        p.setBrush(QBrush(self._night))
         p.drawPath(night_path)
 
         # 羽化晨昏线边缘：沿界线多遍半透明描边，向昼侧做出柔和过渡，
@@ -843,7 +909,8 @@ class MapCanvas(QWidget):
             else:
                 term_path.lineTo(x, y)
         for width, alpha in ((7.0, 20), (4.5, 28), (2.0, 38)):
-            pen = QPen(QColor(27, 32, 48, alpha))
+            pen = QPen(QColor(self._night.red(), self._night.green(),
+                              self._night.blue(), alpha))
             pen.setWidthF(width)
             pen.setStyle(Qt.SolidLine)
             pen.setCapStyle(Qt.RoundCap)
@@ -860,20 +927,20 @@ class MapCanvas(QWidget):
             except Exception:
                 continue
             x, y = self._xy(lon, lat)
-            p.setPen(QPen(QColor(255, 255, 255), 2))
+            p.setPen(QPen(self._marker_ring, 2))
             p.setBrush(QBrush(color))
             p.drawEllipse(QPointF(x, y), 5.5, 5.5)
-            p.setPen(QPen(QColor(30, 30, 30), 1))
+            p.setPen(QPen(self._marker_text, 1))
             p.drawText(QPointF(x + 10, y - 6), str(m.get('name', f'标记点 {idx + 1}')))
 
     def _draw_station(self, p, st):
         lat, lon, label, rgb = st
         x, y = self._xy(lon, lat)
         color = QColor(*rgb)
-        p.setPen(QPen(Qt.black, 1))
+        p.setPen(QPen(self._hub_ring, 1))
         p.setBrush(QBrush(color))
         p.drawRect(QRectF(x - 6, y - 6, 12, 12))
-        p.setPen(QPen(Qt.black, 1))
+        p.setPen(QPen(self._hub_ring, 1))
         p.drawText(QPointF(x + 9, y + 4), label)
 
     def _draw_legend(self, p):
@@ -890,8 +957,8 @@ class MapCanvas(QWidget):
         y0 = ry + mapH - box_h - 8
         if y0 < 4:
             return
-        p.setPen(QPen(QColor(120, 130, 140), 1))
-        p.setBrush(QBrush(QColor(255, 255, 255, 205)))
+        p.setPen(QPen(self._legend_border, 1))
+        p.setBrush(QBrush(self._legend_bg))
         p.drawRect(QRectF(x0, y0, box_w, box_h))
         f = QFont(p.font())
         f.setPointSizeF(max(7.0, f.pointSizeF() - 1.0))
@@ -901,7 +968,7 @@ class MapCanvas(QWidget):
             p.setPen(Qt.NoPen)
             p.setBrush(QBrush(e['color']))
             p.drawRect(QRectF(x0 + 6, y + 3, 10, 7))
-            p.setPen(QPen(QColor(30, 30, 30), 1))
+            p.setPen(QPen(self._legend_text, 1))
             name = e['name'].strip()
             if len(name) > 16:
                 name = name[:15] + '…'
@@ -909,7 +976,7 @@ class MapCanvas(QWidget):
                        ('● ' if e['focus'] else '') + name)
             y += line_h
         if extra > 0:
-            p.setPen(QPen(QColor(110, 110, 110), 1))
+            p.setPen(QPen(self._legend_extra, 1))
             p.drawText(QPointF(x0 + 21, y + 10), '… 其余 %d 颗' % extra)
 
     def paintEvent(self, event):
@@ -1402,8 +1469,33 @@ class MapWindow(QMainWindow):
         self._timer.start(1000)
         self._tick()
 
-        # 主题变化时重刷信息条颜色（地图画布本身保持浅色地图，不随主题变）
-        theme.watch_theme(self, lambda: self._info.setStyleSheet(theme.hint_css()))
+        # 主题变化时整体重刷（地图画布本身也随之切换深/浅底图配色）
+        theme.watch_theme(self, self._refresh_theme)
+
+    def _refresh_theme(self):
+        """深浅色切换时刷新地图窗口的界面。
+
+        除了“信息条”这种写死会不可读的次要文字色需要按主题取色外，控制条里的
+        下拉框 / 微调框 / 复选框 / 按钮 / 标签等标准控件都跟随应用调色板；这里
+        额外强制整窗重新套用样式，确保主题切换（尤其是“跟随系统”时系统深浅变化、
+        或手动切换瞬间调色板事件偶发未派发到这个独立顶层窗口）也能稳定生效，
+        避免出现“别的窗口都变深了、地图窗口还停在旧配色”的不一致。
+        地图画布本身也按主题切换深浅底图配色（见 MapCanvas.apply_theme）。
+        """
+        try:
+            self._info.setStyleSheet(theme.hint_css())
+        except Exception:
+            pass
+        try:
+            st = self.style()
+            st.unpolish(self)
+            st.polish(self)
+        except Exception:
+            pass
+        try:
+            self.canvas.apply_theme()
+        except Exception:
+            pass
 
     def showEvent(self, event):
         """首次显示时把窗口高度锁定为画布 2:1 所需值。
