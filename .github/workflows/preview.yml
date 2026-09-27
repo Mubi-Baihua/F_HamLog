@@ -1,36 +1,37 @@
-name: 预览版 F HamLog（提交即打包 → Artifact）
+name: 预览版 F HamLog（定时打包 → Artifact）
 
-# 触发方式：每次提交到 main / develop 自动运行（不需要手动点击）。
-# 流程与 main.yml 相同，区别只在产出与去向：
+# 触发方式：
+#   1. 定时：每天北京时间 04:00（= UTC 20:00）自动运行一次。
+#   2. 手动：Actions 页面 "Run workflow" 可随时运行。
+#
+# 每次运行先看「上次执行到现在」这段时间里 develop 分支有没有新提交：
+#   · 没有新提交 → 直接结束，并删除本次 run 记录（Actions 页面不留痕）
+#   · 有新提交   → 继续打包
+#
+# 打包流程与 main.yml 相同，区别只在产出与去向：
 #   1. Nuitka 打包（主程序 exe 名 = F HamLog 2 Preview，与正式版区分）
 #   2. Inno Setup 6 生成安装包（AppName = F HamLog 2 Preview，AppId 与正式版不同，
 #      故两个包可共存、互不覆盖）
 #   3. 生成兼容版压缩包（免安装，解压即用）
-#   4. 版本号 = 提交时间 UTC-YYYYMMDD-HHMM（如 UTC-20260927-1835）
+#   4. 版本号 = 运行时间 UTC-YYYYMMDD-HHMM（如 UTC-20260927-1835）
 #   5. 两个产物上传为 Artifact，并在上传前删除上一份，避免堆积占满额度
 #
 # 不做的事：不提交到任何分支、不创建 Release（要发正式版请手动跑 main.yml）。
 on:
-  push:
-    branches:
-      - main
-      - develop
-    # 自动提交（回写产物、[skip ci]）与文档/记忆类改动不触发预览打包
-    paths-ignore:
-      - 'F HamLog 2 Inno Setup/**'
-      - '兼容版/**'
-      - '**/*.md'
-      - '.workbuddy/**'
+  schedule:
+    # 北京时间 04:00 = UTC 20:00（前一天）。
+    # GitHub 的 cron 用 UTC，且高负载时可能延迟几分钟到几十分钟，这是正常现象。
+    - cron: '0 20 * * *'
   workflow_dispatch:
 
-# 同一分支只保留最新一次构建；有新提交时直接取消上一轮，既省时间也省额度
+# 定时任务与手动任务串行（同一工作流只保留最新一次）
 concurrency:
-  group: preview-${{ github.ref }}
-  cancel-in-progress: true
+  group: preview
+  cancel-in-progress: false
 
 permissions:
   contents: read
-  actions: write   # 需要删除上一份 Artifact
+  actions: write   # 需要删除本次 run 记录、以及删除上一份 Artifact
 
 env:
   PYTHON_VERSION: '3.13'
@@ -55,9 +56,104 @@ jobs:
 
     steps:
       # ------------------------------------------------------------------
-      # 0. 解析版本号（提交时间，UTC）
+      # 0. 检出代码（含完整历史，供提交检测使用）
+      # ------------------------------------------------------------------
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # ------------------------------------------------------------------
+      # 1. 提交检测：上次执行到现在，develop 上有没有新提交
+      # ------------------------------------------------------------------
+      # 判定依据：取本工作流「上一次运行的时间」，再看 develop 上在这段时间里
+      # 有没有提交。因为无提交的 run 会被自删，所以 Actions 里能查到的历史 run
+      # 都是真的执行过打包的，最近一条的 createdAt 即上次执行的起点。
+      # 首次运行（查不到历史）→ 视为有新提交，正常打包。
+      - name: 检查是否有新提交
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          WORKFLOW_FILE: preview.yml
+          WATCH_BRANCH: develop
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          # 先取回 develop 的最新历史（checkout 默认只取触发分支）
+          git fetch origin $env:WATCH_BRANCH --quiet
+          if ($LASTEXITCODE -ne 0) { Write-Warning "拉取 $env:WATCH_BRANCH 失败（继续用本地已有历史）" }
+
+          # 上一次执行的时间点（本工作流的最近一条历史 run）
+          $since = ''
+          try {
+            $listJson = gh run list --workflow=$env:WORKFLOW_FILE --limit=1 --json createdAt 2>$null
+            if ($LASTEXITCODE -eq 0 -and $listJson) {
+              $runs = @($listJson | ConvertFrom-Json)
+              if ($runs.Count -gt 0) { $since = [string]$runs[0].createdAt }
+            }
+          } catch {
+            Write-Warning "查询上一次运行失败：$_"
+          }
+
+          # 区间内 develop 上的提交数
+          $count = 0
+          if ([string]::IsNullOrWhiteSpace($since)) {
+            $reason = '未找到历史执行记录（视为首次运行）'
+          } else {
+            $count = [int](git rev-list --count --since="$since" "origin/$env:WATCH_BRANCH")
+            if ($LASTEXITCODE -ne 0) { $count = 0; Write-Warning '统计提交数失败，按 0 处理' }
+            if ($count -gt 0) {
+              $reason = "自上次执行（$since）以来 $env:WATCH_BRANCH 上有 $count 个新提交"
+            } else {
+              $reason = "自上次执行（$since）以来 $env:WATCH_BRANCH 上没有新提交"
+            }
+          }
+
+          $should = [string]::IsNullOrWhiteSpace($since) -or ($count -gt 0)
+          Write-Host $reason
+          Write-Host ("是否继续打包：{0}" -f $(if ($should) { '是' } else { '否' }))
+
+          $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+          [System.IO.File]::AppendAllLines($env:GITHUB_ENV, [string[]]@(
+            "SHOULD_BUILD=$($should.ToString().ToLower())",
+            "CHECK_REASON=$reason"
+          ), $utf8NoBom)
+
+          $summary = New-Object System.Collections.Generic.List[string]
+          $summary.Add('## 提交检测')
+          $summary.Add('')
+          $summary.Add("- 触发方式：``$env:GITHUB_EVENT_NAME``")
+          $summary.Add("- 监测分支：``$env:WATCH_BRANCH``")
+          $summary.Add("- 上次执行时间：``$(if ($since) { $since } else { '（无）' })``")
+          $summary.Add("- 区间内提交数：$count")
+          $summary.Add("- 结论：$(if ($should) { '有新提交，继续打包' } else { '无新提交，将删除本次运行记录并结束' })")
+          $summary.Add("- 判定依据：$reason")
+          [System.IO.File]::AppendAllLines($env:GITHUB_STEP_SUMMARY, $summary.ToArray(), $utf8NoBom)
+
+      # ------------------------------------------------------------------
+      # 2. 没有新提交 → 删除本次 run 记录并结束
+      # ------------------------------------------------------------------
+      # run 删除后，GitHub 会在本 job 结束后把记录从 Actions 列表移除。
+      # 删除失败（权限不足、API 临时不可用）不视为错误，只提示。
+      - name: 无新提交：删除本次运行记录
+        if: ${{ env.SHOULD_BUILD == 'false' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $ErrorActionPreference = 'Continue'
+          Write-Host "无新提交（$env:CHECK_REASON），删除本次运行记录：run $env:GITHUB_RUN_ID"
+          gh api --method DELETE "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
+          if ($LASTEXITCODE -ne 0) {
+            Write-Warning '删除运行记录失败（可忽略；不影响仓库内容）'
+          } else {
+            Write-Host '已请求删除本次运行记录。'
+          }
+
+      # ------------------------------------------------------------------
+      # 3. 解析版本号（运行时间，UTC）
       # ------------------------------------------------------------------
       - name: 解析版本号与产物名称
+        if: ${{ env.SHOULD_BUILD == 'true' }}
         run: |
           $ErrorActionPreference = 'Stop'
 
@@ -80,18 +176,17 @@ jobs:
 
           Write-Host "主程序 exe：$env:APP_EXE_NAME.exe"
 
-      - name: 检出代码
-        uses: actions/checkout@v4
-
       - name: 设置 Python ${{ env.PYTHON_VERSION }}
+        if: ${{ env.SHOULD_BUILD == 'true' }}
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
       # ------------------------------------------------------------------
-      # 1. 依赖与缓存
+      # 4. 依赖与缓存
       # ------------------------------------------------------------------
       - name: 缓存 pip 下载
+        if: ${{ env.SHOULD_BUILD == 'true' }}
         uses: actions/cache@v4
         with:
           path: ~\AppData\Local\pip\Cache
@@ -101,6 +196,7 @@ jobs:
 
       # Nuitka 会下载 depends.exe 等辅助工具，缓存下来下次免下载
       - name: 缓存 Nuitka 辅助工具
+        if: ${{ env.SHOULD_BUILD == 'true' }}
         uses: actions/cache@v4
         with:
           path: ~\AppData\Local\Nuitka
@@ -108,6 +204,7 @@ jobs:
 
       # 直接复用上一次装好的虚拟环境，可省掉数分钟依赖安装时间
       - name: 缓存虚拟环境（依赖）
+        if: ${{ env.SHOULD_BUILD == 'true' }}
         uses: actions/cache@v4
         with:
           path: .venv
@@ -116,6 +213,7 @@ jobs:
             ${{ runner.os }}-venv-${{ env.PYTHON_VERSION }}-
 
       - name: 准备虚拟环境与依赖
+        if: ${{ env.SHOULD_BUILD == 'true' }}
         run: |
           $ErrorActionPreference = 'Stop'
           $venv   = Join-Path $env:GITHUB_WORKSPACE '.venv'
@@ -143,7 +241,7 @@ jobs:
           & $venvPy -c "import sys, importlib.metadata as md; print('Python', sys.version.split()[0]); [print(n, md.version(n)) for n in ('nuitka','PySide6','skyfield','numpy')]"
 
       # ------------------------------------------------------------------
-      # 2. Nuitka 独立打包
+      # 5. Nuitka 独立打包
       # ------------------------------------------------------------------
       # 缓存 main.build：源码未变动的模块会跳过 C 编译与链接，显著加速下一次打包
       # 键里必须带上 exe 名：Nuitka 把 result_exe 写进 SCons 命令行（main.build/scons-debug.py），
@@ -152,6 +250,7 @@ jobs:
       # 因此 restore-keys 只回退到「同 exe 名」为止，绝不跨名回退 —— 否则会捞到正式版那份
       # 记录了 result_exe=F HamLog 2.exe 的构建目录，白白全量重编。
       - name: 缓存 Nuitka 构建目录
+        if: ${{ env.SHOULD_BUILD == 'true' }}
         uses: actions/cache@v4
         with:
           path: main.build
@@ -160,6 +259,7 @@ jobs:
             ${{ runner.os }}-nuitka-build-${{ env.PYTHON_VERSION }}-${{ env.APP_EXE_NAME }}-
 
       - name: Nuitka 独立打包
+        if: ${{ env.SHOULD_BUILD == 'true' }}
         run: |
           $ErrorActionPreference = 'Stop'
           & $env:PYTHON_VENV -m nuitka --standalone `
@@ -179,6 +279,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Nuitka 打包失败（退出码 $LASTEXITCODE）" }
 
       - name: 校验打包产物
+        if: ${{ env.SHOULD_BUILD == 'true' }}
         run: |
           $ErrorActionPreference = 'Stop'
           $exe = Join-Path $env:GITHUB_WORKSPACE "main.dist\$env:APP_EXE_NAME.exe"
@@ -188,9 +289,10 @@ jobs:
           Write-Host 'main.dist 文件数：' ([System.IO.Directory]::GetFiles("$env:GITHUB_WORKSPACE\main.dist", '*', 'AllDirectories').Count)
 
       # ------------------------------------------------------------------
-      # 3. Inno Setup 6 生成安装包（注入预览用 AppName / AppId / 时间戳版本号）
+      # 6. Inno Setup 6 生成安装包（注入预览用 AppName / AppId / 时间戳版本号）
       # ------------------------------------------------------------------
       - name: 生成安装包（Inno Setup 6）
+        if: ${{ env.SHOULD_BUILD == 'true' }}
         run: |
           $ErrorActionPreference = 'Stop'
 
@@ -237,9 +339,10 @@ jobs:
           Write-Host "安装包：$setup（$size MB，版本 $actual）"
 
       # ------------------------------------------------------------------
-      # 4. 兼容版压缩包（免安装）
+      # 7. 兼容版压缩包（免安装）
       # ------------------------------------------------------------------
       - name: 生成兼容版压缩包
+        if: ${{ env.SHOULD_BUILD == 'true' }}
         run: |
           $ErrorActionPreference = 'Stop'
           $src = Join-Path $env:GITHUB_WORKSPACE 'main.dist'
@@ -262,9 +365,10 @@ jobs:
           Write-Host "兼容版压缩包：$dst（$size MB）"
 
       # ------------------------------------------------------------------
-      # 5. 上传 Artifact（先删除上一份，避免堆积）
+      # 8. 上传 Artifact（先删除上一份，避免堆积）
       # ------------------------------------------------------------------
       - name: 准备上传文件
+        if: ${{ env.SHOULD_BUILD == 'true' }}
         run: |
           $ErrorActionPreference = 'Stop'
           $out = Join-Path $env:GITHUB_WORKSPACE 'preview_assets'
@@ -279,6 +383,7 @@ jobs:
           }
 
       - name: 删除上一份预览产物
+        if: ${{ env.SHOULD_BUILD == 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -306,6 +411,7 @@ jobs:
           }
 
       - name: 上传预览产物
+        if: ${{ env.SHOULD_BUILD == 'true' }}
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.ARTIFACT_NAME }}
@@ -313,6 +419,7 @@ jobs:
           if-no-files-found: error
 
       - name: 写入构建摘要
+        if: ${{ env.SHOULD_BUILD == 'true' }}
         run: |
           $ErrorActionPreference = 'Stop'
           $setup = Join-Path $env:GITHUB_WORKSPACE "release\$env:SETUP_BASE.exe"
@@ -321,9 +428,10 @@ jobs:
           $summary = New-Object System.Collections.Generic.List[string]
           $summary.Add("## 预览版构建完成：$env:VERSION")
           $summary.Add('')
+          $summary.Add("- 触发方式：``$env:GITHUB_EVENT_NAME``")
+          $summary.Add("- 提交检测：$env:CHECK_REASON")
           $summary.Add("- 主程序 exe：``$env:APP_EXE_NAME.exe``")
           $summary.Add("- 安装包 AppName：``$env:APP_NAME``（AppId 与正式版不同，可共存）")
-          $summary.Add("- 提交：``$env:GITHUB_SHA``")
           $summary.Add('')
           $summary.Add('### 产物（Artifact：``' + $env:ARTIFACT_NAME + '``）')
           $summary.Add('')

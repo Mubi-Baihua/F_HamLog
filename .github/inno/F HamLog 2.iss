@@ -84,6 +84,13 @@ UninstallDisplayIcon={app}\{#MyAppExeName}
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 DisableProgramGroupPage=yes
+; 显式要求管理员权限（Inno 默认值就是 admin，这里写出来是为了意图明确、防止漂移）：
+;   只有「管理员安装模式」下，{autopf} 才稳定解析为 {commonpf}（C:\Program Files）。
+;   若落到「非管理员安装模式」，{autopf} 会改解析为 {userpf}（%LOCALAPPDATA%\Programs），
+;   Preview 的安装位置就与正式版不一致了。
+; 同时不提供 PrivilegesRequiredOverridesAllowed：向导里不会出现「仅为当前用户安装」的
+;   降级选项，从而保证 Preview 与正式版都装在同一处 Program Files。
+PrivilegesRequired=admin
 OutputDir={#OutputDirPath}
 OutputBaseFilename={#OutputBaseFilename}
 SetupIconFile={#RepoRoot}\file\F_HamLog.ico

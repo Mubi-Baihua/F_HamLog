@@ -116,15 +116,39 @@
 - 其余离屏坑（嵌套模态消息框、FakeWorker、两进程真机回归）见 `DETAILS.md`。
 
 ## 发布流程（GitHub Actions）
-- 仓库 `github.com/Mubi-Baihua/F_HamLog`，主分支 `develop`。**三个文件**：
-  `main.yml`（手动发布）、`preview.yml`（提交即预览）、`.github/inno/F HamLog 2.iss`。
-- **`main.yml`**：只填 `version`，一次跑完打包 → 安装包 → 兼容版 zip → **回写运行分支**
-  → 发 Releases（**默认草稿**）。命名自动推导。
+- 仓库 `github.com/Mubi-Baihua/F_HamLog`。**默认分支 = `main`**（`origin/HEAD → main`）；
+  `develop` 是开发分支（定时预览的提交检测只看它）。
+  **只有三个文件**：`main.yml`（手动发布，**唯一能发 Release 的工作流**）、
+  `preview.yml`（定时预览打包 → Artifact）、`.github/inno/F HamLog 2.iss`。
+  **没有 `releases.yml`**（曾试建，2026-09-27 用户否决并已删除，勿再引入）。
+- **`main.yml`**：**仅手动**（`workflow_dispatch`）触发，只填 `version`，一次跑完打包 → 安装包
+  → 兼容版 zip → **回写运行分支** → 发 Releases（**默认草稿**，`draft` 输入默认 `'true'`）。
+  命名自动推导。它是唯一能发 Release 的工作流。产物含远端日志服务端 exe。
 - **产物回写位置**：安装包 → `F HamLog 2 Inno Setup/F HamLog <display> setup.exe`；
   兼容版 → `兼容版/F HamLog <display>兼容版.zip`。
-- **`preview.yml`**：`push`(main/develop) 触发，版本号 = `UTC-yyyyMMdd-HHmm`，
-  主程序 exe 与 AppName 均为 `F HamLog 2 Preview`（独立 AppId，可与正式版共存），
-  两个产物上传 Artifact 并在上传前**删除上一份**；**不建 Release、不回写分支**。
+  ⚠️ **但历史产物在 `main` 上布局不同**：兼容版 zip 直接躺在**仓库根目录**
+  （`F HamLog 2.4兼容版.zip`，**没有 `兼容版/` 文件夹**），`兼容版/` 目录只在 `develop` 上。
+  → **任何按固定路径取产物的脚本都必须双位置回退**（先 `兼容版/`，再仓库根）。
+- **`preview.yml`**（**2026-09-27 定稿**）：
+  - **触发 = `schedule: cron '0 20 * * *'`（UTC 20:00 = 北京 04:00）+ `workflow_dispatch`**。
+    **没有 `push` 触发**。`concurrency: group: preview`，`cancel-in-progress: false`。
+  - `permissions: contents: read` + **`actions: write`**（删 run 记录 + 删旧 Artifact 都要）。
+  - 步骤顺序：① `checkout`（`fetch-depth: 0`）→ ② **提交检测**（唯一两个无条件步骤）→
+    ③ 无提交则**自删 run 记录**（`gh api --method DELETE .../actions/runs/$GITHUB_RUN_ID`）→
+    其余 15 个步骤**全部 `if: ${{ env.SHOULD_BUILD == 'true' }}` 门控**。
+  - **提交检测只看 `develop`**：取本工作流**上一条历史 run 的 `createdAt`** 作起点
+    （`gh run list --workflow=preview.yml --limit=1 --json createdAt`），
+    再 `git rev-list --count --since="<createdAt>" origin/develop`；>0 才打包。
+    **逻辑自洽点**：无提交的 run 会被自删，所以 Actions 里能查到的历史 run 都是真跑过打包的，
+    最近一条的 `createdAt` 即「上次执行」起点。首次查不到历史 → 视为有新提交，正常打包。
+  - **产物**：仍是 **exe + zip 两个单文件**（Nuitka + Inno 照跑，不是「不编译」），
+    版本号 = 运行时间 `UTC-yyyyMMdd-HHmm`，主程序 exe 与 AppName 均为 `F HamLog 2 Preview`
+    （独立 AppId `{2AF71D4C-...}`，可与正式版共存），两个产物上传 Artifact
+    并在上传前**删除上一份同名 Artifact**；**不建 Release、不回写分支**。
 - **Release 说明留空、由作者手填**：`gh release create <tag>` **不传** `--title/--notes/--generate-notes`；
   已存在只 `gh release upload --clobber`，**不 edit**（幂等可重跑）。
+- **安装位置**：`.iss` 用 `DefaultDirName={autopf}\{#MyAppName}` + **显式 `PrivilegesRequired=admin`**
+  （`{autopf}` 只在管理员模式才解析为 `C:\Program Files`；非管理员模式会变 `%LOCALAPPDATA%\Programs`）。
+  正式版 → `C:\Program Files\F HamLog 2`，预览版 → `C:\Program Files\F HamLog 2 Preview`，两者同级并存。
+  **`%TEMP%\is-*.tmp` 是 Inno 的正常暂存目录，不是安装位置**（用户曾误认为"装到 temp"）。
 - **改脚本必记的坑、缓存策略、回写分支的 git 序列、本地验证方法与 `.iss` 约定**见 `DETAILS.md`。
