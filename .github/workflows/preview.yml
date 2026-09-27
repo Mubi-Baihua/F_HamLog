@@ -5,18 +5,16 @@ name: 预览版 F HamLog（定时打包 → Artifact）
 #   2. 手动：Actions 页面 "Run workflow" 可随时运行。
 #
 # 每次运行先看「上次执行到现在」这段时间里 develop 分支有没有新提交：
-#   · 没有新提交 → 直接结束，并删除本次 run 记录（Actions 页面不留痕）
-#   · 有新提交   → 继续打包
+#   · 有新提交   → 正常打包（Nuitka + Inno + zip）
+#   · 没有新提交 → 不重新打包，改为**把上一次的产物拿来当这次的产物**
+#                  （下载上一次 run 的 Artifact，再作为本次 run 的 Artifact 上传）
+#   两种情况都会产出 Artifact，所以每次运行结束后都能拿到「最新的一份预览产物」。
 #
-# 打包流程与 main.yml 相同，区别只在产出与去向：
-#   1. Nuitka 打包（主程序 exe 名 = F HamLog 2 Preview，与正式版区分）
-#   2. Inno Setup 6 生成安装包（AppName = F HamLog 2 Preview，AppId 与正式版不同，
-#      故两个包可共存、互不覆盖）
-#   3. 生成兼容版压缩包（免安装，解压即用）
-#   4. 版本号 = 运行时间 UTC-YYYYMMDD-HHMM（如 UTC-20260927-1835）
-#   5. 两个产物上传为 Artifact，并在上传前删除上一份，避免堆积占满额度
-#
-# 不做的事：不提交到任何分支、不创建 Release（要发正式版请手动跑 main.yml）。
+# 产物清理（每次运行都做）：
+#   1. 删除上一份同名 Artifact（只保留最新一份）；
+#   2. 删除「上一次因无提交而没有真正打包」的历史 run 记录（复用型 run 只是搬运，
+#      留着会堆在 Actions 列表里）——判据见「清理上次未打包的运行记录」步骤。
+#   注意顺序：复用分支必须「先下载旧的 → 再删旧 Artifact → 最后上传新的」。
 on:
   schedule:
     # 北京时间 04:00 = UTC 20:00（前一天）。
@@ -31,7 +29,7 @@ concurrency:
 
 permissions:
   contents: read
-  actions: write   # 需要删除本次 run 记录、以及删除上一份 Artifact
+  actions: write   # 删除上一份 Artifact；actions: read 由 GITHUB_TOKEN 默认具备（下载旧产物）
 
 env:
   PYTHON_VERSION: '3.13'
@@ -67,17 +65,19 @@ jobs:
       # 1. 提交检测：上次执行到现在，develop 上有没有新提交
       # ------------------------------------------------------------------
       # 判定依据：取本工作流「上一次运行的时间」，再看 develop 上在这段时间里
-      # 有没有提交。因为无提交的 run 会被自删，所以 Actions 里能查到的历史 run
-      # 都是真的执行过打包的，最近一条的 createdAt 即上次执行的起点。
+      # 有没有提交。最近一条历史 run 的 createdAt 即上次执行的起点。
       # 首次运行（查不到历史）→ 视为有新提交，正常打包。
+      # 同时查出「上一份产物」所在的 run id，供无新提交时复制产物使用。
       - name: 检查是否有新提交
         id: check
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           WORKFLOW_FILE: preview.yml
           WATCH_BRANCH: develop
+          ARTIFACT_NAME: ${{ env.ARTIFACT_NAME }}
         run: |
           $ErrorActionPreference = 'Stop'
+          $utf8NoBom = New-Object System.Text.UTF8Encoding $false
 
           # 先取回 develop 的最新历史（checkout 默认只取触发分支）
           git fetch origin $env:WATCH_BRANCH --quiet
@@ -110,13 +110,35 @@ jobs:
           }
 
           $should = [string]::IsNullOrWhiteSpace($since) -or ($count -gt 0)
-          Write-Host $reason
-          Write-Host ("是否继续打包：{0}" -f $(if ($should) { '是' } else { '否' }))
 
-          $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+          # 找出「上一份产物」所在的 run id：最近一条有 ARTIFACT_NAME 这个 Artifact 的 run。
+          # 无新提交时用它来复制产物；找不到就退回「照常打包」，避免产出为空。
+          $prevRunId = ''
+          if (-not $should) {
+            try {
+              $artJson = gh api "repos/$env:GITHUB_REPOSITORY/actions/artifacts?name=$env:ARTIFACT_NAME&per_page=1" 2>$null
+              if ($LASTEXITCODE -eq 0 -and $artJson) {
+                $arts = @(($artJson | ConvertFrom-Json).artifacts)
+                if ($arts.Count -gt 0) { $prevRunId = [string]$arts[0].workflow_run.id }
+              }
+            } catch {
+              Write-Warning "查询上一份产物失败：$_"
+            }
+          }
+
+          if (-not $should -and [string]::IsNullOrWhiteSpace($prevRunId)) {
+            $should = $true
+            $reason = "$reason；但没有可复用的历史产物 → 改为正常打包"
+            Write-Warning '未找到可复用的历史产物，本次改为正常打包。'
+          }
+
+          Write-Host $reason
+          Write-Host ("是否继续打包：{0}" -f $(if ($should) { '是' } else { '否（复用上一次产物）' }))
+
           [System.IO.File]::AppendAllLines($env:GITHUB_ENV, [string[]]@(
             "SHOULD_BUILD=$($should.ToString().ToLower())",
-            "CHECK_REASON=$reason"
+            "CHECK_REASON=$reason",
+            "PREV_RUN_ID=$prevRunId"
           ), $utf8NoBom)
 
           $summary = New-Object System.Collections.Generic.List[string]
@@ -126,34 +148,98 @@ jobs:
           $summary.Add("- 监测分支：``$env:WATCH_BRANCH``")
           $summary.Add("- 上次执行时间：``$(if ($since) { $since } else { '（无）' })``")
           $summary.Add("- 区间内提交数：$count")
-          $summary.Add("- 结论：$(if ($should) { '有新提交，继续打包' } else { '无新提交，将删除本次运行记录并结束' })")
+          $summary.Add("- 结论：$(if ($should) { '有新提交，正常打包' } else { "无新提交，复用上一次产物（run ``$prevRunId``）" })")
           $summary.Add("- 判定依据：$reason")
           [System.IO.File]::AppendAllLines($env:GITHUB_STEP_SUMMARY, $summary.ToArray(), $utf8NoBom)
 
       # ------------------------------------------------------------------
-      # 2. 没有新提交 → 删除本次 run 记录并结束
+      # 2. 无新提交 → 下载上一次的产物，放到 preview_assets/ 备用
       # ------------------------------------------------------------------
-      # run 删除后，GitHub 会在本 job 结束后把记录从 Actions 列表移除。
-      # 删除失败（权限不足、API 临时不可用）不视为错误，只提示。
-      - name: 无新提交：删除本次运行记录
+      # 注意顺序：必须在「删除上一份旧 Artifact」之前下载，否则旧产物已被删。
+      # 下载产物（exe + zip）到 preview_assets/，后续由统一的「上传预览产物」上传。
+      # 任一步失败都不算致命：会走到下面的校验，若拿不到文件则报错中断。
+      - name: 无新提交：复用上一次产物
         if: ${{ env.SHOULD_BUILD == 'false' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: preview_assets
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ env.PREV_RUN_ID }}
+
+      - name: 无新提交：确认复用到的产物
+        if: ${{ env.SHOULD_BUILD == 'false' }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $out = Join-Path $env:GITHUB_WORKSPACE 'preview_assets'
+          $files = @(Get-ChildItem $out -File -ErrorAction SilentlyContinue)
+          if ($files.Count -eq 0) {
+            throw "未复用到任何产物（来源 run $env:PREV_RUN_ID），无法产出本次 Artifact。"
+          }
+          Write-Host "复用上一次产物（来源 run $env:PREV_RUN_ID）："
+          $files | ForEach-Object {
+            Write-Host ("  {0}（{1} MB）" -f $_.Name, [math]::Round($_.Length / 1MB, 1))
+          }
+
+          $summary = New-Object System.Collections.Generic.List[string]
+          $summary.Add('## 复用上一次产物')
+          $summary.Add('')
+          $summary.Add("- 来源 run：``$env:PREV_RUN_ID``")
+          $summary.Add("- 文件数：$($files.Count)")
+          foreach ($f in $files) {
+            $summary.Add(("- ``{0}``（{1} MB）" -f $f.Name, [math]::Round($f.Length / 1MB, 1)))
+          }
+          [System.IO.File]::AppendAllLines($env:GITHUB_STEP_SUMMARY, $summary.ToArray(), (New-Object System.Text.UTF8Encoding $false))
+
+      # ------------------------------------------------------------------
+      # 3. 清理「上一次未真正打包」的运行记录
+      # ------------------------------------------------------------------
+      # 目的：复用型 run（无提交、只是把旧产物搬过来）本身没有构建价值，留着会堆在
+      # Actions 列表里；这里在每次运行时顺手把上一次这类记录删掉。
+      # 为什么现在能删：它不是本次 run，已经 completed，DELETE 才会生效
+      #    （运行中的 run 删不掉自己）。
+      # 判据：该 run 的 job 里「Nuitka 独立打包」这一步的结论 —— 真打包过 = success；
+      #    被门控跳过 = skipped。用这一点区分「打包 run」和「复用 run」。
+      # 全程容错：任何失败都不中断、最多一行普通日志（不加 ::warning:: / ::error::）。
+      - name: 清理上次未打包的运行记录
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          WORKFLOW_FILE: preview.yml
+          SELF_RUN_ID: ${{ github.run_id }}
+          BUILD_STEP_NAME: Nuitka 独立打包
         run: |
           $ErrorActionPreference = 'Continue'
-          Write-Host "无新提交（$env:CHECK_REASON），删除本次运行记录：run $env:GITHUB_RUN_ID"
-          gh api --method DELETE "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
-          if ($LASTEXITCODE -ne 0) {
-            Write-Warning '删除运行记录失败（可忽略；不影响仓库内容）'
-          } else {
-            Write-Host '已请求删除本次运行记录。'
+
+          # 列最近 20 条 run，找 ①不是当前这次 ②成功完成 ③「Nuitka 独立打包」被跳过 的
+          $json = gh run list --workflow=$env:WORKFLOW_FILE --limit=20 `
+                    --json databaseId,conclusion,createdAt 2>$null
+          if ($LASTEXITCODE -ne 0 -or -not $json) { return }
+
+          $runs = @()
+          try { $runs = @($json | ConvertFrom-Json) } catch { return }
+
+          foreach ($r in $runs) {
+            $id = [string]$r.databaseId
+            if ($id -eq [string]$env:SELF_RUN_ID) { continue }      # 不碰当前这次
+            if ([string]$r.conclusion -ne 'success') { continue }    # 失败/取消的留着排查
+
+            $concl = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$id/jobs" `
+                       --jq ".jobs[].steps[] | select(.name==`"$env:BUILD_STEP_NAME`") | .conclusion" 2>$null
+            if ($LASTEXITCODE -ne 0) { continue }
+            $concl = ([string]$concl).Trim()
+            # 只删「跳过打包」的复用型 run；真打包过（success）的保留
+            if ($concl -ne 'skipped') { continue }
+
+            gh api --method DELETE "repos/$env:GITHUB_REPOSITORY/actions/runs/$id" 2>$null | Out-Null
+            if ($LASTEXITCODE -eq 0) { Write-Host "已清理上一次未打包的运行记录：run $id" }
           }
 
       # ------------------------------------------------------------------
-      # 3. 解析版本号（运行时间，UTC）
+      # 4. 解析版本号（运行时间，UTC）
       # ------------------------------------------------------------------
+      # 两种分支都要版本号（打包用；复用时也要用它给产出的 Artifact 一个可读的标识）
       - name: 解析版本号与产物名称
-        if: ${{ env.SHOULD_BUILD == 'true' }}
         run: |
           $ErrorActionPreference = 'Stop'
 
@@ -176,6 +262,9 @@ jobs:
 
           Write-Host "主程序 exe：$env:APP_EXE_NAME.exe"
 
+      # ------------------------------------------------------------------
+      # 5. Python 环境
+      # ------------------------------------------------------------------
       - name: 设置 Python ${{ env.PYTHON_VERSION }}
         if: ${{ env.SHOULD_BUILD == 'true' }}
         uses: actions/setup-python@v5
@@ -183,7 +272,7 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
 
       # ------------------------------------------------------------------
-      # 4. 依赖与缓存
+      # 6. 依赖与缓存
       # ------------------------------------------------------------------
       - name: 缓存 pip 下载
         if: ${{ env.SHOULD_BUILD == 'true' }}
@@ -241,7 +330,7 @@ jobs:
           & $venvPy -c "import sys, importlib.metadata as md; print('Python', sys.version.split()[0]); [print(n, md.version(n)) for n in ('nuitka','PySide6','skyfield','numpy')]"
 
       # ------------------------------------------------------------------
-      # 5. Nuitka 独立打包
+      # 7. Nuitka 独立打包
       # ------------------------------------------------------------------
       # 缓存 main.build：源码未变动的模块会跳过 C 编译与链接，显著加速下一次打包
       # 键里必须带上 exe 名：Nuitka 把 result_exe 写进 SCons 命令行（main.build/scons-debug.py），
@@ -289,7 +378,7 @@ jobs:
           Write-Host 'main.dist 文件数：' ([System.IO.Directory]::GetFiles("$env:GITHUB_WORKSPACE\main.dist", '*', 'AllDirectories').Count)
 
       # ------------------------------------------------------------------
-      # 6. Inno Setup 6 生成安装包（注入预览用 AppName / AppId / 时间戳版本号）
+      # 8. Inno Setup 6 生成安装包（注入预览用 AppName / AppId / 时间戳版本号）
       # ------------------------------------------------------------------
       - name: 生成安装包（Inno Setup 6）
         if: ${{ env.SHOULD_BUILD == 'true' }}
@@ -339,7 +428,7 @@ jobs:
           Write-Host "安装包：$setup（$size MB，版本 $actual）"
 
       # ------------------------------------------------------------------
-      # 7. 兼容版压缩包（免安装）
+      # 9. 兼容版压缩包（免安装）
       # ------------------------------------------------------------------
       - name: 生成兼容版压缩包
         if: ${{ env.SHOULD_BUILD == 'true' }}
@@ -365,9 +454,11 @@ jobs:
           Write-Host "兼容版压缩包：$dst（$size MB）"
 
       # ------------------------------------------------------------------
-      # 8. 上传 Artifact（先删除上一份，避免堆积）
+      # 10. 上传 Artifact（两种分支共用；先删除上一份，避免堆积）
       # ------------------------------------------------------------------
-      - name: 准备上传文件
+      # 仅「正常打包」分支需要准备文件：把 release/ 里的两个产物拷进 preview_assets/。
+      # 「复用」分支在上面的 download-artifact 步骤已经把文件放进 preview_assets/ 了。
+      - name: 准备上传文件（打包分支）
         if: ${{ env.SHOULD_BUILD == 'true' }}
         run: |
           $ErrorActionPreference = 'Stop'
@@ -383,13 +474,13 @@ jobs:
           }
 
       - name: 删除上一份预览产物
-        if: ${{ env.SHOULD_BUILD == 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Artifact 有存储额度，且这里每提交一次就产出一份（每份约 170 MB），
+          # Artifact 有存储额度，且这里每次运行就产出一份（每份约 170 MB），
           # 因此每次上传前把上一份同名 Artifact 全部删掉，始终只保留最新一份。
           # 删除失败（例如本来就没有、或权限不足）不中断构建，只提示。
+          # ⚠️ 本步骤在「复用」分支必须晚于下载：文件已下到 preview_assets/，删掉旧 Artifact 不影响。
           $ids = @()
           try {
             $json = gh api "repos/$env:GITHUB_REPOSITORY/actions/artifacts?name=$env:ARTIFACT_NAME&per_page=100"
@@ -411,7 +502,6 @@ jobs:
           }
 
       - name: 上传预览产物
-        if: ${{ env.SHOULD_BUILD == 'true' }}
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.ARTIFACT_NAME }}
@@ -419,24 +509,31 @@ jobs:
           if-no-files-found: error
 
       - name: 写入构建摘要
-        if: ${{ env.SHOULD_BUILD == 'true' }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $setup = Join-Path $env:GITHUB_WORKSPACE "release\$env:SETUP_BASE.exe"
-          $zip   = Join-Path $env:GITHUB_WORKSPACE "release\$env:ZIP_NAME"
+          $out = Join-Path $env:GITHUB_WORKSPACE 'preview_assets'
+          $files = @(Get-ChildItem $out -File -ErrorAction SilentlyContinue)
 
           $summary = New-Object System.Collections.Generic.List[string]
-          $summary.Add("## 预览版构建完成：$env:VERSION")
+          if ($env:SHOULD_BUILD -eq 'true') {
+            $summary.Add("## 预览版构建完成：$env:VERSION")
+          } else {
+            $summary.Add("## 预览版产物已刷新（复用上一次构建）")
+          }
           $summary.Add('')
           $summary.Add("- 触发方式：``$env:GITHUB_EVENT_NAME``")
           $summary.Add("- 提交检测：$env:CHECK_REASON")
+          if ($env:SHOULD_BUILD -eq 'false') {
+            $summary.Add("- 产物来源 run：``$env:PREV_RUN_ID``（沿用其产物，未重新打包）")
+          }
           $summary.Add("- 主程序 exe：``$env:APP_EXE_NAME.exe``")
           $summary.Add("- 安装包 AppName：``$env:APP_NAME``（AppId 与正式版不同，可共存）")
           $summary.Add('')
           $summary.Add('### 产物（Artifact：``' + $env:ARTIFACT_NAME + '``）')
           $summary.Add('')
-          $summary.Add(("- ``{0}``（{1} MB）" -f (Split-Path $setup -Leaf), [math]::Round((Get-Item $setup).Length / 1MB, 1)))
-          $summary.Add(("- ``{0}``（{1} MB）" -f (Split-Path $zip -Leaf), [math]::Round((Get-Item $zip).Length / 1MB, 1)))
+          foreach ($f in $files) {
+            $summary.Add(("- ``{0}``（{1} MB）" -f $f.Name, [math]::Round($f.Length / 1MB, 1)))
+          }
           $summary.Add('')
           $summary.Add('> 上一份预览 Artifact 已在上传前删除，Actions 页只保留本次产物。')
           [System.IO.File]::AppendAllLines($env:GITHUB_STEP_SUMMARY, $summary.ToArray(), (New-Object System.Text.UTF8Encoding $false))
