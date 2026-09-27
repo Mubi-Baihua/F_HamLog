@@ -117,12 +117,12 @@ for mode in (theme.MODE_DARK, theme.MODE_LIGHT):
     ok('%s: 链接色对比度≥4.5' % mode, c >= 4.5, '%.2f:1 %s' % (
         c, theme.link_color().name()))
 
-# ---- 平台调色板完整性校验：只有 AlternateBase 也是中性灰才原样采用 ----
-# 实测：Qt 的 Windows 平台调色板**深浅都坏**——windows11 深色 AlternateBase=#ffffff（纯白）、
-# 浅色 AlternateBase=#000000（纯黑）；Fusion 深色又给 #001a68（深蓝）。故要求
-# 「明暗正确 + 中性灰（RGB 极差 ≤24）」才认；否则用手工构造的兜底调色板。
+# ---- 平台调色板优先（6d48024 基线契约）----
+# 以跟随系统的观感为准：平台给的调色板只要明暗与目标一致就原样采用
+# （setColorScheme 已让平台给出对应明暗的调色板），不过问 AlternateBase 是否中性——
+# 这样「手动深色」与「系统深色」是同一套原生色。以下用例验证这一契约。
 
-# ① 平台深色但 AlternateBase 是纯白（不完整）→ 必须走自建兜底
+# ① 平台已是深色（Window 偏暗）→ 直接采用，保留平台色（不强行换兜底调色板）
 p = QPalette()
 p.setColor(QPalette.Window, QColor('#1e1e1e'))
 p.setColor(QPalette.WindowText, QColor('#ffffff'))
@@ -130,8 +130,8 @@ p.setColor(QPalette.Base, QColor('#2d2d2d'))
 p.setColor(QPalette.AlternateBase, QColor('#ffffff'))
 app.setPalette(p)
 src = theme._adopt_platform_palette(app, True)
-ok('平台深色但 AlternateBase 纯白 → 判不完整、用自建兜底',
-   src == 'fallback' and app.palette().color(QPalette.Window).name() == '#353535',
+ok('平台已深色 → 原样采用（保留平台色）',
+   src == 'platform' and app.palette().color(QPalette.Window).name() == '#1e1e1e',
    '%s %s' % (src, app.palette().color(QPalette.Window).name()))
 
 # ② 平台深色且 AlternateBase 为中性灰（完整）→ 原样采用

@@ -19,24 +19,23 @@
   文件读写仍优先 Glob/Grep/Read/Edit；命令输出写文件再 Read。项目 venv
   `D:\F-Dev\BIG\F_HamLog\.venv\Scripts\python.exe`（worktree 在 C 盘、venv 在 D 盘，用绝对路径）。
 
-## 主题系统（theme.py）——最终定稿
-- **应用保持系统原生样式（`windows11`）**（`_ensure_style()`，在 `apply()` 开头调）。
-  **用户明确否决 Fusion（「太丑了」），不要再退回**；windows11 的缺陷改由别处兜。
-- 输入控件（QLineEdit/QTextEdit/QSpinBox/QComboBox/QDateEdit…）在 windows11 下**硬绘白底、无视
-  `QPalette.Base`** → `apply_input_style()` 补**极薄 QSS**（只 background/color/border/selection，
-  `system` 模式返回 `''`），`apply()` 里挂 app。**这是必需项，不是保险**。
-- **深/浅一律自建调色板**：`_palette_is_complete()` 校验平台调色板（要求 `AlternateBase` 明暗正确
-  且中性色 RGB 极差 ≤24）——实测 windows11 深色给纯白、浅色给纯黑，深/浅**都不完整**；
-  不完整就用 `_DARK_ROLES/_LIGHT_ROLES`（深色 Window `#353535` / Base `#252525` / Alt `#3a3a3a`）。
-  只有 `system` 保持平台原样。
+## 主题系统（theme.py）——基线 = 6d48024（2026-09-27 回退）
+- **浅/深模式采用平台原生调色板**：`_adopt_platform_palette()` 在目标明暗与平台调色板一致时
+  直接采用平台给的调色板（`setColorScheme` 已让平台给出对应明暗），**不再自建兜底调色板**。
+  这样「手动深色」与「系统深色」是同一套原生色（Win11 深 `#1e1e1e`/浅 `#f3f3f3`）。
+- **回退记录**：`5e9fcbe 优化深色模式` 曾改成「深/浅一律用自建调色板 `#353535/#252525` + 全局
+  `app.setStyleSheet` 覆盖输入控件 + `_ensure_style` 强制原生样式」，被用户判定为
+  「与 6d48024 不同的问题」并**回退到 6d48024**。不要再走回自建调色板覆盖的路径。
+- **应用保持系统原生样式（`windows11`）**：用户明确否决 Fusion（「太丑了」）。
 - **界面颜色一律走 `theme.py` 取色，禁止写死**：`hint/warn/link_css()`、`hint/warn/link_color()`、
   `subtle_bg()`、`border_color()`、`is_dark()`；长期窗口 `theme.watch_theme(控件, 回调)`。
   坑：控件 QSS 的 `background-color` 会**反写进该控件调色板**，取色要用未被染色的父/兄弟控件。
 - **验证颜色必须看渲染像素**（`widget.grab().toImage().pixelColor(...)`），**不能只读 `palette()`**。
-- **诊断日志（opt-in）**：`file/theme_debug.log` 存在才写（touch 开启、删除关闭）。
 - **颜色模式**存 `m_xml.txt` 的 `theme_mode`：「设置」下拉**即改即生效并落盘**；与「自动保存/自动排序/
   星历自动更新/更新间隔」同行（`set.py` 固定 770×475）。
 - 坑：**`app.palette()` 的拷贝不能拿去 `setPalette`**（Qt 视为未变直接忽略），必须手工 `QPalette()` 补全构造。
+- 注：6d48024 基线平台调色板的 `AlternateBase` 在某些样式下非中性灰（windows11 深色给纯白），
+  仅影响交替行底色（tle_source_window 列表用了 `setAlternatingRowColors`）；主日志表格未用，无影响。
 
 ## 文件对话框——定稿：一律原生，别自绘
 - 调用处直接 **静态调用** `QFileDialog.getOpenFileName/getOpenFileNames/getSaveFileName(...)`（16 处）；
