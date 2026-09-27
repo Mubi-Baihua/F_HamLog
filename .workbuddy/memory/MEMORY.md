@@ -121,6 +121,7 @@
   **只有三个文件**：`main.yml`（手动发布，**唯一能发 Release 的工作流**）、
   `preview.yml`（定时预览打包 → Artifact）、`.github/inno/F HamLog 2.iss`。
   **没有 `releases.yml`**（曾试建，2026-09-27 用户否决并已删除，勿再引入）。
+  **没有 `preview-cleanup.yml`**（伴随工作流方案曾被否，用户改选「单文件+下次运行清理」，勿再引入）。
 - **`main.yml`**：**仅手动**（`workflow_dispatch`）触发，只填 `version`，一次跑完打包 → 安装包
   → 兼容版 zip → **回写运行分支** → 发 Releases（**默认草稿**，`draft` 输入默认 `'true'`）。
   命名自动推导。它是唯一能发 Release 的工作流。产物含远端日志服务端 exe。
@@ -132,19 +133,36 @@
 - **`preview.yml`**（**2026-09-27 定稿**）：
   - **触发 = `schedule: cron '0 20 * * *'`（UTC 20:00 = 北京 04:00）+ `workflow_dispatch`**。
     **没有 `push` 触发**。`concurrency: group: preview`，`cancel-in-progress: false`。
-  - `permissions: contents: read` + **`actions: write`**（删 run 记录 + 删旧 Artifact 都要）。
-  - 步骤顺序：① `checkout`（`fetch-depth: 0`）→ ② **提交检测**（唯一两个无条件步骤）→
-    ③ 无提交则**自删 run 记录**（`gh api --method DELETE .../actions/runs/$GITHUB_RUN_ID`）→
-    其余 15 个步骤**全部 `if: ${{ env.SHOULD_BUILD == 'true' }}` 门控**。
-  - **提交检测只看 `develop`**：取本工作流**上一条历史 run 的 `createdAt`** 作起点
+  - `permissions: contents: read` + **`actions: write`**（删旧 Artifact/删旧 run）；
+    跨 run 下载 Artifact 还需 `actions: read`（`GITHUB_TOKEN` 默认具备）。
+  - **提交检测只看 `develop`**：起点 = 本工作流上一条历史 run 的 `createdAt`
     （`gh run list --workflow=preview.yml --limit=1 --json createdAt`），
-    再 `git rev-list --count --since="<createdAt>" origin/develop`；>0 才打包。
-    **逻辑自洽点**：无提交的 run 会被自删，所以 Actions 里能查到的历史 run 都是真跑过打包的，
-    最近一条的 `createdAt` 即「上次执行」起点。首次查不到历史 → 视为有新提交，正常打包。
-  - **产物**：仍是 **exe + zip 两个单文件**（Nuitka + Inno 照跑，不是「不编译」），
-    版本号 = 运行时间 `UTC-yyyyMMdd-HHmm`，主程序 exe 与 AppName 均为 `F HamLog 2 Preview`
-    （独立 AppId `{2AF71D4C-...}`，可与正式版共存），两个产物上传 Artifact
-    并在上传前**删除上一份同名 Artifact**；**不建 Release、不回写分支**。
+    再 `git rev-list --count --since="<createdAt>" origin/develop`。
+    首次查不到历史 → 视为有新提交，正常打包。
+  - **两条分支（核心）**：
+    - `SHOULD_BUILD=true`（有新提交）→ 正常打包 Nuitka + Inno + zip。
+    - `SHOULD_BUILD=false`（无新提交）→ **下载上一次的产物当本次产物**：
+      `gh api .../actions/artifacts?name=<ARTIFACT_NAME>&per_page=1` 取
+      `.artifacts[0].workflow_run.id` → `GITHUB_ENV.PREV_RUN_ID`
+      → `actions/download-artifact@v4`（**必须带 `github-token` + `run-id`**）到 `preview_assets/`。
+      **查不到可复用产物 → 回退为正常打包**。
+    - → **每次运行都会有 Artifact**，不再有「空跑」概念。
+  - **⚠️ 顺序铁律**：复用分支必须 **先下载 → 再删旧 Artifact → 最后上传**。
+  - **门控**：`解析版本号` / `删除上一份预览产物` / `上传预览产物` / `写入构建摘要` **无门控**
+    （两分支都跑）；`准备上传文件` **仅打包分支**（复用分支的文件已由 download 放好，勿清除）。
+  - **清理（无门控，每次跑）**：①按 `name` 删同名旧 Artifact（只留最新一份）；
+    ②**删「上次未真正打包」的 run 记录**——判据 =
+    `gh api .../runs/{id}/jobs --jq '.jobs[].steps[]|select(.name=="Nuitka 独立打包")|.conclusion'`
+    为 `skipped`（复用型 run）；`success` 的保留。全程 `continue-on-error` 静默容错。
+  - **删 run 的硬限制**：DELETE 只对 **completed** 的 run 生效，**运行中的 run 删不掉自己**
+    → 所有「删记录」都只能删**历史** run（`SELF_RUN_ID` 必须排除当前这次）。
+  - 版本号 = 运行时间 `UTC-yyyyMMdd-HHmm`，主程序 exe 与 AppName 均为 `F HamLog 2 Preview`
+    （独立 AppId `{2AF71D4C-...}`，可与正式版共存）；**不建 Release、不回写分支**。
+- **`workflow_dispatch`（手动按钮）与 `schedule`（定时）只认默认分支上的工作流定义**。
+  默认分支 = `main`。故 `preview.yml` 必须存在于 `main` 才会出现 "Run workflow" 按钮、
+  定时才会生效（曾因只在 `develop` 而「无法手动运行」）。
+- 本机 **无 `gh` CLI、无 GitHub token**（凭据由 `git-credential-manager` 托管）→
+  查 run 状态 / 删 run 只能在 Actions 页面或 CI 内用 `GITHUB_TOKEN` 做。
 - **Release 说明留空、由作者手填**：`gh release create <tag>` **不传** `--title/--notes/--generate-notes`；
   已存在只 `gh release upload --clobber`，**不 edit**（幂等可重跑）。
 - **安装位置**：`.iss` 用 `DefaultDirName={autopf}\{#MyAppName}` + **显式 `PrivilegesRequired=admin`**
