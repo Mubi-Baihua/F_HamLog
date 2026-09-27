@@ -211,7 +211,7 @@ def main(window=None, on_save=None):
     # 自绘：左边地址、右边延迟（延迟不进 item.text()）
     src_list.setItemDelegate(SourceItemDelegate(src_list))
     src_list.setToolTip(
-        '方框＝是否启用；双击某一项即可编辑地址（需以 http:// 或 https:// 开头）。\n'
+        '双击某一项即可编辑地址（需以 http:// 或 https:// 开头）。\n'
         '行尾显示的是自动测得的响应延迟。')
     # 选中行不整行填充蓝色：用主题链接色文字 + 透明背景表示选中（保留斑马纹底色）
     src_list.setStyleSheet(_list_qss())
@@ -239,7 +239,7 @@ def main(window=None, on_save=None):
     reset_btn = QPushButton('恢复默认', central)
     save_btn = QPushButton('保存', central)
     close_btn = QPushButton('关闭', central)
-    add_btn.setToolTip('添加一个 TLE 下载地址（可为 Celestrak 之外的镜像）')
+    add_btn.setToolTip('插入一个空行并进入编辑：可直接输入 TLE 下载地址（可为 Celestrak 之外的镜像）')
     del_btn.setToolTip('删除选中项（至少保留一个数据源）')
     up_btn.setToolTip('上移：提高优先级')
     down_btn.setToolTip('下移：降低优先级')
@@ -527,26 +527,18 @@ def main(window=None, on_save=None):
         _beep()
 
     def add_source():
-        url, ok = QInputDialog.getText(
-            win, '添加星历数据源',
-            'TLE 数据下载地址：')
-        if not ok:
-            return
-        url = (url or '').strip()
-        if not url:
-            return
-        if not sp.is_valid_tle_source(url):
-            QMessageBox.warning(win, '添加星历数据源',
-                                '地址需以 http:// 或 https:// 开头。')
-            return
-        if url in [u for u, _ in _entries()]:
-            QMessageBox.information(win, '添加星历数据源', '该地址已在列表中。')
-            return
-        item = _make_item(url, True)
+        # 不弹输入对话框：直接插入一个空行，并进入内联编辑态，用户可立即输入地址；
+        # 校验（http(s) 开头 / 去重 / 非空）沿用双击编辑的 on_item_changed 逻辑。
+        # 若已有一行空行在等待填写，则聚焦并编辑它，避免重复创建。
+        for i in range(src_list.count()):
+            if not src_list.item(i).text().strip():
+                src_list.setCurrentRow(i)
+                src_list.editItem(src_list.item(i))
+                return
+        item = _make_item('', True)
         src_list.addItem(item)
         src_list.setCurrentRow(src_list.count() - 1)
-        _mark_unsaved('已添加')
-        _probe([item])              # 新加的源马上自动测一次延迟
+        src_list.editItem(item)      # 打开内联编辑器，直接填写地址（无需对话框）
 
     def del_source():
         row = _row()

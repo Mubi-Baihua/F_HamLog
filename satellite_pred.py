@@ -23,6 +23,7 @@ satellite_pred.py —— 业余卫星过境预测核心模块
 LOS 时刻 − AOS 时刻（秒级精度），不再依赖粗扫描步长近似。
 """
 
+import csv
 import os
 import subprocess
 import re
@@ -630,7 +631,15 @@ CELESTRAK_ACTIVE_URL = CELESTRAK_ALL_URL
 # 若多个来源里出现同一颗卫星（按 NORAD 编号判定），以靠前的来源为准。
 # 默认只用内置的 Celestrak（全量活动卫星），用户可在「星历数据源」窗口里
 # 添加自定义地址并调整顺序。
-DEFAULT_TLE_SOURCES = (CELESTRAK_ACTIVE_URL,)
+# 内置默认数据源（有序，越靠前优先级越高；多个源出现同一颗卫星时以靠前的为准）。
+# celestrak 的 FORMAT=csv（OMM 风格）由 iter_tle_records 重建为 TLE 两行，照常可用。
+DEFAULT_TLE_SOURCES = (
+    "https://live.ariss.org/iss.txt",
+    "https://r4uab.ru/satonline.txt",
+    "https://amsat.org/tle/current/nasabare.txt",
+    "https://celestrak.org/NORAD/elements/gp.php?GROUP=active&FORMAT=csv",
+    "https://db.satnogs.org/api/tle/?format=3le",
+)
 
 # 数据源保存在**独立文件** file/tle_sources.txt 中（每行一个地址），
 # 不再写进设置文件 m_xml.txt；窗口见 tle_source_window.py。
@@ -1059,14 +1068,212 @@ def fetch_amateur_tle(cache_path=TLE_CACHE, force=False, timeout=20,
     return data
 
 
+# ---------------------------------------------------------------------------
+#  OMM/Celestrak CSV → 重建 TLE 两行
+# ---------------------------------------------------------------------------
+
+def _tle_checksum(line68):
+    """TLE 校验和（第 69 列）：数字求和、'-' 记 1、其余记 0，对 10 取模。"""
+    total = 0
+    for ch in line68:
+        if '0' <= ch <= '9':
+            total += ord(ch) - 48
+        elif ch == '-':
+            total += 1
+    return str(total % 10)
+
+
+def _tle_exp_field(value):
+    """数值 → 行 1 的 8 字符指数场 ±NNNNN±N（表示 0.NNNNN×10^±N）。
+
+    用于 BSTAR / 平均运动二阶导场；0 写作 `` 00000+0``（与 Celestrak 一致）。
+    """
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        v = 0.0
+    if v == 0:
+        return ' 00000+0'
+    sign = '-' if v < 0 else ' '
+    v = abs(v)
+    exp = 0
+    while v >= 1.0:
+        v /= 10.0
+        exp += 1
+    while v < 0.1:
+        v *= 10.0
+        exp -= 1
+    digits = int(round(v * 1e5))        # v ∈ [0.1, 1) → 5 位尾数
+    if digits >= 100000:                # 0.99999… 四舍五入进位
+        digits = 10000
+        exp += 1
+    return '%s%05d%s%d' % (sign, digits, '+' if exp >= 0 else '-', abs(exp))
+
+
+def _tle_ndot_field(value):
+    """平均运动一阶导 → 行 1 的 10 字符场 ±.NNNNNNNN（正号用空格）。"""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        v = 0.0
+    if v == 0:
+        v = 0.0                         # 归一 -0.0，避免输出 '-.00000000'
+    return ('% .8f' % v).replace('0.', '.', 1)
+
+
+def _tle_epoch_field(epoch_text):
+    """CSV 的 EPOCH（ISO 8601，可带 Z 后缀）→ 行 1 历元场 YYDDD.DDDDDDDD。"""
+    dt = datetime.fromisoformat(str(epoch_text).strip())
+    frac = (dt.hour * 3600 + dt.minute * 60 + dt.second
+            + dt.microsecond / 1e6) / 86400.0
+    frac8 = int(round(frac * 1e8))
+    if frac8 >= 100000000:              # 一天进位（理论上到不了），钳住
+        frac8 = 99999999
+    return '%02d%03d.%08d' % (dt.year % 100, dt.timetuple().tm_yday, frac8)
+
+
+def _csv_tle_colmap(header_line):
+    """识别「星历 CSV」表头（Celestrak OMM 风格），返回 {列名大写: 下标}。
+
+    必须同时具备 NORAD_CAT_ID / EPOCH / MEAN_MOTION / ECCENTRICITY /
+    INCLINATION 五列才认定是星历 CSV（避免把碰巧含逗号的 TLE 名称行
+    误判成表头）；否则返回 None，交回普通 TLE 解析。
+    """
+    s = (header_line or '').lstrip('\ufeff').strip()
+    if not s or ',' not in s:
+        return None
+    try:
+        cols = [c.strip().upper() for c in next(csv.reader([s]))]
+    except (StopIteration, csv.Error):
+        return None
+    for required in ('NORAD_CAT_ID', 'EPOCH', 'MEAN_MOTION',
+                     'ECCENTRICITY', 'INCLINATION'):
+        if required not in cols:
+            return None
+    return {c: i for i, c in enumerate(cols)}
+
+
+def _csv_cell(row, idx, default=''):
+    """取 CSV 行的第 idx 列并去首尾空白；越界/缺列给 default。"""
+    if idx is None or not (0 <= idx < len(row)):
+        return default
+    return (row[idx] or '').strip()
+
+
+def _csv_num(row, idx, default=0.0):
+    """取 CSV 行第 idx 列的浮点值；空/非法给 default。"""
+    s = _csv_cell(row, idx)
+    if not s:
+        return default
+    try:
+        return float(s)
+    except ValueError:
+        return default
+
+
+def _iter_csv_tle_records(lines, colmap):
+    """把 OMM/星历 CSV 的数据行**重建**为 TLE 两行并逐条产出。
+
+    Celestrak 的 FORMAT=csv 返回的是分散的轨道根数（没有现成的 TLE 行）。
+    实测其 CSV 各列就是 TLE 场的完整精度展开（一阶导/二阶导/BSTAR 与
+    TLE 场同值同义，并非再除 2/除 6 的「物理量」），因此逐场照抄格式化
+    即可高保真拼回 line1/line2（含校验和）：
+
+      - EPOCH（ISO 8601）→ YYDDD.DDDDDDDD；
+      - BSTAR / 一阶导 → 5 位尾数指数场 / ±.NNNNNNNN 场；
+      - 偏心率 → 8 位小数展开后截前 7 位（与官方 TLE 一致）；
+      - 倾角/升交点/幅角/平近点角 4 位小数、平均运动 8 位小数，直抄。
+    个别行字段不合法时跳过该行，不影响其它行。
+    """
+    i_name = colmap.get('OBJECT_NAME')
+    i_id = colmap.get('OBJECT_ID')
+    i_epoch = colmap['EPOCH']
+    i_mm = colmap['MEAN_MOTION']
+    i_ecc = colmap['ECCENTRICITY']
+    i_inc = colmap['INCLINATION']
+    i_raan = colmap.get('RA_OF_ASC_NODE')
+    i_argp = colmap.get('ARG_OF_PERICENTER')
+    i_ma = colmap.get('MEAN_ANOMALY')
+    i_norad = colmap['NORAD_CAT_ID']
+    i_elset = colmap.get('ELEMENT_SET_NO')
+    i_rev = colmap.get('REV_AT_EPOCH')
+    i_bstar = colmap.get('BSTAR')
+    i_ndot = colmap.get('MEAN_MOTION_DOT')
+    i_nddot = colmap.get('MEAN_MOTION_DDOT')
+    i_eph = colmap.get('EPHEMERIS_TYPE')
+    i_cls = colmap.get('CLASSIFICATION_TYPE')
+    need = max(i_epoch, i_mm, i_ecc, i_inc, i_norad)
+
+    reader = csv.reader(lines)
+    while True:
+        try:
+            row = next(reader)
+        except StopIteration:
+            break
+        except csv.Error:
+            continue                    # 单行畸形：跳过继续
+        if not row or len(row) <= need:
+            continue
+        # 卫星编号（TLE 场 5 位、补前导 0）
+        try:
+            satnum = '%05d' % int(float(_csv_cell(row, i_norad) or ''))
+        except (TypeError, ValueError):
+            continue
+        if int(satnum) <= 0:
+            continue
+        # 历元（ISO 8601 → YYDDD.DDDDDDDD）
+        try:
+            epoch = _tle_epoch_field(_csv_cell(row, i_epoch))
+        except ValueError:
+            continue
+
+        ecc = max(0.0, min(_csv_num(row, i_ecc), 0.9999999))
+        ecc7 = ('%.8f' % ecc).replace('0.', '', 1)[:7]
+        line2 = ('2 %s %8.4f %8.4f %s %8.4f %8.4f %11.8f%s'
+                 % (satnum,
+                    _csv_num(row, i_inc), _csv_num(row, i_raan),
+                    ecc7,
+                    _csv_num(row, i_argp), _csv_num(row, i_ma),
+                    _csv_num(row, i_mm), '%5s' % _csv_cell(row, i_rev)))
+        line2 += _tle_checksum(line2)
+
+        # 国际代号：OBJECT_ID「YYYY-NNNPP」→ TLE 场「YYNNNPP  」（右对齐 8 位）
+        raw_id = _csv_cell(row, i_id)
+        if '-' in raw_id:
+            head, _, tail = raw_id.partition('-')
+            intl = (head[2:] + tail) if (len(head) == 4 and head.isdigit()) \
+                else raw_id
+        else:
+            intl = raw_id
+        intl = intl.ljust(8)[:8]
+        line1 = ('1 ' + satnum + (_csv_cell(row, i_cls, 'U') or 'U')[:1]
+                 + ' ' + intl + ' ' + epoch + ' '
+                 + _tle_ndot_field(_csv_num(row, i_ndot)) + ' '
+                 + _tle_exp_field(_csv_num(row, i_nddot)) + ' '
+                 + _tle_exp_field(_csv_num(row, i_bstar)) + ' '
+                 + (_csv_cell(row, i_eph, '0') or '0')[:1]
+                 + ' ' + '%4s' % _csv_cell(row, i_elset))
+        line1 += _tle_checksum(line1)
+
+        name = _csv_cell(row, i_name) or _csv_cell(row, i_id) or satnum
+        yield norad_key(satnum) or ('name:' + name), name, line1, line2
+
+
 def iter_tle_records(text):
     """逐条产出 TLE 记录：(norad 编号, 名称, line1, line2)。
 
-    兼容两种排版：①「名称行 + line1 + line2」（3LE）；② 只有 line1 + line2
-    （2LE，此时用编号当名称）。无法识别的行直接跳过。
+    兼容三种排版：①「名称行 + line1 + line2」（3LE）；② 只有 line1 + line2
+    （2LE，此时用编号当名称）；③ Celestrak OMM 风格 CSV（首行为表头，数据行
+    的轨道根数会**重建**成 TLE 两行，见 _iter_csv_tle_records）。
+    无法识别的行直接跳过。
     编号已按 norad_key 规整（去掉前导 0），不同数据源的补位差异不会造成重复。
     """
     lines = [ln.strip('\r') for ln in (text or '').splitlines() if ln.strip()]
+    if lines:
+        colmap = _csv_tle_colmap(lines[0])
+        if colmap is not None:
+            yield from _iter_csv_tle_records(lines[1:], colmap)
+            return
     n = len(lines)
     i = 0
     while i < n:

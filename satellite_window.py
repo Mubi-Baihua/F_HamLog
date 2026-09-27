@@ -874,9 +874,9 @@ def main(parent_window, quick_log_callback=None, title='卫星过境'):
         '卫星编号(NORAD ID)写入文件；下次打开按当前星历显示回卫星名。')
     import_tle_btn = QPushButton('导入星历数据')
     import_tle_btn.setToolTip(
-        '从 txt 或 tle 文件导入卫星星历数据（TLE 格式）。\n'
-        '只按卫星编号增量更新：同编号替换为新数据、新编号追加，'
-        '文件中没有的卫星保持原样；导入不会自动勾选卫星。')
+        '从 tle / txt / csv 文件导入卫星星历数据（TLE 或 Celestrak OMM CSV 格式，\n'
+        'CSV 会自动重建为两行根数）。只按卫星编号增量更新：同编号替换为新数据、\n'
+        '新编号追加，文件中没有的卫星保持原样；导入不会自动勾选卫星。')
     # 双站通联预测：从本窗口直接打开，无需再回到主页或菜单
     mutual_btn = QPushButton('通联预测')
     mutual_btn.setToolTip('打开双站通联预测：输入对方台站位置与各自最低仰角，预测两地可通过哪些卫星互相通联')
@@ -1350,15 +1350,17 @@ def main(parent_window, quick_log_callback=None, title='卫星过境'):
 
     def import_tle():
         nonlocal sats
-        """从用户选择的 txt 或 tle 文件导入卫星星历数据。
+        """从用户选择的 tle / txt / csv 文件导入卫星星历数据。
 
-        导入只做「按卫星编号增量更新」：同一编号用文件里的新数据替换、新编号追加，
-        文件中没有的编号保持原样（不删除）；**不自动勾选自选卫星**。
-        导入结果写回星历缓存，重启后仍然可用。
+        支持 TLE 文本与 Celestrak OMM 风格 CSV（解析统一走 sp.parse_tle_text，
+        CSV 自动重建为两行根数）。导入只做「按卫星编号增量更新」：同一编号用
+        文件里的新数据替换、新编号追加，文件中没有的编号保持原样（不删除）；
+        **不自动勾选自选卫星**。导入结果写回星历缓存，重启后仍然可用。
         """
         path, _ = QFileDialog.getOpenFileName(
             win, '导入卫星星历数据', desktop_dir(),
-            '星历文件 (*.tle *.txt);;TLE 文件 (*.tle);;文本文件 (*.txt)')
+            '星历文件 (*.tle *.txt *.csv);;TLE 文件 (*.tle);;'
+            'CSV 文件 (*.csv);;文本文件 (*.txt)')
         if not path:
             return
         try:
