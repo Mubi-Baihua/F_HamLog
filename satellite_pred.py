@@ -10,7 +10,8 @@ satellite_pred.py —— 业余卫星过境预测核心模块
      仰角/方位求解）都由 skyfield 完成，本模块不再手写任何坐标变换，
      从而保证过境时长、升起/落下时刻与权威结果一致；
   3. 预测未来一段时间内的可见过境（AOS / LOS / 最大仰角 / 方位 / 时长）；
-    4. 从 Celestrak 下载全部活动卫星 TLE 并本地缓存。
+    4. 从「星历数据源」（file/tle_sources.txt 里配置的地址，默认 Celestrak
+       全部活动卫星）下载全部卫星 TLE 并本地缓存。
 
 依赖：第三方库 skyfield + numpy（pip install skyfield numpy）。
   时标使用 skyfield 内置数据（builtin=True），无需联网即可运行；
@@ -26,7 +27,9 @@ import os
 import subprocess
 import re
 import sys
+import time
 import unicodedata
+import urllib.error
 import urllib.request
 from datetime import datetime, timezone, timedelta
 
@@ -629,7 +632,7 @@ CELESTRAK_ACTIVE_URL = CELESTRAK_ALL_URL
 # 添加自定义地址并调整顺序。
 DEFAULT_TLE_SOURCES = (CELESTRAK_ACTIVE_URL,)
 
-# 数据源保存在**独立文件** file/tle_sources.txt 中（每行一个地址，# 开头为注释），
+# 数据源保存在**独立文件** file/tle_sources.txt 中（每行一个地址），
 # 不再写进设置文件 m_xml.txt；窗口见 tle_source_window.py。
 TLE_SOURCES_PATH = app_path('file/tle_sources.txt')
 # 数据源文件不存在时，兼容读取一次早期版本写在 m_xml.txt 里的旧键。
@@ -644,11 +647,58 @@ TLE_SOURCES_HEADER = (
     '# F HamLog 星历(TLE) 数据源列表',
     '# 每行一个地址，下载时按列表顺序依次读取；',
     '# 同一颗卫星（按 NORAD 编号）以靠前的数据源为准，本文件可在',
-    '# 「设置 → 星历数据源」窗口中增删与排序，也可直接编辑。',
-    '# 以 # 开头的行是注释，不会被当成数据源。',
+    '# 「设置 → 星历数据源」窗口中启用/禁用、增删与排序，也可直接编辑。',
+    '# 在某个地址前加一个 # 即为「禁用」（不参与下载，例如 # https://x/a.txt）；',
+    '# 其余以 # 开头的行仍按注释处理。',
     '# 内置默认（Celestrak 全部活动卫星）：%s' % CELESTRAK_ACTIVE_URL,
     '',
 )
+
+# 单次「测延迟」的默认超时（秒）。打开数据源设置页时会自动逐个探测。
+TLE_PROBE_TIMEOUT = 5.0
+
+
+def _parse_source_line(line):
+    """把数据源文件里的一行解析为 (url, enabled)；不是数据源时返回 None。
+
+    - ``https://a/x.txt``            → (.., True)   启用
+    - ``https://a/x.txt # 备注``     → (.., True)   启用（行内备注忽略）
+    - ``# https://a/x.txt``          → (.., False)  禁用（地址前加 # 即禁用）
+    - 其它以 # 开头的行 / 空行       → None         注释，忽略
+    """
+    text = (line or '').strip()
+    if not text:
+        return None
+    disabled = False
+    if text.startswith('#'):
+        disabled = True
+        # 只吃掉一个 '#'：'## ...' 仍是普通注释，不会被误认成禁用项
+        text = text[1:].strip()
+        if not text:
+            return None
+    head = text.split('#', 1)[0].strip()      # 去掉行内备注
+    if head and is_valid_tle_source(head):
+        return head, not disabled
+    return None
+
+
+def parse_tle_source_entries(text):
+    """解析数据源文件内容，返回按顺序去重的 ``[(url, enabled)]``。
+
+    同一地址只保留首次出现的启用状态（先到先得），与下载时的优先级语义一致。
+    """
+    entries = []
+    seen = set()
+    for line in (text or '').splitlines():
+        parsed = _parse_source_line(line)
+        if parsed is None:
+            continue
+        url, enabled = parsed
+        if url in seen:
+            continue
+        seen.add(url)
+        entries.append((url, enabled))
+    return entries
 
 
 def normalize_tle_sources(raw):
@@ -691,27 +741,24 @@ def is_valid_tle_source(url):
 
 
 def parse_tle_sources_text(text):
-    """解析数据源文件内容：每行一个地址，忽略空行与 # 注释行，按原顺序去重。"""
-    urls = []
-    for line in (text or '').splitlines():
-        line = line.strip()
-        if not line or line.startswith('#'):
-            continue
-        if line not in urls:
-            urls.append(line)
-    return urls
+    """解析数据源文件内容，返回**启用**的地址列表（按原顺序去重）。
+
+    禁用项（地址前加了 #）与注释行都不会返回——下载时只走启用的源。
+    需要「启用状态」本身时用 parse_tle_source_entries。
+    """
+    return [url for url, enabled in parse_tle_source_entries(text) if enabled]
 
 
-def load_tle_source_file(path=None):
-    """读独立数据源文件，返回地址列表。
+def load_tle_source_entries(path=None):
+    """读独立数据源文件，返回 ``[(url, enabled)]``。
 
-    文件不存在/不可读时返回 None（与「文件存在但内容为空」区分开），
-    便于 load_tle_sources 决定是否回退到旧设置键。
+    文件不存在/不可读时返回 None（与「文件存在但没有数据行」区分开，
+    后者返回空列表），便于 load_tle_sources 决定是否回退到旧设置键。
     """
     path = path or TLE_SOURCES_PATH
     try:
         with open(path, 'r', encoding='utf-8') as f:
-            return parse_tle_sources_text(f.read())
+            return parse_tle_source_entries(f.read())
     except Exception:
         return None
 
@@ -739,32 +786,61 @@ def drop_legacy_tle_sources():
     return True
 
 
-def save_tle_sources(urls, path=None):
-    """把数据源列表写入独立文件（每行一个地址），返回实际写入的列表。
+def save_tle_source_entries(entries, path=None):
+    """把 ``[(url, enabled)]`` 写入独立文件，返回实际写入的列表。
 
-    内容先经 normalize_tle_sources 规整（去空行/去重/至少保留一个默认源），
-    因此写出的一定是可用配置。保存后顺带清理设置文件里的旧键。
+    规整规则：去空、按原顺序去重（先到先得）、只看地址不看启用状态；
+    禁用项写成 ``# 地址``（照旧可手工编辑）。**文件里始终至少有一个启用的源**：
+    一条地址都没有时回落到内置默认，全部被禁用时把第一条重新启用。
+    保存后顺带清理设置文件里的旧键。
     """
     path = path or TLE_SOURCES_PATH
-    items = normalize_tle_sources(urls)
-    text = '\n'.join(list(TLE_SOURCES_HEADER) + items) + '\n'
+    cleaned = []
+    seen = set()
+    for item in (entries or []):
+        if isinstance(item, (tuple, list)) and len(item) == 2:
+            url, enabled = item
+        else:
+            url, enabled = item, True
+        url = str(url or '').strip()
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        cleaned.append((url, bool(enabled)))
+    if not cleaned:
+        cleaned = [(u, True) for u in DEFAULT_TLE_SOURCES]
+    if not any(enabled for _, enabled in cleaned):
+        cleaned[0] = (cleaned[0][0], True)
+    lines = [('%s %s' % ('#', url)) if not enabled else url
+             for url, enabled in cleaned]
+    text = '\n'.join(list(TLE_SOURCES_HEADER) + lines) + '\n'
     os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
     with open(path, 'w', encoding='utf-8', newline='\n') as f:
         f.write(text)
     drop_legacy_tle_sources()
-    return items
+    return cleaned
+
+
+def save_tle_sources(urls, path=None):
+    """兼容旧调用：把一批地址**全部按启用**写入，返回启用的地址列表。"""
+    if isinstance(urls, str):
+        urls = [urls]
+    entries = save_tle_source_entries([(u, True) for u in (urls or [])], path)
+    return [url for url, enabled in entries if enabled]
 
 
 def load_tle_sources():
-    """读取星历数据源列表（按优先级排序）。
+    """读取**启用**的星历数据源列表（按优先级排序）。
 
     依次尝试：① 独立文件 file/tle_sources.txt；② 早期版本写在设置文件
     m_xml.txt 里的旧键 sat_tle_sources（兼容读取，保存时会被清理）；③ 内置默认。
-    每次调用都重新读取，便于用户改完立即生效。
+    独立文件里被禁用的项（地址前加 #）不会返回；文件里列了地址但**全部被禁用**
+    时返回空列表——调用方据此提示「所有数据源都已禁用」，而不是悄悄把内置默认
+    源又打开。每次调用都重新读取，便于用户改完立即生效。
     """
-    from_file = load_tle_source_file()
-    if from_file:
-        return normalize_tle_sources(from_file)
+    entries = load_tle_source_entries()
+    if entries:
+        return [url for url, enabled in entries if enabled]
     try:
         with open(SETTINGS_PATH, 'r', encoding='utf-8') as f:
             settings = eval(f.read())
@@ -774,17 +850,6 @@ def load_tle_sources():
         return list(DEFAULT_TLE_SOURCES)
     return normalize_tle_sources(settings.get(LEGACY_TLE_SOURCES_KEY))
 
-
-# active 接口不可用时，按 Celestrak 分类组分别获取。各组之间可能有重复，
-# merge_tle_texts() 会按 NORAD 编号去重后合并。
-CELESTRAK_FALLBACK_GROUPS = (
-    'stations', 'visual', 'weather', 'noaa', 'goes', 'resource', 'sarsat',
-    'dmc', 'tdrss', 'argos', 'geo', 'gpz', 'gps-ops', 'glo-ops',
-    'galileo', 'beidou', 'sbas', 'iridium', 'iridium-NEXT', 'starlink',
-    'oneweb', 'globalstar', 'intelsat', 'ses', 'asia-pacific', 'orbcomm',
-    'swarms', 'amateur', 'cubesat', 'education', 'engineering', 'geodetic',
-    'military', 'radar', 'other',
-)
 
 # 本地 TLE 缓存路径（虽然文件名沿用历史名称，但内容包含全部卫星）。
 TLE_CACHE = app_path('file/amateur.tle')
@@ -847,52 +912,45 @@ def _download_url(url, timeout, pct_cb, cancel):
         return b''.join(chunks).decode('utf-8', errors='replace')
 
 
-def _fetch_celestrak_source(timeout, cancel, report, slot_pct):
-    """读取内置 Celestrak 源：先取 active 全量，失败则按分类组抓取并合并。
+def _probe_error_text(err):
+    """把探测异常压成一句简短说明（显示在数据源列表右侧）。"""
+    if isinstance(err, urllib.error.HTTPError):
+        return 'HTTP %s' % err.code
+    reason = getattr(err, 'reason', None)
+    if isinstance(err, TimeoutError) or isinstance(reason, TimeoutError):
+        return '超时'
+    text = str(reason or err).strip()
+    if not text:
+        return '连接失败'
+    return (text[:38] + '…') if len(text) > 39 else text
 
-    这是唯一带「分类组回退」的数据源；用户自定义源一律只下载那一个文件。
+
+def probe_tle_source(url, timeout=TLE_PROBE_TIMEOUT):
+    """测一个数据源的响应延迟，返回 ``(ok, ms, err)``。
+
+    只把响应体的开头一小块读出来就断开：选源时关心的是「连得上、多久出首包」，
+    没必要把整个星历文件拉下来（几万行）。任何异常都收敛成
+    ``(False, ms, 简短说明)``，**不向外抛**，方便界面后台线程直接调用。
+
+    打开「星历数据源」窗口时会自动逐个调用它，用户也可以在窗口里改完地址后
+    自动重测——没有「手动测试」这一步。
     """
+    text = (url or '').strip()
+    if not is_valid_tle_source(text):
+        return False, 0, '地址格式不正确'
+    start = time.perf_counter()
     try:
-        report('正在下载 Celestrak 活动卫星数据…')
-        return _download_url(CELESTRAK_ACTIVE_URL, timeout, slot_pct, cancel)
-    except TleFetchCanceled:
-        raise  # 用户取消：直接冒泡，不走回退逻辑（避免误报“下载失败”）
-    except Exception as active_error:
-        texts = []
-        failed_groups = []
-        total_groups = len(CELESTRAK_FALLBACK_GROUPS)
-        report('Celestrak 活动卫星接口返回错误，改按分类下载（0/%d）…' % total_groups)
-
-        def group_slot(pct, _i):
-            # 把单分类文件的字节进度映射为「该源槽位内的进度」：
-            # (已完成分类数 + 本文件进度) / 总分类数。无 Content-Length 时
-            # 退化为该分类槽位的起点，保持进度条始终处于确定模式。
-            f = pct / 100.0 if pct >= 0 else 0.0
-            slot_pct(int((_i + f) / total_groups * 100))
-
-        for index, group in enumerate(CELESTRAK_FALLBACK_GROUPS, 1):
-            url = ('https://celestrak.org/NORAD/elements/gp.php?GROUP=%s'
-                   '&FORMAT=tle' % group)
-            try:
-                text = _download_url(
-                    url, timeout,
-                    lambda p, _i=index - 1: group_slot(p, _i), cancel)
-                if text.strip():
-                    texts.append(text)
-            except TleFetchCanceled:
-                raise  # 用户取消：直接冒泡，不计入失败分类
-            except Exception:
-                failed_groups.append(group)
-            report('Celestrak 分类下载进度：%d/%d' % (index, total_groups))
-        data = merge_tle_texts(*texts)
-        if not data.strip():
-            raise RuntimeError(
-                '无法下载 Celestrak 卫星 TLE。active 接口失败：%s；分类组也无法访问。'
-                % active_error)
-        if failed_groups:
-            print('[卫星星历] 以下 Celestrak 分类组下载失败：%s'
-                  % ', '.join(failed_groups))
-        return data
+        if text.lower().startswith('file:'):
+            with urllib.request.urlopen(text, timeout=timeout) as resp:
+                resp.read(1024)
+        else:
+            req = urllib.request.Request(
+                text, headers={'User-Agent': 'F-HamLog/2.0 satellite prediction'})
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                resp.read(4096)
+    except Exception as e:
+        return False, int((time.perf_counter() - start) * 1000), _probe_error_text(e)
+    return True, int((time.perf_counter() - start) * 1000), ''
 
 
 def fetch_amateur_tle(cache_path=TLE_CACHE, force=False, timeout=20,
@@ -908,7 +966,10 @@ def fetch_amateur_tle(cache_path=TLE_CACHE, force=False, timeout=20,
     本次没下到的卫星继续保留（不会因为某个源临时缺数据就丢掉卫星）。
 
     返回合并后的 TLE 文本。若 force=False 且缓存存在则直接读缓存。
-    内置 Celestrak 源仍保留「active 优先 + 分类组回退」的取数逻辑。
+
+    所有数据源一视同仁：**只下载该网址返回的内容**，不按地址做任何特殊处理
+    （没有特殊提示，也没有按分类组拆分的回退下载）。某个源连不上或返回空内容
+    就记为该源失败，其余源继续。
 
     进度反馈（均为可选回调）：
       - progress(msg)：文本状态提示（沿用旧接口）。
@@ -929,8 +990,19 @@ def fetch_amateur_tle(cache_path=TLE_CACHE, force=False, timeout=20,
         if progress_pct is not None:
             progress_pct(pct)
 
-    urls = normalize_tle_sources(
-        sources if sources is not None else load_tle_sources())
+    if sources is not None:
+        urls = normalize_tle_sources(sources)
+    else:
+        entries = load_tle_source_entries()
+        if entries:
+            urls = [url for url, enabled in entries if enabled]
+            if not urls:
+                # 文件里列了地址但全被禁用：明确报错，不要悄悄启用内置默认源
+                raise RuntimeError(
+                    '所有星历数据源都已禁用，请在「设置 → 星历数据源」中'
+                    '至少启用一个数据源。')
+        else:
+            urls = load_tle_sources()      # 无独立文件 → 旧设置键 / 内置默认
     n_src = len(urls)
     texts = []
     failed = []
@@ -942,11 +1014,8 @@ def fetch_amateur_tle(cache_path=TLE_CACHE, force=False, timeout=20,
             report_pct(int((_i + f) / _n * 100))
 
         try:
-            if url.rstrip('/') == CELESTRAK_ACTIVE_URL.rstrip('/'):
-                text = _fetch_celestrak_source(timeout, cancel, report, slot_pct)
-            else:
-                report('正在下载数据源 %d/%d：%s' % (index + 1, n_src, url))
-                text = _download_url(url, timeout, slot_pct, cancel)
+            report('正在下载数据源 %d/%d：%s' % (index + 1, n_src, url))
+            text = _download_url(url, timeout, slot_pct, cancel)
         except TleFetchCanceled:
             raise  # 用户取消：直接冒泡，不计入失败
         except Exception as e:
@@ -1164,14 +1233,23 @@ def load_tqsl_dict(path=TQSL_DICT_PATH):
     return d
 
 
-def tqsl_sat_name(name, path=TQSL_DICT_PATH):
-    """把卫星显示名转换为 TQSL/LoTW 认可的名称；无映射时返回原名。"""
-    return load_tqsl_dict(path).get(name.strip(), name)
+def tqsl_sat_name(name, path=TQSL_DICT_PATH, number=None):
+    """把卫星显示名转换为 TQSL/LoTW 认可的名称；无映射时返回原名。
+
+    映射表以 NORAD 编号为键（见 :func:`migrate_legacy_sat_data`）。
+    ``number`` 缺省时按 ``name`` 现查出编号再查表，因此旧调用点无需改动；
+    显式传入编号可省掉一次名称→编号解析（批量场景更快）。
+    """
+    table = load_tqsl_dict(path)
+    key = lookup_table_key(table, name, number)
+    if key is None:
+        return name
+    return table[key]
 
 
-def has_tqsl_mapping(name, path=TQSL_DICT_PATH):
-    """判断卫星显示名是否存在 TQSL/LoTW 映射（存在返回 True，否则 False）。"""
-    return name.strip() in load_tqsl_dict(path)
+def has_tqsl_mapping(name, path=TQSL_DICT_PATH, number=None):
+    """判断该卫星是否存在 TQSL/LoTW 映射（存在返回 True，否则 False）。"""
+    return lookup_table_key(load_tqsl_dict(path), name, number) is not None
 
 
 # ---------------------------------------------------------------------------
@@ -1297,37 +1375,194 @@ def satellite_number_map(sats):
     return out
 
 
-def lookup_transponder(bands, name):
-    """按卫星名在转发器表中查找条目。
+# ---------------------------------------------------------------------------
+#  数据一律以「卫星编号」为键：编号 ⇄ 名称的解析与展示
+# ---------------------------------------------------------------------------
+#
+# 背景：卫星名会随数据源变动。同一颗星在不同星历里可能叫
+# ``ASRTU-1 (AO-123)`` 或 ``ASRTU-1 (RS64S/BJ2CR)``，而 NORAD 编号恒定。
+# 因此凡是需要长期保存、要跨越星历更新的数据（自选卫星列表 sat_sats、
+# 转发器表 sat_radio_dict.txt、TQSL 映射表 tqsl_dict.txt）一律以编号为键，
+# 只在**显示/编辑**时按「当前星历」把编号还原成卫星名。
+#
+# 例外：取不到编号的条目（卫星已退役、名称对不上、用户自定义名称）一律
+# **原样保留**，既不丢弃也不冒充编号；显示时原样呈现。
 
-    兼容 TLE 长名与短名不一致的情况，例如业余卫星 TLE 中常写作
-    ``SAUDISAT 1C (SO-50)``，而转发器表（sat_radio_dict.txt）的键是 ``SO-50``。
-    依次尝试以下候选键，命中即返回：
+_sat_index_cache = {'key': None, 'by_name': {}, 'by_num': {}}
+
+
+def sat_name_aliases(name):
+    """产出一颗卫星名在星历里的各种写法（均归一化），供名称 → 编号解析。
+
+    用户和旧数据里写的往往是短名，而 TLE 名称行写的是长名，必须都能对上：
+      ``SAUDISAT-1C (SO-50)`` → ``SAUDISAT1CSO50``（全名）、``SO50``（括号内短名）、
+      ``SAUDISAT1C``（去掉括号部分）；``ISS (ZARYA)`` → 另有 ``ZARYA`` / ``ISS``。
+    返回按优先级排序的别名列表（全名在前），空名返回空列表。
+    """
+    text = (name or '').strip()
+    if not text:
+        return []
+    aliases = [normalize_sat_name(text)]
+    for inner in re.findall(r'\(([^)]*)\)', text):
+        aliases.append(normalize_sat_name(inner))
+    first = re.search(r'\(', text)
+    if first:
+        aliases.append(normalize_sat_name(text[:first.start()]))
+    out, seen = [], set()
+    for a in aliases:
+        if a and a not in seen:
+            seen.add(a)
+            out.append(a)
+    return out
+
+
+def load_sat_index(cache_path=None, force=False):
+    """构建当前星历的「归一化名称 → 编号」「编号 → 原始名称」两份索引。
+
+    只解析 TLE 文本本身（不构造 Satrec、不跑 SGP4），几万条也是毫秒级；
+    结果按缓存文件的 mtime 自动失效，星历刷新后下次调用即得新索引。
+    文件缺失或解析异常时返回两张空表——调用方据此退回「原样处理」，
+    绝不抛异常（迁移与展示链路都要求静默）。
+    """
+    path = cache_path or TLE_CACHE
+    try:
+        stamp = os.path.getmtime(path)
+    except OSError:
+        return {}, {}
+    key = (path, stamp)
+    if not force and _sat_index_cache.get('key') == key:
+        return _sat_index_cache['by_name'], _sat_index_cache['by_num']
+    by_name, by_num = {}, {}
+    try:
+        for norad_id, name, _l1, _l2 in iter_tle_records(_read_text(path)):
+            num = norad_key(norad_id)
+            if not num:
+                continue
+            for alias in sat_name_aliases(name):
+                by_name.setdefault(alias, num)
+            by_num.setdefault(num, (name or '').strip() or num)
+    except Exception:
+        return {}, {}
+    _sat_index_cache['key'] = key
+    _sat_index_cache['by_name'] = by_name
+    _sat_index_cache['by_num'] = by_num
+    return by_name, by_num
+
+
+def sat_number_of(key, cache_path=None):
+    """把「卫星名或编号」解析为归一化编号；解析不出来时返回空串。
+
+    已是编号（纯数字，或当前星历里存在的 Alpha-5 编号）时直接规整采用；
+    否则按归一化名称查一次当前星历。查不到返回 ``''``——调用方应**保持原值**
+    而不是清空，避免把对不上的历史数据丢掉。
+    """
+    text = str(key if key is not None else '').strip()
+    if not text:
+        return ''
+    num = norad_key(text)
+    by_name, by_num = load_sat_index(cache_path)
+    if num and (num in by_num or num.isdigit()):
+        return num
+    return by_name.get(normalize_sat_name(text), '')
+
+
+def sat_display_name(key, cache_path=None):
+    """把内部保存的「编号」还原为「当前星历里的卫星名」；查不到时原样返回。
+
+    也接受直接写的卫星名（尚未迁移的旧数据）：先按名查出编号，再统一显示成
+    当前星历里的规范名称，避免同一颗星在界面上出现两种写法。
+    星历里没有该编号（卫星已退役 / 尚未收录、或用户自定义名称）时原样返回，
+    保证界面上永远看得到一个标识，而不是空白。
+    """
+    text = str(key if key is not None else '').strip()
+    if not text:
+        return ''
+    by_name, by_num = load_sat_index(cache_path)
+    num = norad_key(text)
+    if num not in by_num:
+        num = by_name.get(normalize_sat_name(text), '')
+    return by_num.get(num) or text
+
+
+def normalize_sat_keys(items):
+    """把一串「卫星名 / 编号」规整为去重后的编号列表（保持首次出现顺序）。
+
+    用于读取旧数据时即时升级：拿到 ``['ASRTU-1 (RS64S/BJ2CR)', '61781']``
+    这类混合列表，统一折成编号并去重。解析不出编号的条目原样保留。
+    """
+    out, seen = [], set()
+    for item in (items or []):
+        text = str(item if item is not None else '').strip()
+        if not text:
+            continue
+        num = sat_number_of(text) or text
+        if num in seen:
+            continue
+        seen.add(num)
+        out.append(num)
+    return out
+
+
+def lookup_table_key(table, name, number=None):
+    """在一张「以卫星编号为键」的表里找到该卫星对应的键；找不到返回 None。
+
+    先按编号命中（表已迁移后的标准形态）；再按原始名称、最后按归一化名称
+    兜底，兼容尚未迁移成编号的旧表（旧表的键就是卫星显示名）。
+    """
+    if not table:
+        return None
+    num = (norad_key(str(number)) if number not in (None, '')
+           else sat_number_of(name))
+    if num and num in table:
+        return num
+    text = (name or '').strip()
+    if not text:
+        return None
+    if text in table:
+        return text
+    target = normalize_sat_name(text)
+    if target:
+        for k in table:
+            if normalize_sat_name(k) == target:
+                return k
+    return None
+
+
+def lookup_transponder(bands, name, number=None):
+    """按卫星在转发器表中查找条目（表以 NORAD 编号为键）。
+
+    先按编号精确命中——编号跨数据源稳定，星历换源改名也不会失效；再按名称
+    逐级兜底，兼容尚未迁移成编号的旧表：
       1. 原始 TLE 名；
       2. TQSL/LoTW 映射后的名称（tqsl_sat_name）；
       3. 名称中括号内的短名（如 ``(SO-50)``）；
       4. 括号内短名再做 TQSL 映射；
       5. 以上各项的大小写不敏感匹配；
       6. 归一化匹配（忽略空格/短横线/下划线，与搜索框逻辑一致），
-         例如表中键写作 ``AO-91`` 而 TLE 名为 ``AO 91`` 也能命中。
-    全部未命中返回 None。
+         例如表中键写作 ``AO-91`` 而 TLE 名为 ``AO 91`` 也能命中；
+      7. 编号的归一化匹配（表里的键写成 ``0061781`` / 全角数字等也命中）。
+    ``number`` 缺省时按 ``name`` 现查出编号。全部未命中返回 None。
     """
-    if not name:
+    if not name and number in (None, ''):
         return None
+    key = (norad_key(str(number)) if number not in (None, '')
+           else sat_number_of(name))
+    if key and key in bands:
+        return bands[key]
     cands = [name, tqsl_sat_name(name)]
-    m = re.search(r'\(([^)]+)\)', name)
+    m = re.search(r'\(([^)]+)\)', name or '')
     if m:
         inner = m.group(1).strip()
         cands.append(inner)
         cands.append(tqsl_sat_name(inner))
     for c in cands:
-        c = c.strip()
+        c = (c or '').strip()
         if c in bands:
             return bands[c]
     # 大小写不敏感兜底
     up = {k.upper(): bands[k] for k in bands}
     for c in cands:
-        c = c.strip().upper()
+        c = (c or '').strip().upper()
         if c in up:
             return up[c]
     # 归一化兜底：忽略空格/短横线等差异（与搜索框的匹配逻辑保持一致）
@@ -1336,7 +1571,133 @@ def lookup_transponder(bands, name):
         v = norm.get(normalize_sat_name(c))
         if v is not None:
             return v
+    # 编号兜底：表里的键写成 0061781 / 全角数字等非规范写法时同样命中
+    if key:
+        for k in bands:
+            if norad_key(k) == key:
+                return bands[k]
     return None
+
+
+# ---------------------------------------------------------------------------
+#  旧版数据升级：卫星名 → 卫星编号
+# ---------------------------------------------------------------------------
+
+# 设置文件里需要升级为编号的自选卫星键（sat_mu_sats 是更早版本的键名）
+_SELECTED_KEYS = ('sat_sats', 'sat_mu_sats')
+
+
+def _migrate_settings_sats():
+    """把设置文件 m_xml.txt 里的自选卫星列表由「名称」改写为「编号」。"""
+    try:
+        with open(SETTINGS_PATH, 'r', encoding='utf-8') as f:
+            settings = eval(f.read())
+    except Exception:
+        return 0
+    if not isinstance(settings, dict):
+        return 0
+    changed = 0
+    for name in _SELECTED_KEYS:
+        raw = settings.get(name)
+        if not isinstance(raw, list):
+            continue
+        new = sorted(set(normalize_sat_keys(raw)))
+        if new != raw:
+            settings[name] = new
+            changed += 1
+    if not changed:
+        return 0
+    try:
+        with open(SETTINGS_PATH, 'w', encoding='utf-8') as f:
+            f.write(str(settings))
+    except Exception:
+        return 0
+    return changed
+
+
+# 旧版注释里的字段说明 → 迁移时顺带更正，避免「文件里的说明」与「实际键」
+# 不一致（否则用户手打开文件会以为要填卫星名）。
+_LEGACY_HEADER_FIXES = (
+    ('格式：卫星名=', '格式：卫星编号(NORAD ID)='),
+    ('格式：卫星显示名=', '格式：卫星编号(NORAD ID)='),
+    ('格式：显示名=', '格式：卫星编号(NORAD ID)='),
+)
+
+
+def _migrate_dict_file(path):
+    """把「键=值」文本文件的键由卫星名改写为编号；逐条失败即原样跳过。
+
+    注释行与空行原样保留（只把其中「格式：卫星名=…」这类字段说明改成编号口径）；
+    同一颗卫星出现多行时按读取语义**合并为一行（后者覆盖前者）**——旧表里常用
+    「短名 + 长名」两行指向同一颗星，换成编号后就变成重复键了。
+    整份文件没有任何改动时不写回，避免无谓地动用户的文件。
+    """
+    try:
+        if not os.path.exists(path):
+            return 0
+        lines = _read_text(path).splitlines()
+    except Exception:
+        return 0
+    out, changed, header_fixed = [], 0, 0
+    seen = {}          # 新键 → out 中的下标（用于合并重复键）
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith('#'):
+            fixed = stripped
+            for old, new in _LEGACY_HEADER_FIXES:
+                if old in fixed:
+                    fixed = fixed.replace(old, new)
+            if fixed != stripped:
+                header_fixed += 1
+            out.append(fixed)
+            continue
+        if not stripped or '=' not in stripped:
+            out.append(line.rstrip('\r'))
+            continue
+        key, rest = stripped.split('=', 1)
+        old = key.strip()
+        new = sat_number_of(old) or old      # 解析不出编号 → 保持原键
+        if new != old:
+            changed += 1
+        item = '%s=%s' % (new, rest.strip())
+        if new in seen:
+            out[seen[new]] = item            # 重复键：后者覆盖前者（与读取语义一致）
+            continue
+        seen[new] = len(out)
+        out.append(item)
+    if not (changed or header_fixed):
+        return 0
+    try:
+        os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
+        with open(path, 'w', encoding='utf-8', newline='\n') as f:
+            f.write('\n'.join(out) + '\n')
+    except Exception:
+        return 0
+    return changed
+
+
+def migrate_legacy_sat_data(cache_path=None):
+    """把旧版以「卫星名」为键的数据统一升级为「NORAD 编号」。
+
+    覆盖三类数据：
+      - 设置文件 file/m_xml.txt 的自选卫星 ``sat_sats`` / ``sat_mu_sats``；
+      - file/sat_radio_dict.txt（卫星转发器表，快速记录预填频率用）；
+      - file/tqsl_dict.txt（TQSL / LoTW 卫星名称映射表）。
+
+    逐条解析：能查到编号就改写为编号；查不到（卫星已退役、名称对不上、
+    用户自定义名称）就**原样跳过**，绝不丢数据。整个过程幂等、静默——
+    不弹窗、不打断、不打印，任何异常都被吞掉。启动时调用一次即可。
+
+    返回各来源的改写条数统计（供测试断言；正常运行时不使用）。
+    """
+    report = {'settings': 0, 'radio': 0, 'tqsl': 0}
+    by_name, _ = load_sat_index(cache_path)
+    if not by_name:
+        return report      # 没有可用星历 → 无从升级，一切原样保留
+    report['settings'] = _migrate_settings_sats()
+    report['radio'] = _migrate_dict_file(SAT_RADIO_DICT_PATH)
+    report['tqsl'] = _migrate_dict_file(TQSL_DICT_PATH)
+    return report
 
 
 # ---------------------------------------------------------------------------

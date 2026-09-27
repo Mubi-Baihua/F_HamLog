@@ -5,6 +5,10 @@
   1. normalize_tle_sources / load_tle_sources 的容错与规整；
   2. merge_tle_texts 的多源优先级（靠前优先）；
   3. fetch_amateur_tle 多源合并 + 与旧缓存按编号合并（旧卫星保留）；
+  3b. **数据源一视同仁**：内置 Celestrak 地址也只是「下载该网址的内容」，
+     没有分类组回退、没有特殊提示；
+  3c. 数据源的「启用 / 禁用」：文件里地址前加 # 表示禁用，读只返回启用的，
+      `probe_tle_source` 只探测不联网时也能给出确定的失败说明；
   4. merge_update_satellites 的「同编号更新 / 新编号追加 / 旧的其他保留」；
   5. satellites_to_tle_text ↔ parse_tle_text 往返；
   6. MAX_SELECTED_SATELLITES == 250 与裁剪语义。
@@ -195,6 +199,122 @@ try:
 finally:
     sp.urllib.request.urlopen = _real_opener
 ok('部分源失败仍能出结果', set(r[0] for r in sp.iter_tle_records(text2)) >= {'3'})
+
+print()
+print('=' * 72)
+print('3b. 数据源一视同仁：Celestrak 地址不再特殊处理')
+print('=' * 72)
+# 内置 Celestrak 地址只应产生**一次**请求（旧实现失败时会再按 30+ 个分类组抓一遍）
+_cel = sp.CELESTRAK_ACTIVE_URL
+_fake_cel = _FakeOpener({_cel: S1_NEW})
+_cel_cache = os.path.join(_tmpdir, 'cel_only.tle')   # 空缓存：看纯下载结果
+sp.urllib.request.urlopen = _fake_cel.urlopen
+try:
+    _msgs = []
+    _text = sp.fetch_amateur_tle(cache_path=_cel_cache, force=True, sources=[_cel],
+                                 progress=_msgs.append)
+finally:
+    sp.urllib.request.urlopen = _real_opener
+ok('内置地址只请求该网址一次（无分类组回退）',
+   _fake_cel.requested == [_cel], str(_fake_cel.requested))
+ok('下载到的内容即该网址的内容',
+   [r[0] for r in sp.iter_tle_records(_text)] == ['1'],
+   str([r[0] for r in sp.iter_tle_records(_text)]))
+ok('没有「Celestrak 活动卫星 / 分类下载」这类特殊提示',
+   not any(('活动卫星' in m) or ('分类下载' in m) for m in _msgs), str(_msgs))
+
+# Celestrak 地址失败时同样只算「这个源失败」，不再兜圈子去抓分类组
+_fake_cel_bad = _FakeOpener({})
+sp.urllib.request.urlopen = _fake_cel_bad.urlopen
+try:
+    try:
+        sp.fetch_amateur_tle(cache_path=_cache, force=True, sources=[_cel])
+        _raised = False
+    except Exception as e:
+        _raised = '全部星历数据源都下载失败' in str(e)
+finally:
+    sp.urllib.request.urlopen = _real_opener
+ok('内置地址失败 → 直接按「该源失败」处理', _raised)
+ok('失败时也只请求了它一次', _fake_cel_bad.requested == [_cel],
+   str(_fake_cel_bad.requested))
+ok('分类组常量已移除（不再有特殊分类）',
+   not hasattr(sp, 'CELESTRAK_FALLBACK_GROUPS')
+   and not hasattr(sp, '_fetch_celestrak_source'))
+
+print()
+print('=' * 72)
+print('3c. 数据源的启用 / 禁用')
+print('=' * 72)
+_parsed = sp.parse_tle_source_entries(
+    '# 注释行\n'
+    '\n'
+    'https://on/1.txt\n'
+    '# https://off/2.txt\n'
+    'https://on/3.txt # 行内备注\n'
+    '## https://still-comment/4.txt\n'
+    '# 其余以 # 开头的行仍按注释处理。\n')
+ok('解析出启用/禁用两类（注释不误判）',
+   _parsed == [('https://on/1.txt', True), ('https://off/2.txt', False),
+               ('https://on/3.txt', True)], str(_parsed))
+ok('parse_tle_sources_text 只返回启用的地址',
+   sp.parse_tle_sources_text(
+       '\n'.join('%s%s' % ('# ' if not on else '', u) for u, on in _parsed))
+   == ['https://on/1.txt', 'https://on/3.txt'])
+_entries_path = os.path.join(_tmpdir, 'entries.txt')
+_saved = sp.save_tle_source_entries(
+    [('https://on/1.txt', True), ('https://off/2.txt', False),
+     ('https://on/1.txt', True)], _entries_path)
+ok('保存去重并保留启用状态',
+   _saved == [('https://on/1.txt', True), ('https://off/2.txt', False)], str(_saved))
+_entries_text = open(_entries_path, encoding='utf-8').read()
+ok('禁用项写成「# 地址」', '# https://off/2.txt' in _entries_text, repr(_entries_text))
+ok('文件带禁用写法说明', '即为「禁用」' in _entries_text)
+ok('重新读出与写入一致',
+   sp.parse_tle_source_entries(_entries_text) == _saved,
+   str(sp.parse_tle_source_entries(_entries_text)))
+sp.TLE_SOURCES_PATH = _entries_path
+try:
+    ok('load_tle_sources 只返回启用的源',
+       sp.load_tle_sources() == ['https://on/1.txt'], str(sp.load_tle_sources()))
+    ok('load_tle_source_entries 带启用状态',
+       sp.load_tle_source_entries() == _saved, str(sp.load_tle_source_entries()))
+    # 全部禁用 → 不返回任何源（不悄悄启用内置默认）
+    with open(_entries_path, 'w', encoding='utf-8') as f:
+        f.write('# 注释\n# https://off/a.txt\n# https://off/b.txt\n')
+    ok('全部禁用 → 启用列表为空（不回落内置默认）', sp.load_tle_sources() == [],
+       str(sp.load_tle_sources()))
+    try:
+        sp.fetch_amateur_tle(cache_path=_cache, force=True)
+        _alloff = ''
+    except Exception as e:
+        _alloff = str(e)
+    ok('全部禁用 → 明确报错而不是偷偷用默认源', '都已禁用' in _alloff, _alloff)
+    # 一条都没启用时保存会自动启用第一条（文件里始终至少有一个可用源）
+    _fix = sp.save_tle_source_entries(
+        [('https://off/a.txt', False), ('https://off/b.txt', False)], _entries_path)
+    ok('全被禁用时保存自动启用第一条（至少一个可用源）',
+       _fix == [('https://off/a.txt', True), ('https://off/b.txt', False)], str(_fix))
+    _fix2 = sp.save_tle_source_entries([], _entries_path)
+    ok('一条地址都没有 → 回落到内置默认',
+       _fix2 == [(u, True) for u in sp.DEFAULT_TLE_SOURCES], str(_fix2))
+finally:
+    sp.TLE_SOURCES_PATH = _tmp_src
+
+# probe_tle_source：离线可判定的两条路径
+ok('坏地址直接判失败（不联网）',
+   sp.probe_tle_source('not-a-url') == (False, 0, '地址格式不正确'),
+   str(sp.probe_tle_source('not-a-url')))
+_file_url = 'file:///' + _cache.replace('\\', '/')
+_ok_probe, _probe_ms, _probe_err = sp.probe_tle_source(_file_url)
+ok('file:// 地址能测出延迟（毫秒级）', _ok_probe and _probe_ms >= 0 and _probe_err == '',
+   '%s %s %s' % (_ok_probe, _probe_ms, _probe_err))
+sp.urllib.request.urlopen = _fake2.urlopen      # 没有登记任何 URL → 全部抛错
+try:
+    _fok, _fms, _ferr = sp.probe_tle_source('https://probe/x.txt')
+finally:
+    sp.urllib.request.urlopen = _real_opener
+ok('连不上时返回 (False, ms, 原因) 而不是抛异常',
+   _fok is False and _fms >= 0 and bool(_ferr), '%s %s %s' % (_fok, _fms, _ferr))
 
 print()
 print('=' * 72)

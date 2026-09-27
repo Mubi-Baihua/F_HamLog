@@ -351,6 +351,20 @@ def main():
     satellite_auto_updater = satellite_auto_update.AutoTleUpdater(window)
     satellite_auto_updater.start()
 
+    # ---------- 启动时静默升级旧版数据（卫星名 → 卫星编号） ----------
+    # 自选卫星、卫星转发器表、TQSL 映射表在旧版本里都以「卫星名」为键，而卫星名会
+    # 随星历数据源变动（例如 ASRTU-1 换源后由 AO-123 变成 RS64S/BJ2CR）。这里在
+    # 启动时按当前星历把它们就地升级为 NORAD 编号：能解析出编号的改写，解析不出的
+    # 原样跳过；全程不弹窗、不提示、不打断用户。
+    def _migrate_legacy_sat_data():
+        try:
+            import satellite_pred
+            satellite_pred.migrate_legacy_sat_data()
+        except Exception:
+            pass
+
+    QTimer.singleShot(0, _migrate_legacy_sat_data)
+
     # ---------- 启动时检查并提示恢复未保存的内容 ----------
     def _check_recovery():
         import project

@@ -33,7 +33,10 @@
 - `satellite_pred.py`（skyfield+numpy 离线）。`parse_tle_text` 的名字已 `.strip()`，与 satrec/表格按名匹配才不错位。
 - 打包必带 `--include-package-data=skyfield` + `--include-data-dir=file=file`；数据路径走 `satellite_pred.app_path()`。
 - 上限：预测 `MAX_PREDICT_HOURS=240`/`clamp_predict_hours()`；自选 `MAX_SELECTED_SATELLITES=250`+`clamp_selected_count()`（裁剪取排序后前 N）。
-- **星历数据源 = 独立窗口 + 独立文件**：`file/tle_sources.txt`（每行一地址、`#` 注释），窗口 `tle_source_window.py`（**双击就地编辑**、非法/重复回滚、增删/上移下移/恢复默认、**改动即时落盘**）；入口是 `set.py` 一行按钮「设置星历数据源」（`set.tle_source_win` 非模态单例复用）。`load_tle_sources()` 顺序 = 独立文件 → 旧键 `sat_tle_sources`（写在 m_xml，仅兼容读）→ `DEFAULT_TLE_SOURCES`；`save_tle_sources()` 顺手 `drop_legacy_tle_sources()` 清旧键（单一事实来源）。冲突（同 NORAD 编号）取靠前源；**只有内置 Celestrak 源带「分类组回退」**（`_fetch_celestrak_source`）。
+- **星历数据源 = 独立窗口 + 独立文件**：`file/tle_sources.txt`（每行一地址），窗口 `tle_source_window.py`（**双击就地编辑**、非法/重复回滚、增删/上移下移/恢复默认）；入口是 `set.py` 一行按钮「设置星历数据源」（`set.tle_source_win` 非模态单例复用）。`load_tle_sources()` 顺序 = 独立文件 → 旧键 `sat_tle_sources`（写在 m_xml，仅兼容读）→ `DEFAULT_TLE_SOURCES`；`save_tle_source_entries()` 顺手 `drop_legacy_tle_sources()` 清旧键（单一事实来源）。冲突（同 NORAD 编号）取靠前源。
+  - **启用/禁用写在同一个文件里**：地址前加一个 `#` 即禁用（只吃一个 `#`，`## …` 仍是注释；行内 `# 备注` 会被忽略）。`parse_tle_source_entries(text)` → `[(url, enabled)]`；`parse_tle_sources_text()` 只返回启用的；`load_tle_sources()` 只返回启用的，**文件里列了地址但全被禁用时返回空列表**（`fetch_amateur_tle` 据此报「所有星历数据源都已禁用」，不偷偷启用默认源）；`save_tle_source_entries()` 保证文件里**至少一个启用**（全禁用时自动启用第一条，空列表回落默认）。
+  - **数据源一视同仁**：只下载该网址返回的内容，**没有 URL 特判**（Celestrak 的「分类组回退」`_fetch_celestrak_source` / `CELESTRAK_FALLBACK_GROUPS` 已删除，也删了「正在下载 Celestrak 活动卫星数据…」这类特殊提示）。
+  - **延迟探测**：`probe_tle_source(url, timeout=TLE_PROBE_TIMEOUT)` → `(ok, ms, err)`，只读 4KB 首包就断开，**从不抛异常**。窗口打开 / 改完地址 / 新添加 / 恢复默认时**自动**在后台测（`DelayProbeWorker(QThread)`，结果带「探测令牌」回来，令牌变了就丢弃；`tle_source_window._ACTIVE_PROBES` 模块级持引用 + 关窗 `cancel/wait` 防 QThread 被 GC）；**界面上刻意没有「测试延迟」按钮**。延迟只进 `_ROLE_DELAY` 供 delegate 自绘，**绝不写进 `item.text()`**（`text()` 永远是地址本身）。
 - **下载/导入一律「按 NORAD 编号增量更新」**（`merge_update_satellites`）：同编号替换、新编号追加、**旧的一律保留（绝不删除）**；`fetch_amateur_tle` 写缓存前再与旧缓存 `merge_tle_texts(新, 旧)`。「导入星历」写回缓存且**不自动勾选**。代价：缓存只增不减。
 - `norad_key()` 去前导 0 统一编号（`1 00694U` 与空格补位视为同一颗）；`iter_tle_records()` 统一解析 3LE/2LE。
 - **`Satrec` 包装必须自己存 `line1/line2`**：skyfield 的 `EarthSatellite` 不保留原始 TLE 行；`satellites_to_tle_text()` 依赖它。
@@ -83,6 +86,7 @@
 - venv 可 `QT_QPA_PLATFORM=offscreen` 真实冒烟；`project.main/satellite_window/mutual_window/batch_project`、独立服务端 `main.py` 均可离屏（做法与「嵌套模态消息框」7 条坑见 `DETAILS.md`）。
 - **坑**：槽里的 `sys.exit()`（如 esave）会从 PySide6 的 C++ 边界直接终止进程（`except SystemExit`/`finally` 都拦不到）→ 测试前临时 `sys.exit = lambda *a, **k: None`；被管道捕获时缓冲区里的输出也会一起丢。
 - 测完核对并还原 `file/m_xml.txt`（及 `file/amateur.tle`、`file/sat_map_markers.txt`、`file/tle_sources.txt`）；`m_lat/m_lon=0,0` 时卫星窗口会先弹「设置观测站」抢在待测提示前。
+- **绝对不要用 `git checkout -- file/…` 还原 `file/` 下的数据文件**：那是用户**正在使用**的数据，随时可能被用户手工改过（本机实测：`file/sat_radio_dict.txt`/`file/tqsl_dict.txt` 里 `ASRTU-1 (AO-123)` 被人手改成 `61781`，而静默迁移**不可能**产出这个结果 —— `sat_number_of('ASRTU-1 (AO-123)')` 返回空串）。要判断「数据改了是不是我的锅」，先逐个脚本验证（改一个跑一个、看 `git diff`），确认后再决定；宁可保留改动也不要 checkout。
 - 约定：冒烟脚本命名 `__*_smoke.py`，结果写 `__*_out.txt`（已被 `.gitignore` 覆盖）。**优先把路径常量 monkeypatch 到临时文件**（`sp.TLE_SOURCES_PATH`/`sp.SETTINGS_PATH`/`smw.MARKERS_PATH`），比「备份—还原字节」更干净。
 - **离屏跑卫星窗口**：必须 patch `ObserverDialog.exec`/`SatelliteSelectDialog.exec` 返回 `Rejected`，再 patch `QMessageBox.information/warning` 抓文案、`QFileDialog.getOpenFileName` 喂文件；`win.findChildren(QPushButton)` 按文字点按钮。样例 `__sat_window_smoke.py`/`__tle_source_smoke.py`/`__tle_source_win_smoke.py`。
 - `mutual_window` 的 `win` 是 `main()` 里的局部 `QMainWindow()`：离屏拿控件需临时替换模块的 `QMainWindow` 为注册实例的子类（否则返回即被回收）。

@@ -181,7 +181,8 @@ class MutualWorker(QThread):
             except Exception:
                 wins = []
             for w in wins:
-                rows.append(self._build_row(w, sp.lookup_transponder(bands, w['name'])))
+                rows.append(self._build_row(
+                    w, sp.lookup_transponder(bands, w['name'], w.get('satnum'))))
             self.progress.emit(int((idx + 1) / total * 100))
         rows.sort(key=lambda r: r['start_jd'])
         self.done.emit(rows)
@@ -191,7 +192,7 @@ class MutualWorker(QThread):
         # 预填时间只到分钟（与日志表 time 字段精度一致），
         # 界面显示（start_str / end_str / best_str）则精确到秒
         preset = {
-            'sat_name': sp.tqsl_sat_name(name),
+            'sat_name': sp.tqsl_sat_name(name, number=w.get('satnum')),
             'prop_mode': 'SAT',
             'date': _log_date_str(w['start'], LOCAL_TZ),
             'time': _log_time_str(w['start'], LOCAL_TZ),
@@ -203,6 +204,7 @@ class MutualWorker(QThread):
             preset['freq_rx'] = band.get('downlink', '')
         return {
             'name': name,
+            'satnum': w.get('satnum'),
             'start_str': _utc_to_local_str(w['start'], LOCAL_TZ),
             'end_str': _utc_to_local_str(w['end'], LOCAL_TZ),
             'best_str': _utc_to_local_str(w['best_time'], LOCAL_TZ),
@@ -236,7 +238,7 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
 
     # 默认预测时长与「卫星过境预测」窗口保持一致（共用 sat_dur 设置）
     mu_dur = int(sp.clamp_predict_hours(settings.get('sat_dur', 24) or 24))
-    # 自选卫星列表共用 sat_sats；兼容旧版 sat_mu_sats
+    # 自选卫星列表共用 sat_sats（存卫星编号）；兼容旧版 sat_mu_sats 键名
     mu_sats_raw = settings.get('sat_sats', None)
     if mu_sats_raw is None:
         mu_sats_raw = settings.get('sat_mu_sats', None)
@@ -330,16 +332,19 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
 
     sats = []
     last_rows = []
-    selected_names = (set(mu_sats_raw)
-                      if isinstance(mu_sats_raw, list) and mu_sats_raw
-                      else None)
+    # 自选卫星一律以**卫星编号（NORAD ID）**保存，与「卫星过境预测」共用同一份
+    # sat_sats；旧版设置里存的是卫星名，这里即时升级。
+    # None = 从未保存（本窗口首次打开不自动弹选择框）；空列表 = 曾显式清空。
+    selected_numbers = (set(sp.normalize_sat_keys(mu_sats_raw))
+                        if isinstance(mu_sats_raw, list) and mu_sats_raw
+                        else None)
     # 超量选择兜底：设置文件可能留有历史的大规模选择（旧版本无上限），裁到上限，
     # 避免一打开窗口就因数千颗卫星的预测而长时间卡住。超限状态记下来，
     # 等窗口显示后再提示（与「选择卫星」对话框一致的三条出路），不静默裁剪。
     _oversized_from_settings = 0
-    if selected_names is not None:
-        selected_names, _trimmed = sp.clamp_selected_count(selected_names)
-        _oversized_from_settings = len(selected_names) + _trimmed
+    if selected_numbers is not None:
+        selected_numbers, _trimmed = sp.clamp_selected_count(selected_numbers)
+        _oversized_from_settings = len(selected_numbers) + _trimmed
 
     # ---------- 逻辑 ----------
     def _persist():
@@ -353,7 +358,7 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
         # 预测时长与「卫星过境预测」共用 sat_dur，保证两者默认一致
         s['sat_dur'] = int(sp.clamp_predict_hours(dur_spin.value()))
         s['sat_filter'] = '自选卫星'
-        s['sat_sats'] = sorted(selected_names) if selected_names is not None else None
+        s['sat_sats'] = sorted(selected_numbers) if selected_numbers is not None else None
         _save_settings(s)
 
     def _parse_start():
@@ -366,11 +371,20 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
         return None, ('格式应为 YYYY-MM-DD HH:MM（例如 2026-08-02 17:45），当前输入：'
                       + (txt or '（空）'))
 
+    def _sat_number(sat):
+        """取一颗卫星的 NORAD 编号（取不到时返回空串）。"""
+        try:
+            return sp.norad_key(str(getattr(sat, 'satnum', '') or ''))
+        except Exception:
+            return ''
+
     def active_sats_list():
         """返回当前自选卫星列表，预测与地图共用同一份。"""
-        if selected_names is None:
+        if selected_numbers is None:
             return []
-        return [(n, s) for (n, s) in sats if n in selected_names]
+        # 卫星按编号匹配；极少数取不到编号的手工数据退回按名称匹配
+        return [(n, s) for (n, s) in sats
+                if (_sat_number(s) or n) in selected_numbers]
 
     def _push_sats_to_map():
         """把当前「已选卫星」与台站 A / B 最低仰角同步给已打开的地图窗口。"""
@@ -437,7 +451,7 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
         任何数据变化（坐标、网格、最低仰角、时长、范围、开始时间）都会自动调用
         本函数；无有效 TLE、坐标缺失或非法时仅在状态栏提示，不弹窗（避免自动
         重算时频繁打断用户）。"""
-        nonlocal selected_names
+        nonlocal selected_numbers
         _persist()  # 先把当前设置落盘（含可能刚改动的台站/仰角/时长）
         if not sats:
             status.setText('没有可用的卫星数据，请先“刷新TLE”。')
@@ -469,7 +483,7 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
             dur_spin.blockSignals(False)
 
         active_sats = active_sats_list()
-        if not selected_names:
+        if not selected_numbers:
             status.setText('尚未选择卫星，请点击“选择卫星…”勾选。')
             table.setRowCount(0)
             _push_sats_to_map()
@@ -528,7 +542,7 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
         win._tle_worker = worker
 
         def on_fetched(s):
-            nonlocal sats, selected_names
+            nonlocal sats, selected_numbers
             if getattr(win, '_tle_worker', None) is worker:
                 win._tle_worker = None
             # 按 NORAD 编号增量并入：本次数据源里没有的旧卫星继续保留（不删除）
@@ -537,8 +551,8 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
             _extra = f'（另保留 {_kept} 颗本次未取得的旧卫星）' if _kept > 0 else ''
             # 通联预测：若尚未选择卫星，不自动弹窗（仅在「卫星过境预测」中引导选择），
             # 置为空集合，由 run_prediction 在状态栏提示用户点击「选择卫星…」。
-            if selected_names is None:
-                selected_names = set()
+            if selected_numbers is None:
+                selected_numbers = set()
             refresh_btn.setEnabled(True)
             status.setText('已载入 TLE：本次取得 %d 颗，共 %d 颗卫星%s。'
                            % (len(s), len(sats), _extra))
@@ -570,7 +584,7 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
         worker.start()
 
     def open_select():
-        nonlocal selected_names
+        nonlocal selected_numbers
         if not sats:
             QMessageBox.information(win, '暂无卫星', '请先刷新 TLE。')
             return
@@ -580,27 +594,27 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
         # 「清除所有选择」后直接重建一个全新的选择窗口（而非在原窗口逐项重置，
         # 数千颗时后者会因反复重排/刷新而明显卡顿）。循环直到用户确定或取消为止。
         while True:
-            dlg = SatelliteSelectDialog(win, names, selected_names, satnums)
+            dlg = SatelliteSelectDialog(win, names, selected_numbers, satnums)
             if dlg.exec() == QDialog.Accepted:
                 # 对话框已在 accept() 里拦住超量选择，这里再裁一次作兜底
-                selected_names, _ = sp.clamp_selected_count(dlg.get_selected())
+                selected_numbers, _ = sp.clamp_selected_count(dlg.get_selected())
                 break
             if not dlg.reset_requested:
                 return   # 用户取消：什么都不做
-            selected_names = set()   # 已确认清除 → 以空选择重开新窗口
+            selected_numbers = set()   # 已确认清除 → 以空选择重开新窗口
         _persist()
         run_prediction()  # 选择卫星后自动重新预测
         _push_sats_to_map()   # 自选卫星变化 → 地图同步显示新的一批卫星
         # 把选择实时同步回卫星过境预测窗口（若该窗口仍打开）
         if on_selection_change is not None:
-            on_selection_change('自选卫星', selected_names)
+            on_selection_change('自选卫星', selected_numbers)
 
     def apply_remote_selection(filter_mode, sel):
         """由「卫星过境预测」窗口反向同步：更新范围/自选卫星并重新预测。
 
         刻意不调用 on_selection_change 回弹，避免两个窗口互相触发形成循环。"""
-        nonlocal selected_names
-        selected_names = sel
+        nonlocal selected_numbers
+        selected_numbers = sel
         if sats:
             run_prediction()
         _push_sats_to_map()
@@ -683,13 +697,13 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
             return
         r = last_rows[row_index]
         preset = r.get('preset')
-        if preset and not sp.has_tqsl_mapping(r['name']):
+        if preset and not sp.has_tqsl_mapping(r['name'], number=r.get('satnum')):
             QMessageBox.warning(
                 win, 'TQSL 映射提醒',
                 f'卫星「{r["name"]}」未找到 TQSL / LoTW 名称映射，\n'
                 f'记录将以原始名称「{preset.get("sat_name", r["name"])}」保存，'
                 f'可能不会被 LoTW / TQSL 正确识别。\n'
-                f'可在「卫星过境预测」窗口的「编辑TQSL映射」中使用记事本补充。')
+                f'可在「卫星过境预测」窗口的「编辑TQSL映射」中补充。')
         if quick_log_callback is not None:
             quick_log_callback(preset)
         else:
@@ -754,7 +768,7 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
                 and prompt_over_limit_selection(
                     win, _oversized_from_settings, sp.MAX_SELECTED_SATELLITES,
                     source_hint='设置文件 file/m_xml.txt 中保存的自选卫星已超过上限。')):
-            selected_names.clear()
+            selected_numbers.clear()
             _persist()
         # 台站 A（本站）位置在「卫星过境预测 → 观测站设置」中填写，
         # 通联预测打开时不再弹窗提示“尚未设置位置”；未设置时 run_prediction 会静默跳过。

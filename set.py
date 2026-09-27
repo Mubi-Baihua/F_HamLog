@@ -95,6 +95,13 @@ def main(window):
                     shutil.copyfile(os.path.join(file_path, 'tqsl_dict.txt'), 'file/tqsl_dict.txt')
                     back_item += '、TQSL映射表(tqsl_dict.txt)'
 
+                # 旧版本的数据以「卫星名」为键，这里立即按当前星历升级为卫星编号
+                # （静默执行：解析不出的条目原样保留，不打断导入流程）。
+                try:
+                    sp.migrate_legacy_sat_data()
+                except Exception:
+                    pass
+
                 QMessageBox.information(window, "从之前版本导入数据", f"成功导入{back_item}\n（目前不支持从之前版本中导入插件）")
                 window.close()
             else:

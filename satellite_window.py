@@ -232,6 +232,10 @@ class SatelliteSelectDialog(QDialog):
 
     搜索框默认只匹配卫星名；勾选「使用卫星编号搜索」后，额外按 NORAD 编号匹配
     （satnums 为「卫星名 → 编号」映射，缺省 None 时编号匹配不可用）。
+
+    **勾选结果一律以卫星编号为键**（satnums 提供时）：编号跨星历改名/换源都稳定，
+    调用方拿到的就是可长期保存的 `get_selected()`。取不到编号的卫星退回用名称作键；
+    完全不传 satnums 时键即名称，与旧调用保持一致。
     """ % sp.MAX_SELECTED_SATELLITES
 
     def __init__(self, parent, names, selected, satnums=None):
@@ -257,9 +261,8 @@ class SatelliteSelectDialog(QDialog):
         # 单独占一行：与搜索框挤在同一行时，开关文字会把搜索框压到只剩几十像素宽。
         self.by_number_chk = QCheckBox('使用卫星编号搜索')
         self.by_number_chk.setToolTip(
-            '勾选后，搜索框除卫星名外还会按卫星编号（NORAD ID）匹配。\n'
-            '例如输入 61781 可找到「ASRTU-1 (RS64S/BJ2CR)」。\n'
-            '输入 6178 也能模糊命中 61781。')
+            '勾选后，搜索框除卫星名外还会按卫星编号（NORAD ID）匹配。'
+            '编号里包含搜索词的卫星同样会被列出。')
         num_row = QHBoxLayout()
         num_row.addWidget(self.by_number_chk)
         num_row.addStretch(1)
@@ -278,12 +281,22 @@ class SatelliteSelectDialog(QDialog):
                           for n in names}
         # 记录 (行号 → 卫星名)，过滤时按行号隐藏，避免每次反查
         self._row_names = []
+        # 「卫星名 → 内部键」：有编号表时键用 NORAD 编号（跨星历改名/换源稳定，
+        # 保存到设置文件的就是它）；取不到编号的卫星退回用名称作键。不传 satnums
+        # （satnums=None）时键就是名称，与旧调用完全一致。
+        self._satnums = dict(satnums or {})
+        self._key_of = {}
+        for n in names:
+            raw = str(self._satnums.get(n) or '').strip()
+            self._key_of[n] = (sp.norad_key(raw) or n) if raw else n
         init = selected if isinstance(selected, set) else None
         for n in names:
             item = QListWidgetItem(n, self.list_widget)
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-            item.setCheckState(Qt.CheckState.Checked if init is None or n in init
-                               else Qt.CheckState.Unchecked)
+            item.setCheckState(
+                Qt.CheckState.Checked
+                if init is None or self._key_of[n] in init
+                else Qt.CheckState.Unchecked)
             self.items[n] = item
             self._row_names.append(n)
         self.list_widget.setUpdatesEnabled(True)
@@ -470,8 +483,9 @@ class SatelliteSelectDialog(QDialog):
         self._set_all_visible(Qt.CheckState.Unchecked)
 
     def get_selected(self):
-        return {n for n, item in self.items.items()
-            if item.checkState() == Qt.CheckState.Checked}
+        """返回勾选卫星的内部键：有编号表时为 NORAD 编号，否则为卫星名。"""
+        return {self._key_of[n] for n, item in self.items.items()
+                if item.checkState() == Qt.CheckState.Checked}
 
     def accept(self):
         """确定前校验勾选数量：未超限直接通过；超限则弹统一提示框（`prompt_over_limit_selection`）。
@@ -498,9 +512,16 @@ class DictEditorDialog(QDialog):
     与 tqsl_dict.txt（TQSL/LoTW 名称映射）。
 
     列定义：
-      - columns[0] 为键（key，如卫星名）；
+      - columns[0] 为键（key，卫星名）；
       - 其余列为值字段，按 value_delimiter 拼接/拆分（None 表示单列值）。
     文件中的注释行（# 开头）与空行会被原样保留，仅在末尾重写数据行。
+
+    **键一律以卫星编号（NORAD ID）落盘**：编号跨星历改名/换源都稳定，不会因为
+    数据源换了名字就对不上。界面上仍然显示/输入**卫星名**——打开时按当前星历把
+    编号还原成名称，保存时再把名称解析回编号。解析不出编号的条目（卫星已退役、
+    名称对不上、自定义名称）按原文保存，绝不丢数据。
+
+    本对话框是这两个文件唯一的编辑入口（不再提供用记事本打开的方式）。
     """
 
     def __init__(self, parent, title, path, columns, value_delimiter=','):
@@ -511,12 +532,22 @@ class DictEditorDialog(QDialog):
         self._columns = list(columns)
         self._delim = value_delimiter
         self._comments = []
-        self._rows = []  # 每行: (key, [value, ...])
+        self._rows = []  # 每行: (key, [value, ...])；key 为界面上的卫星名
 
         lay = QVBoxLayout(self)
-        lay.addWidget(QLabel(
+        hint = QLabel(
             '每行一条记录。点击单元格可直接编辑；用“添加”新增，“删除选中”移除整行；'
-            '完成后点“保存”写回文件。'))
+            '完成后点“保存”写回文件。')
+        # 提示行必须自动换行：QLabel 默认不换行，文本越长 minimumSizeHint 越宽，
+        # 会直接把对话框顶宽（实测一段 104 字的说明能把最小宽度从 640 撑到 1270px，
+        # 一打开就比原先宽一倍）。开关编号语义写进 tooltip，不占用正文宽度。
+        hint.setWordWrap(True)
+        hint.setToolTip(
+            '第一列填卫星名（可从本地星历中搜索补全），保存时自动转成卫星编号'
+            '（NORAD ID）写入文件；\n'
+            '下次打开再按当前星历把编号显示回卫星名。\n'
+            '编号跨星历改名/换源都稳定，不会因为数据源换了名字就对不上。')
+        lay.addWidget(hint)
 
         self.table = QTableWidget(0, len(self._columns))
         self.table.setHorizontalHeaderLabels(self._columns)
@@ -535,32 +566,20 @@ class DictEditorDialog(QDialog):
         btn_row = QHBoxLayout()
         add_btn = QPushButton('添加')
         del_btn = QPushButton('删除选中')
-        text_btn = QPushButton('使用记事本编辑')
         save_btn = QPushButton('保存')
         close_btn = QPushButton('关闭')
         add_btn.clicked.connect(self._add_row)
         del_btn.clicked.connect(self._del_row)
-        text_btn.clicked.connect(self._open_text_editor)
         save_btn.clicked.connect(self._save)
         close_btn.clicked.connect(self.reject)
         btn_row.addWidget(add_btn)
         btn_row.addWidget(del_btn)
-        btn_row.addWidget(text_btn)
         btn_row.addStretch(1)
         btn_row.addWidget(save_btn)
         btn_row.addWidget(close_btn)
         lay.addLayout(btn_row)
 
         self._load()
-
-    def _open_text_editor(self):
-        if self._delim is not None:
-            header = ('# 卫星转发器表\n# 格式：卫星名=下行频率,上行频率,模式\n'
-                      '# 例如：SO-50=436.795,145.850,FM')
-        else:
-            header = ('# TQSL / LoTW 卫星名称映射表\n# 格式：卫星显示名=TQSL认可名\n'
-                      '# 例如：ISS (ZARYA)=ISS')
-        sp.open_text_config(self._path, header)
 
     # ---- 读取 ----
     def _load(self):
@@ -582,6 +601,8 @@ class DictEditorDialog(QDialog):
                 key = key.strip()
                 if not key:
                     continue
+                # 文件里存的是编号 → 按当前星历显示成卫星名（查不到则原样显示编号）
+                key = sp.sat_display_name(key)
                 rest = rest.strip()
                 if self._delim is not None:
                     vals = [x.strip() for x in rest.split(self._delim)]
@@ -642,6 +663,18 @@ class DictEditorDialog(QDialog):
         if not self._rows:
             QMessageBox.warning(self, '无可保存数据', '没有任何有效（键不为空）的记录。')
             return
+        # 卫星名 → 卫星编号：落盘一律用编号，界面上的名称只是「当前星历的写法」。
+        # 解析不出编号的条目（卫星已退役 / 名称对不上 / 自定义名称）按原文保存，
+        # 绝不丢数据——只是在提示里报一下条数。
+        out_rows = []
+        unresolved = 0
+        for key, vals in self._rows:
+            num = sp.sat_number_of(key)
+            if num:
+                out_rows.append((num, vals))
+            else:
+                unresolved += 1
+                out_rows.append((key, vals))
         try:
             os.makedirs(os.path.dirname(self._path) or '.', exist_ok=True)
             with open(self._path, 'w', encoding='utf-8') as f:
@@ -649,19 +682,27 @@ class DictEditorDialog(QDialog):
                     f.write('\n'.join(self._comments).rstrip('\n') + '\n')
                 else:
                     if self._delim is not None:
-                        f.write('# 卫星转发器数据（格式：卫星名=下行频率,上行频率,模式）\n'
+                        f.write('# 卫星转发器数据（格式：卫星编号=下行频率,上行频率,模式）\n'
                                 '# 下行频率=接收频率(freq_rx)，上行频率=发射频率(freq)\n'
-                                '# 可由“卫星通联记录”窗口的“编辑转发器”维护\n')
+                                '# 键为卫星编号(NORAD ID)：跨星历改名/换源都不会失效；\n'
+                                '# 界面按当前星历显示卫星名，可由“卫星通联记录”窗口的'
+                                '“编辑转发器”维护\n')
                     else:
-                        f.write('# TQSL / LoTW 卫星名称映射表（格式：卫星显示名=TQSL认可名）\n'
-                                '# 可由“卫星通联记录”窗口的“编辑TQSL映射”维护\n')
-                for key, vals in self._rows:
+                        f.write('# TQSL / LoTW 卫星名称映射表（格式：卫星编号=TQSL认可名）\n'
+                                '# 键为卫星编号(NORAD ID)：跨星历改名/换源都不会失效；\n'
+                                '# 界面按当前星历显示卫星名，可由“卫星通联记录”窗口的'
+                                '“编辑TQSL映射”维护\n')
+                for key, vals in out_rows:
                     if self._delim is not None:
                         line = '%s=%s' % (key, self._delim.join(vals))
                     else:
                         line = '%s=%s' % (key, vals[0] if vals else '')
                     f.write(line + '\n')
-            QMessageBox.information(self, '已保存', '已保存 %d 条记录。' % len(self._rows))
+            msg = '已保存 %d 条记录。' % len(out_rows)
+            if unresolved:
+                msg += ('\n其中 %d 条未能在当前星历中找到对应卫星，'
+                        '已按输入的名称原文保存（不会丢失）。' % unresolved)
+            QMessageBox.information(self, '已保存', msg)
             self.accept()
         except Exception as e:
             QMessageBox.warning(self, '保存失败', '写入文件出错：%s' % e)
@@ -696,7 +737,7 @@ class PredictWorker(QThread):
             except Exception:
                 passes = []
             for p in passes:
-                band = sp.lookup_transponder(bands, p['name'])
+                band = sp.lookup_transponder(bands, p['name'], p.get('satnum'))
                 rows.append(self._build_row(p, band))
             self.progress.emit(int((idx + 1) / total * 100))
         rows.sort(key=lambda r: r['aos_jd'])
@@ -709,7 +750,7 @@ class PredictWorker(QThread):
         # 预填时间只到分钟（ADIF / 日志表 time 字段的精度），
         # 与界面上显示到秒的过境时刻区分开
         preset = {
-            'sat_name': sp.tqsl_sat_name(name),
+            'sat_name': sp.tqsl_sat_name(name, number=p.get('satnum')),
             'prop_mode': 'SAT',
             'date': _log_date_str(p['aos'], obs_tz),
             'time': _log_time_str(p['aos'], obs_tz),
@@ -722,6 +763,7 @@ class PredictWorker(QThread):
             preset['freq_rx'] = band.get('downlink', '')
         return {
             'name': name,
+            'satnum': p.get('satnum'),
             'aos_str': _utc_to_local_str(p['aos'], obs_tz),
             'los_str': _utc_to_local_str(p['los'], obs_tz),
             'max_elev': p['max_elevation'],
@@ -785,7 +827,7 @@ def main(parent_window, quick_log_callback=None, title='卫星过境'):
     # 时长统一钳制到 [1, 240] 小时：历史设置里若存有更大的值，这里自动收敛到 240
     sat_dur = int(sp.clamp_predict_hours(settings.get('sat_dur', 24) or 24))
     sat_el = int(settings.get('sat_el', 10) or 10)
-    sat_sats_raw = settings.get('sat_sats', None)  # None=从未保存；[]=曾显式清空；list=已选卫星名
+    sat_sats_raw = settings.get('sat_sats', None)  # None=从未保存；[]=曾显式清空；list=已选卫星编号（旧版为名称）
 
     win = QMainWindow()
     win.resize(940, 620)
@@ -821,9 +863,15 @@ def main(parent_window, quick_log_callback=None, title='卫星过境'):
     update_tle_tooltip()
     obs_btn = QPushButton('观测站设置')
     edit_radio_btn = QPushButton('编辑转发器')
-    edit_radio_btn.setToolTip('使用记事本编辑卫星转发器数据 sat_radio_dict.txt（下行/上行频率与模式）')
+    edit_radio_btn.setToolTip(
+        '编辑卫星转发器数据 sat_radio_dict.txt（下行/上行频率与模式）。\n'
+        '第一列填卫星名即可（可从本地星历搜索补全），保存时自动转成\n'
+        '卫星编号(NORAD ID)写入文件；下次打开按当前星历显示回卫星名。')
     edit_tqsl_btn = QPushButton('编辑TQSL映射')
-    edit_tqsl_btn.setToolTip('使用记事本编辑 TQSL/LoTW 卫星名称映射 tqsl_dict.txt')
+    edit_tqsl_btn.setToolTip(
+        '编辑 TQSL/LoTW 卫星名称映射 tqsl_dict.txt。\n'
+        '第一列填卫星名即可（可从本地星历搜索补全），保存时自动转成\n'
+        '卫星编号(NORAD ID)写入文件；下次打开按当前星历显示回卫星名。')
     import_tle_btn = QPushButton('导入星历数据')
     import_tle_btn.setToolTip(
         '从 txt 或 tle 文件导入卫星星历数据（TLE 格式）。\n'
@@ -949,17 +997,18 @@ def main(parent_window, quick_log_callback=None, title='卫星过境'):
 
     sats = []
     last_rows = []  # 保存最近一次预测结果，供单行"记录"按钮读取预填数据
+    # 自选卫星一律以**卫星编号（NORAD ID）**保存：编号跨星历改名/换源都稳定，
+    # 不会因为数据源换了名字就丢失选择。旧版设置里存的是卫星名，这里即时升级。
     # 默认「全不选」：没有任何已保存的选择时，初始为空集合；
     # 这样选择对话框里所有卫星都保持未勾选状态（符合需求：选择卫星默认全不选）。
-    selected_names = (set(sat_sats_raw)
-                      if isinstance(sat_sats_raw, list)
-                      else set())
+    selected_numbers = set(sp.normalize_sat_keys(sat_sats_raw)
+                           if isinstance(sat_sats_raw, list) else [])
     # 超量选择兜底：设置文件 m_xml.txt 里可能留有历史的大规模选择（旧版本无上限），
     # 先裁到上限，避免一打开窗口就因数千颗卫星的预测而长时间卡住。
     # 但**不静默裁剪**：记下超限状态，等窗口显示、用户处理完首次引导之后再弹提示，
     # 给出与「选择卫星」对话框完全一致的三条出路（重新选择 / 清除所有选择 / 取消）。
-    selected_names, _trimmed_selected = sp.clamp_selected_count(selected_names)
-    _oversized_from_settings = len(selected_names) + _trimmed_selected
+    selected_numbers, _trimmed_selected = sp.clamp_selected_count(selected_numbers)
+    _oversized_from_settings = len(selected_numbers) + _trimmed_selected
     # 窗口打开后首次获取 TLE 时：若尚未选择任何卫星（包括曾显式清空的情况），
     # 自动弹出选择框引导用户；用户关闭对话框后本窗口会话内不再自动弹窗，
     # 避免每次刷新都打扰。
@@ -975,7 +1024,7 @@ def main(parent_window, quick_log_callback=None, title='卫星过境'):
         s['sat_dur'] = int(sp.clamp_predict_hours(dur_spin.value()))
         s['sat_el'] = el_spin.value()
         s['sat_filter'] = '自选卫星'
-        s['sat_sats'] = sorted(selected_names)
+        s['sat_sats'] = sorted(selected_numbers)
         _save_settings(s)
 
     def _parse_start():
@@ -990,11 +1039,22 @@ def main(parent_window, quick_log_callback=None, title='卫星过境'):
         return None, ('格式应为 YYYY-MM-DD HH:MM（例如 2026-07-27 17:45），'
                      '可带秒；当前输入：' + (txt or '（空）'))
 
+    def _sat_number(sat):
+        """取一颗卫星的 NORAD 编号（取不到时返回空串）。
+
+        编号是自选卫星列表的唯一标识；极少数取不到编号的手工数据退回用名称匹配。
+        """
+        try:
+            return sp.norad_key(str(getattr(sat, 'satnum', '') or ''))
+        except Exception:
+            return ''
+
     def active_sats_list():
         """返回当前自选卫星列表，预测与地图共用同一份。"""
-        # selected_names 现在恒为 set（默认空集合 = 全不选），
-        # 空集合时返回空列表，预测会提示“尚未选择卫星”。
-        return [(n, s) for (n, s) in sats if n in selected_names]
+        # selected_numbers 恒为 set（默认空集合 = 全不选），空集合时返回空列表，
+        # 预测会提示“尚未选择卫星”。卫星按编号匹配；无编号的退回按名称匹配。
+        return [(n, s) for (n, s) in sats
+                if (_sat_number(s) or n) in selected_numbers]
 
     def _push_sats_to_map():
         """把当前「已选卫星」与最低仰角同步给已打开的地图窗口。"""
@@ -1027,12 +1087,12 @@ def main(parent_window, quick_log_callback=None, title='卫星过境'):
     _tle_time_timer.start()
 
     def run_prediction():
-        nonlocal sats, selected_names
+        nonlocal sats, selected_numbers
         if not sats:
             status.setText('没有可用的卫星数据，请先“刷新TLE”。')
             return
         active_sats = active_sats_list()
-        if not selected_names:
+        if not selected_numbers:
             status.setText('尚未选择卫星，请点击“选择卫星…”勾选要跟踪的卫星。')
             table.setRowCount(0)
             _push_sats_to_map()
@@ -1078,7 +1138,7 @@ def main(parent_window, quick_log_callback=None, title='卫星过境'):
             populate(rows)
             refresh_btn.setEnabled(True)
             obs_info = f'观测站: 纬{lat:.3f}° 经{lon:.3f}° 海拔{alt:.0f}m'
-            sel_info = f' ｜ 已选 {len(selected_names)} 颗'
+            sel_info = f' ｜ 已选 {len(selected_numbers)} 颗'
             status.setText(
                 f'{obs_info}{sel_info} ｜ 卫星 {len(active_sats)} 颗 ｜ 可见过境 {len(rows)} 次')
 
@@ -1156,7 +1216,7 @@ def main(parent_window, quick_log_callback=None, title='卫星过境'):
         win._tle_worker = worker
 
         def on_fetched(s):
-            nonlocal sats, selected_names, auto_prompt_pending
+            nonlocal sats, selected_numbers, auto_prompt_pending
             if getattr(win, '_tle_worker', None) is worker:
                 win._tle_worker = None
             progress_bar.setVisible(False)
@@ -1178,9 +1238,9 @@ def main(parent_window, quick_log_callback=None, title='卫星过境'):
             # 用户关闭对话框后（auto_prompt_pending 置 False）本会话不再自动弹窗。
             if auto_prompt_pending:
                 auto_prompt_pending = False
-                if not selected_names:
+                if not selected_numbers:
                     open_select()
-            if selected_names:
+            if selected_numbers:
                 run_prediction()
             # 若地图窗口已打开，同步最新的「已选卫星」列表（名称/轨道根数）
             _push_sats_to_map()
@@ -1262,10 +1322,10 @@ def main(parent_window, quick_log_callback=None, title='卫星过境'):
         for w in list(getattr(mutual_window, '_open_windows', [])):
             fn = getattr(w, 'apply_remote_selection', None)
             if callable(fn):
-                fn('自选卫星', selected_names)
+                fn('自选卫星', selected_numbers)
 
     def open_select():
-        nonlocal selected_names
+        nonlocal selected_numbers
         if not sats:
             QMessageBox.information(win, '暂无卫星', '请先刷新 TLE。')
             return
@@ -1275,14 +1335,14 @@ def main(parent_window, quick_log_callback=None, title='卫星过境'):
         # 「清除所有选择」后直接重建一个全新的选择窗口（而非在原窗口逐项重置，
         # 数千颗时后者会因反复重排/刷新而明显卡顿）。循环直到用户确定或取消为止。
         while True:
-            dlg = SatelliteSelectDialog(win, names, selected_names, satnums)
+            dlg = SatelliteSelectDialog(win, names, selected_numbers, satnums)
             if dlg.exec() == QDialog.Accepted:
                 # 对话框已在 accept() 里拦住超量选择，这里再裁一次作兜底
-                selected_names, _ = sp.clamp_selected_count(dlg.get_selected())
+                selected_numbers, _ = sp.clamp_selected_count(dlg.get_selected())
                 break
             if not dlg.reset_requested:
                 return   # 用户取消：什么都不做
-            selected_names = set()   # 已确认清除 → 以空选择重开新窗口
+            selected_numbers = set()   # 已确认清除 → 以空选择重开新窗口
         _persist()
         run_prediction()
         _push_selection_to_mutual()
@@ -1318,7 +1378,7 @@ def main(parent_window, quick_log_callback=None, title='卫星过境'):
                % (len(imported), n_updated, n_added, len(sats)))
         # 需求：导入不自动选择。保持用户原有勾选不变，新导入的卫星需自行勾选。
         #msg += '\n\n导入不会自动勾选卫星，如需跟踪请在「选择卫星」中勾选。'
-        #if sats and not selected_names:
+        #if sats and not selected_numbers:
             #msg += '\n当前尚未勾选任何卫星。'
         QMessageBox.information(win, '导入完成', msg)
         run_prediction()
@@ -1344,8 +1404,8 @@ def main(parent_window, quick_log_callback=None, title='卫星过境'):
 
         def on_sel_change(filter_mode, sel):
             """通联预测里改了自选卫星 / 范围，实时同步回本窗口。"""
-            nonlocal selected_names
-            selected_names = sel
+            nonlocal selected_numbers
+            selected_numbers = sel
             _persist()
             if sats:
                 run_prediction()
@@ -1436,13 +1496,13 @@ def main(parent_window, quick_log_callback=None, title='卫星过境'):
         r = last_rows[row_index]
         preset = r.get('preset')
         # 提示：该卫星显示名未配置 TQSL/LoTW 映射，记录后名称可能不被 LoTW/TQSL 识别
-        if preset and not sp.has_tqsl_mapping(r['name']):
+        if preset and not sp.has_tqsl_mapping(r['name'], number=r.get('satnum')):
             QMessageBox.warning(
                 win, 'TQSL 映射提醒',
                 f'卫星「{r["name"]}」未找到 TQSL / LoTW 名称映射，\n'
                 f'记录将以原始名称「{preset.get("sat_name", r["name"])}」保存，'
                 f'可能不会被 LoTW / TQSL 正确识别。\n'
-                f'可点击工具栏「编辑TQSL映射」使用记事本补充该卫星的映射。')
+                f'可点击工具栏「编辑TQSL映射」补充该卫星的映射。')
         if quick_log_callback is not None:
             quick_log_callback(preset)
         else:
@@ -1529,7 +1589,7 @@ def main(parent_window, quick_log_callback=None, title='卫星过境'):
             if prompt_over_limit_selection(
                     win, _oversized_from_settings, sp.MAX_SELECTED_SATELLITES,
                     source_hint='设置文件 file/m_xml.txt 中保存的自选卫星已超过上限。'):
-                selected_names.clear()
+                selected_numbers.clear()
                 _persist()
 
         refresh_tle(force=False)  # 后台获取 TLE 并预测（界面已先显示）

@@ -9,15 +9,18 @@
      关窗不做任何提示（未保存更改直接丢弃）
   C. 集成：设置窗口只剩「设置星历数据源」入口按钮（没有内嵌列表）、打开独立窗口、
      重复打开复用同一窗口、保存更改不再往 m_xml.txt 写 sat_tle_sources
+  D. **每行的启用开关** + **打开/改地址/添加后自动测延迟**（没有「测试延迟」按钮）
 
 不污染用户数据：全程把 sp.TLE_SOURCES_PATH / sp.SETTINGS_PATH 指向临时文件；
 仅最后一项需要真实 file/m_xml.txt 时先备份字节、结束时还原。
+延迟探测会把 satellite_pred.probe_tle_source 换成离线桩，绝不联网。
 """
 
 import os
 import shutil
 import sys
 import tempfile
+import time
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
@@ -34,6 +37,19 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 REAL_SETTINGS = os.path.join(ROOT, 'file', 'm_xml.txt')
 
 RESULT = []
+
+# 延迟探测的离线桩：按 URL 返回预置结果（不联网）；未登记的给 100 ms 成功。
+DELAY_ROLE = Qt.ItemDataRole.UserRole + 1
+OK_ROLE = Qt.ItemDataRole.UserRole + 4
+DELAYS = {}
+REAL_PROBE = sp.probe_tle_source
+
+
+def fake_probe(url, timeout=sp.TLE_PROBE_TIMEOUT):
+    return DELAYS.get(url, (True, 100, ''))
+
+
+sp.probe_tle_source = fake_probe
 
 
 def ok(name, cond, extra=''):
@@ -74,12 +90,42 @@ def data_lines():
 
 
 def make_window():
-    """开一个真实的「星历数据源」窗口并返回 (win, list, buttons)。"""
+    """开一个真实的「星历数据源」窗口并返回 (win, list, buttons)。
+
+    窗口打开后会自动测一遍延迟，这里顺带把事件循环跑到测完为止，
+    免得后续断言撞上「测试中…」的中间态。
+    """
     win = QMainWindow()
     tsw.main(win)
     lst = win.findChildren(QListWidget)[0]
     buttons = {b.text(): b for b in win.findChildren(QPushButton)}
+    settle(lst)
     return win, lst, buttons
+
+
+def settle(lst, limit=400):
+    """把事件循环跑到所有行的延迟都测完为止（探测在后台线程，结果走队列信号）。"""
+    for _ in range(limit):
+        app.processEvents()
+        time.sleep(0.003)
+        if all((lst.item(i).data(DELAY_ROLE) or '') not in ('', '测试中…')
+               for i in range(lst.count())):
+            return True
+    return False
+
+
+def delays(lst):
+    return [lst.item(i).data(DELAY_ROLE) for i in range(lst.count())]
+
+
+def checks(lst):
+    return [lst.item(i).checkState() == Qt.CheckState.Checked
+            for i in range(lst.count())]
+
+
+def raw_text():
+    """数据源文件原文（含注释与禁用行）。"""
+    return open(SRC_FILE, encoding='utf-8').read()
 
 
 def row_texts(lst):
@@ -269,6 +315,121 @@ try:
     ok('恢复默认后保存落盘', file_urls() == DEFAULT, str(file_urls()))
     QMessageBox.warning = _real_warning
     QMessageBox.information = _real_information
+
+    # ---------------- D. 启用开关 + 自动测延迟 ----------------
+    print()
+    print('D. 启用开关 + 打开/改地址即自动测延迟')
+
+    sp.save_tle_sources([DEFAULT[0], MIRROR_A])
+    win_e, lst_e, btn_e = make_window()
+    widgets.append(win_e)
+
+    # 打开窗口就自动测延迟（不需要点任何按钮）
+    ok('每行都是可勾选的启用开关',
+       all(lst_e.item(i).flags() & Qt.ItemFlag.ItemIsUserCheckable
+           for i in range(lst_e.count())))
+    ok('文件里的源默认都是启用状态', checks(lst_e) == [True, True], str(checks(lst_e)))
+    ok('打开窗口即自动测延迟（不经手任何按钮）',
+       all(d.endswith(' ms') for d in delays(lst_e)), str(delays(lst_e)))
+    ok('延迟只进显示、不进地址文本（数据/显示分离）',
+       all(' ms' not in lst_e.item(i).text() for i in range(lst_e.count())),
+       str(row_texts(lst_e)))
+    ok('界面上依然没有「测试延迟」按钮',
+       all('测试' not in t for t in btn_e), str(sorted(btn_e)))
+    # 行宽必须等于视口宽：否则行比视口宽 → 出现横向滚动条，右端延迟会被推出去看不见
+    ok('行宽固定为视口宽（延迟不会被挤出可视区）',
+       lst_e.horizontalScrollBar().maximum() == 0
+       and all(lst_e.visualItemRect(lst_e.item(i)).width() == lst_e.viewport().width()
+               for i in range(lst_e.count())),
+       '滚动条=%d 行宽=%s 视口=%d' % (
+           lst_e.horizontalScrollBar().maximum(),
+           [lst_e.visualItemRect(lst_e.item(i)).width() for i in range(lst_e.count())],
+           lst_e.viewport().width()))
+
+    # 重新探测时先把「测试中…」写上（说明真的在测，而不是一直显示旧值）
+    DELAYS[MIRROR_A] = (False, 4200, '超时')
+    set_text(lst_e, 1, MIRROR_B)      # 改地址 → 自动重测该行
+    app.processEvents()
+    ok('改完地址立刻进入「测试中…」',
+       lst_e.item(1).data(DELAY_ROLE) == '测试中…',
+       str(lst_e.item(1).data(DELAY_ROLE)))
+    settle(lst_e)
+    ok('重测后显示新地址的延迟', lst_e.item(1).data(DELAY_ROLE) == '100 ms',
+       str(lst_e.item(1).data(DELAY_ROLE)))
+    DELAYS[MIRROR_B] = (False, 4200, '超时')
+    set_text(lst_e, 1, MIRROR_A)      # 改回去 → 应测出「超时」
+    settle(lst_e)
+    ok('测不通的源显示原因（超时）', lst_e.item(1).data(DELAY_ROLE) == '超时',
+       str(lst_e.item(1).data(DELAY_ROLE)))
+    ok('测不通时记录 ok=False', lst_e.item(1).data(OK_ROLE) is False)
+
+    # 取消勾选 → 只影响启用状态、先不落盘；保存后写成「# 地址」
+    lst_e.item(1).setCheckState(Qt.CheckState.Unchecked)
+    app.processEvents()
+    settle(lst_e)
+    ok('取消勾选后有待保存更改', btn_e['保存'].isEnabled())
+    ok('取消勾选只改启用状态，不自动落盘',
+       file_urls() == [DEFAULT[0], MIRROR_A], str(file_urls()))
+    ok('取消勾选后地址文本不变', row_texts(lst_e) == [DEFAULT[0], MIRROR_A],
+       str(row_texts(lst_e)))
+    btn_e['保存'].click()
+    _txt = raw_text()
+    ok('禁用项在文件里写成「# 地址」',
+       ('# %s' % MIRROR_A) in _txt, repr(_txt.splitlines()[-3:]))
+    ok('启用项仍是不带 # 的普通行', data_lines() == [DEFAULT[0]], str(data_lines()))
+    ok('禁用后 load_tle_sources 只返回启用的源',
+       sp.load_tle_sources() == [DEFAULT[0]], str(sp.load_tle_sources()))
+    ok('启用状态能被重新读出',
+       sp.load_tle_source_entries() == [(DEFAULT[0], True), (MIRROR_A, False)],
+       str(sp.load_tle_source_entries()))
+
+    # 重开窗口：勾选状态按文件回填
+    win_e2, lst_e2, btn_e2 = make_window()
+    widgets.append(win_e2)
+    ok('重开窗口按文件回填启用状态', checks(lst_e2) == [True, False], str(checks(lst_e2)))
+    ok('被禁用的源不再参与下载（load_tle_sources 已排除）',
+       sp.load_tle_sources() == [DEFAULT[0]])
+
+    # 不允许把最后一个启用的源也关掉（此刻只有第 0 行是启用的）
+    lst_e2.item(0).setCheckState(Qt.CheckState.Unchecked)
+    app.processEvents()
+    ok('拒绝关掉最后一个启用的源',
+       lst_e2.item(0).checkState() == Qt.CheckState.Checked, str(checks(lst_e2)))
+    ok('拒绝时说明原因（至少保留一个启用）',
+       any('至少' in l.text() and '启用' in l.text()
+           for l in win_e2.findChildren(QLabel)),
+       str([l.text() for l in win_e2.findChildren(QLabel)]))
+    ok('被拒绝的改动不置脏（「保存」仍不可用）', not btn_e2['保存'].isEnabled())
+    ok('被拒绝的改动不写文件', file_urls() == [DEFAULT[0]], str(file_urls()))
+
+    # 重新启用 → 该行再次自动测延迟
+    lst_e2.item(1).setCheckState(Qt.CheckState.Checked)
+    app.processEvents()
+    settle(lst_e2)
+    ok('重新启用后该行自动重测延迟',
+       lst_e2.item(1).data(DELAY_ROLE) == '超时',
+       str(lst_e2.item(1).data(DELAY_ROLE)))
+
+    # 添加地址 → 自动测该行
+    _real_get_e = QInputDialog.getText
+    QInputDialog.getText = staticmethod(lambda *a, **k: (MIRROR_B, True))
+    try:
+        btn_e2['添加'].click()
+    finally:
+        QInputDialog.getText = _real_get_e
+    ok('新添加的源立刻进入「测试中…」',
+       lst_e2.item(2).data(DELAY_ROLE) == '测试中…',
+       str(lst_e2.item(2).data(DELAY_ROLE)))
+    DELAYS[MIRROR_B] = (True, 55, '')
+    settle(lst_e2)
+    ok('新添加的源测出延迟', lst_e2.item(2).data(DELAY_ROLE) == '55 ms',
+       str(lst_e2.item(2).data(DELAY_ROLE)))
+    ok('添加后本次会话仍未落盘（要点「保存」）',
+       file_urls() == [DEFAULT[0]], str(file_urls()))
+
+    # 收尾：把文件恢复成上一段结束时的样子，后面的断言沿用这个基准
+    sp.save_tle_sources(DEFAULT)
+    ok('收尾还原文件（回到只有内置默认源）', file_urls() == DEFAULT, str(file_urls()))
 
     # --- 未保存更改时关窗：不做任何提示，直接丢弃并关闭 ---
     set_text(lst, 0, MIRROR_B)   # 制造未保存更改
