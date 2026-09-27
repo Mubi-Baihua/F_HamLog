@@ -169,14 +169,18 @@ jobs:
       # 2. Nuitka 独立打包
       # ------------------------------------------------------------------
       # 缓存 main.build：源码未变动的模块会跳过 C 编译与链接，显著加速下一次打包
+      # 键里必须带上 exe 名：Nuitka 把 result_exe 写进 SCons 命令行（main.build/scons-debug.py），
+      # 命令行一变 SCons 会判定 1244 个目标全部失效 → 全量重编（约 1.3 GB 中间产物重来）。
+      # preview.yml 用的是「F HamLog 2 Preview」，与本工作流的「F HamLog 2」不同，
+      # 因此 restore-keys 只回退到「同 exe 名」为止，绝不跨名回退 —— 否则会捞到对方那份
+      # 记录了另一个 result_exe 的构建目录，白白全量重编。
       - name: 缓存 Nuitka 构建目录
         uses: actions/cache@v4
         with:
           path: main.build
-          key: ${{ runner.os }}-nuitka-build-${{ inputs.python_version }}-${{ hashFiles('*.py') }}
+          key: ${{ runner.os }}-nuitka-build-${{ inputs.python_version }}-${{ inputs.app_exe_name }}-${{ hashFiles('*.py') }}
           restore-keys: |
-            ${{ runner.os }}-nuitka-build-${{ inputs.python_version }}-
-            ${{ runner.os }}-nuitka-build-
+            ${{ runner.os }}-nuitka-build-${{ inputs.python_version }}-${{ inputs.app_exe_name }}-
 
       - name: Nuitka 独立打包
         run: |
