@@ -9,10 +9,19 @@
 ;       → 版本号全自动，安装包名形如 “F HamLog 2.4 setup.exe”
 ;    3. 中文语言文件用仓库内置的 .github\inno\ChineseSimplified.isl
 ;       （GitHub 托管运行器的 Inno Setup 不带非官方中文语言包）
+;    4. MyAppName / MyAppId 也可由 /D 注入，供 preview.yml 生成与正式版
+;       共存、互不覆盖的预览安装包（F HamLog 2 Preview）
 ;
 ;  本地调试用法（在仓库根目录执行）：
 ;    ISCC.exe /DMyAppVersion=2.4.0 ^
 ;             /DOutputBaseFilename="F HamLog 2.4 setup" ^
+;             /DRepoRoot="D:\F-Dev\BIG\F_HamLog" ^
+;             ".github\inno\F HamLog 2.iss"
+;  预览包调试用法：
+;    ISCC.exe /DMyAppVersion=UTC-20260927-1835 ^
+;             /DMyAppName="F HamLog 2 Preview" ^
+;             /DMyAppId="{{2AF71D4C-3B58-4E6A-9A21-6E10B7F3C4D8}" ^
+;             /DOutputBaseFilename="F HamLog 2 Preview UTC-20260927-1835 setup" ^
 ;             /DRepoRoot="D:\F-Dev\BIG\F_HamLog" ^
 ;             ".github\inno\F HamLog 2.iss"
 ; ============================================================================
@@ -22,12 +31,23 @@
   #define RepoRoot AddBackslash(SourcePath) + "..\.."
 #endif
 
+; ---- 已由命令行 /D 定义、或用户自定义的变量（无需再定义）--------------------
+; MyAppName 可能由 preview.yml 以 /DMyAppName="F HamLog 2 Preview" 注入，
+; ISCC 在“已定义”时执行 #ifndef 会打印编译警告，故先用 #ifdef 短路。
+#ifdef MyAppName
+  #define MyAppNamePreview
+#endif
+
 ; ---- 可被命令行 /D 覆盖的变量 ----------------------------------------------
 #ifndef MyAppVersion
   #define MyAppVersion "2.4.0"
 #endif
-#ifndef MyAppName
+#ifndef MyAppNamePreview
   #define MyAppName "F HamLog 2"
+#endif
+; 应用唯一标识：正式版与 Preview 必须不同，否则两个包会互相覆盖/共用卸载项
+#ifndef MyAppId
+  #define MyAppId "{{9C87FCB8-00FD-4889-8E7B-02B5789015C0}"
 #endif
 #ifndef MyAppExeName
   #define MyAppExeName "F HamLog 2.exe"
@@ -51,7 +71,8 @@
 
 [Setup]
 ; AppId 与参考脚本相同 —— 安装包之间的升级关系依赖它，切勿修改
-AppId={{9C87FCB8-00FD-4889-8E7B-02B5789015C0}
+; （Preview 流程会 /DMyAppId 传入另一个 GUID，以与正式版共存、互不覆盖）
+AppId={#MyAppId}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
@@ -99,3 +120,11 @@ Name: "{app}\file"; Check: not DirExists(ExpandConstant('{app}\file'))
 [Icons]
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
+
+[INI]
+; 避免重复安装时堆叠多个键：Inno 的 [INI] 写入是「追加」语义（同一文件重复运行会
+; 把键再写一遍），因此用 destructive 标志让每次安装都把 version.txt 整个重建。
+; {app}\file 是安装包对用户数据的“存在则保留”保护范围，version.txt 属于本包自己
+; 维护的版本标识（不属用户数据），因此覆盖它是预期行为。
+Filename: "{app}\file\version.txt"; Section: "version"; Key: "version"; String: "{#MyAppVersion}"; Flags: uninsdeleteentry createkeyifdoesntexist
+Filename: "{app}\file\version.txt"; Section: "version"; Key: "version"; String: "{#MyAppVersion}"

@@ -2,6 +2,47 @@
 
 > 由 MEMORY.md 分流出来的、可从代码复现的描述性细节。改协议/算法前先看这里。
 
+## 主题系统（theme.py）
+- 基线 = `6d48024`（2026-09-27 回退）：`_adopt_platform_palette()` 在目标明暗与平台调色板一致时
+  **直接采用平台给的调色板**，不再自建兜底色。手动深色与系统深色因此是同一套原生色
+  （Win11 深 `#1e1e1e`/浅 `#f3f3f3`）。
+- 被否决的旧方案（勿再走）：`5e9fcbe` 的「深浅一律自建调色板 `#353535/#252525` + 全局
+  `app.setStyleSheet` 覆盖输入控件」；`Fusion` 样式（用户：「太丑了」）。
+- 取色 API：`hint_css()/warn_css()/link_css()`、`hint_color()/warn_color()/link_color()`、
+  `subtle_bg()`、`border_color()`、`is_dark(widget)`；长期窗口用 `theme.watch_theme(控件, 回调)`。
+- `theme_mode` 存 `m_xml.txt`，「设置」下拉即改即生效并落盘。
+- 坑：① 控件 QSS 的 `background-color` 会**反写进该控件调色板**，取色要用未被染色的父/兄弟控件；
+  ② **`app.palette()` 的拷贝不能直接 `setPalette`**（Qt 视为未变忽略），必须手工 `QPalette()` 补全；
+  ③ **验证颜色生效必须看渲染像素**（`widget.grab().toImage().pixelColor(...)`），不能只读 `palette()`
+  ——`windows11` 样式会给 `QLineEdit` 等硬绘白底、无视 `Base` 角色；
+  ④ `theme._diag()` 诊断日志是 opt-in：`touch file/theme_debug.log` 开启，删掉即关闭。
+- 注意：基线平台调色板的 `AlternateBase` 在 windows11 深色下给纯白，仅影响用了
+  `setAlternatingRowColors` 的 `tle_source_window` 列表；主日志表格未用，无影响。
+
+## 文件对话框
+- 定稿：**一律原生**——调用处直接静态调 `QFileDialog.getOpenFileName/getOpenFileNames/getSaveFileName`
+  （共 16 处）；`dialog_defaults.py` 只提供 `desktop_dir()`（默认打开=桌面）。
+- 中文由系统给、深浅色跟随系统。**已被用户否决、勿再走**：Qt 自绘 + 汉化 + 补词条
+  （自绘丢了原生对话框的中文、快速访问/OneDrive 侧栏、缩略图）。本机 Qt 6.11 根本不产出
+  Win32 `#32770`，「原生 + DWM」是 no-op；Qt 自绘默认英文，必须 `installTranslator`。
+
+## 主界面与文件结构
+- `main.py` → `project.py`（主日志窗）；`batch_project.py` 批量、`set.py` 设置、
+  `export_adi/output_adi/output_excel/input_*` 导入导出、`fhl_rw.py` 持久化。
+- 内存日志 `file` = list[dict]，字段：date/time/m_call/o_call/freq(上行)/freq_rx(下行)/mode/
+  prop_mode/sat_name/m_rst/o_rst/m_qth/o_qth/m_dig/o_dig/m_ant/o_ant/m_pow/o_pow/notes。
+  **无 `record`**（通联录音已删）。主页表格 **14 列**，末列「更多」。
+- `.fhl` = utf-8 JSON，可选 AES-GCM。设置 `file/m_xml.txt` 是 `eval` 的 dict，**一律 `.get` 读**。
+- 不纳入主题化（勿误改）：`#remote_project.py`（历史备份、无引用）、
+  `F_HamLog_Remote_Log_Server_2.0.0/main.py`（独立服务端，改后须重打包）。
+
+## 设置键（file/m_xml.txt）
+m_call / m_qth / m_dig / aouto_save / aouto_list / m_lat / m_lon / m_alt /
+sat_auto_update / sat_update_hours(1–168) / sat_last_update / sat_b_lat / sat_b_lon / sat_b_alt /
+sat_mu_el_a / sat_mu_el_b / sat_mu_dur / sat_mu_filter / sat_mu_sats / sat_map_hours(1~24 默认 3) /
+sat_dur(1~240) / sat_sats / mu_sats / **theme_mode**。
+**星历数据源不在其中**（独立文件 `file/tle_sources.txt`）。
+
 ## 卫星模块 API
 - `satellite_pred.py` 用 `skyfield`+`numpy` 做全部天文计算（SGP4、仰角/方位、过境），离线 `load.timescale(builtin=True)`。
 - `twoline2rv` 返回包装 `EarthSatellite` 的 `Satrec`，含 `.name/.satnum/._earth_sat`；另有 `observe`、`subpoint`（→lat/lon/alt）、`ground_track`（批量星下点+台站仰角）、`predict_passes`（find_events 求 AOS/MAX/LOS，`duration_sec` 秒级）、`fetch_amateur_tle`、`parse_tle_text`、`SATE_BANDS`、`app_path(rel)`。
@@ -61,12 +102,45 @@
 - 客户端「多人日志管理」窗：可最小化的非模态 `QDialog`（`project.open_multiplayer_manager`，640×640），`window._mp_dialog` 单例复用。
 
 ## 发布流程细节（GitHub Actions）
-- `.github/workflows/main.yml` 手动 `workflow_dispatch`，一次跑完：Nuitka 打包 → Inno Setup 6 安装包 → 兼容版压缩包 → 发 Releases。仓库 `github.com/Mubi-Baihua/F_HamLog`，主分支 `develop`。
-- 命名由输入 `version` 推导（先 `-replace '\.0$',''` 得 display）：安装包 `F HamLog 2.4 setup.exe`、兼容版 `F HamLog 2.4兼容版.zip`；Release 附件沿用点号风格 `F.HamLog.2.4.setup.exe` / `F.HamLog.2.4.zip`，外加仓库内已打包的 `F_HamLog_Remote_Log_Server_2.0.0.exe`（不重打包）。安装包内部 AppVersion 仍用完整版本。
-- `.github/inno/F HamLog 2.iss` 为 CI 专用（AppId 与本地一致故升级关系不变；路径走 `RepoRoot`，版本/包名/ExeName 由 `/D` 注入）；`.github/inno/ChineseSimplified.isl` 内置中文语言文件（运行器 Inno 6.7.1 不带非官方中文包），`.gitattributes` 锁 CRLF。
+- 三个文件：`main.yml`（手动发布）、`preview.yml`（提交即预览）、`.github/inno/F HamLog 2.iss`（CI 专用 Inno 脚本）。
+- **产物保存位置（回写分支用）**：安装包 → `F HamLog 2 Inno Setup/F HamLog <display> setup.exe`；
+  兼容版 → `兼容版/F HamLog <display>兼容版.zip`。提交信息 `打包 <version> [skip ci]`。
+- **`main.yml`** 手动 `workflow_dispatch`，一次跑完：Nuitka 打包 → Inno 6 安装包 → 兼容版 zip
+  → **回写运行分支** → 发 Releases（**默认草稿**）。
+- **`preview.yml`** `push`(main/develop) + `workflow_dispatch`；`paths-ignore`
+  `F HamLog 2 Inno Setup/**`、`兼容版/**`、`**/*.md`、`.workbuddy/**`（防自动提交自触发）；
+  `concurrency.cancel-in-progress: true`；`permissions: contents:read + actions:write`；
+  版本号 = `UTC-yyyyMMdd-HHmm`(UTC)；主程序 exe 与 AppName = `F HamLog 2 Preview`；
+  AppId 独立 GUID；上传 Artifact 前删同名旧 Artifact（`gh api …/actions/artifacts?name=` +
+  `--method DELETE`，删除失败只 warning）；**不建 Release、不回写分支**。
+- 命名推导（`-replace '\.0$',''` 得 display）：安装包 `F HamLog 2.4 setup.exe`、兼容版
+  `F HamLog 2.4兼容版.zip`；Release 附件沿用点号 `F.HamLog.2.4.setup.exe` / `F.HamLog.2.4.zip`，
+  外加仓库内已打包的 `F_HamLog_Remote_Log_Server_2.0.0.exe`（不重打包）。安装包内部 AppVersion 用完整版本。
+- `.iss`：AppId 与本地一致故升级关系不变（正式版默认 GUID `{{9C87FCB8-…}`）；路径走 `RepoRoot`，
+  Version/包名/ExeName/**AppName**/**AppId** 由 `/D` 注入；`.github/inno/ChineseSimplified.isl`
+  内置中文语言文件（运行器 Inno 6.7.1 不带非官方中文包），`.gitattributes` 锁 CRLF。
+  - `MyAppName` 可注入的写法：`#ifdef MyAppName` → `#define MyAppNamePreview` 短路，
+    再 `#ifndef MyAppNamePreview` 兜底 `#define MyAppName "F HamLog 2"`
+    （ISPP 对已定义再 `#ifndef` 会打警告）。
+  - `[INI]` 段在 `{app}\file\version.txt` 写版本标识，**必须带 destructive 标志**
+    `Flags: uninsdeleteentry createkeyifdoesntexist`——否则 Inno 的 [INI] 是**追加**语义，
+    重复安装会把键堆叠多份。见 daily log 2026-09-27「续15」的实测。
 - 缓存：pip、Nuitka 辅助工具、`.venv`（按 `第三方模块.txt` 哈希）、`main.build`（按 `*.py` 哈希）。
-- **改脚本必记的坑**：① PowerShell 里紧跟中文的变量必须写 `${var}`（`"$display兼容版"` 会被当成一个变量名，值静默变空）；② `VersionInfo.ProductVersion` 由系统补尾部空格，比较前必须 `.Trim()`；③ `GITHUB_ENV`/摘要用 `[System.IO.File]::AppendAllLines`+`UTF8Encoding($false)`（统一 `shell: pwsh`）；④ 多行文本数组不要 `[string[]]` 强转（会被拼成一行），用 `List[string]` 逐行 `Add`；⑤ 7-Zip 打包 `Push-Location main.dist; 7z a -tzip <dst> *`；⑥ `nuitka.__version__` 在 4.x 已移除，用 `importlib.metadata.version('nuitka')`；⑦ `run:` 双引号串里别写 `${{ }}`，用 `$env:GITHUB_REPOSITORY`/`$env:GITHUB_SHA`。
-- 本地验证：PyYAML 解析工作流 → 抽 `run` → `[Parser]::ParseFile` 查语法（**目标路径必须内联进命令串**：`ParseFile('')` 恒「无错误」→ 假通过）；再用桩 `gh.cmd` 前置 `PATH` 演练各步。本机已装 Inno 6.7.3 与 7-Zip。
+- **改脚本必记的坑**：① PowerShell 里紧跟中文的变量必须写 `${var}`（`"$display兼容版"` 会被当成
+  一个变量名，值静默变空——已实测）；② `VersionInfo.ProductVersion` 由系统补尾部空格，比较前必须 `.Trim()`；
+  ③ `GITHUB_ENV`/摘要用 `[System.IO.File]::AppendAllLines`+`UTF8Encoding($false)`（统一 `shell: pwsh`）；
+  ④ 多行文本数组不要 `[string[]]` 强转（会被拼成一行），用 `List[string]` 逐行 `Add`；
+  ⑤ 7-Zip 打包 `Push-Location main.dist; 7z a -tzip <dst> *`；
+  ⑥ `nuitka.__version__` 在 4.x 已移除，用 `importlib.metadata.version('nuitka')`；
+  ⑦ `run:` 双引号串里别写 `${{ }}`，用 `$env:GITHUB_REPOSITORY`/`$env:GITHUB_SHA`。
+- **回写分支的 git 序列**（必须 `fetch` + `checkout -B` 让工作区与远程一致，否则非快进推送失败）：
+  `git fetch origin $GITHUB_REF_NAME` → `git checkout -B <b> origin/<b>` → 复制产物 →
+  `git add -- <仅两个产物路径>` → `git diff --cached --quiet` 判幂等 → `commit` → `push origin HEAD:<b>`。
+  bot 身份用 `-c user.name/user.email` 传，不改全局 config。已用临时裸远程演练非快进/幂等/再提交三种情形。
+- **本地验证方法**：PyYAML 解析工作流 → 抽 `run` → `[Parser]::ParseFile` 查语法
+  （**目标路径必须内联进命令串**：`ParseFile('')` 恒「无错误」→ 假通过）；
+  再用桩 `gh.cmd` 前置 `PATH` 演练各步。本机已装 Inno 6.7.3 与 7-Zip。
+  本机 PowerShell 工具**无法启动 GUI 安装程序**（小探针包也会超时），GUI 安装验证另想办法。
 
 ## 卫星选择对话框：搜索/置顶/超限机制
 - `SatelliteSelectDialog` 搜索过滤预计算 `self._norm`，计数显示「匹配 N / 共 M 颗」，全选/全不选**只作用于可见项**；维护 `self._row_names`（行号→卫星名）以便按行号隐藏；过滤后 `scrollToItem(首个匹配项, PositionAtTop)`。**搜索期间被隐藏但已勾选的项，点「确定」仍保留在 `get_selected()`（有意设计）**。

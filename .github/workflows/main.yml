@@ -5,8 +5,13 @@ name: 发布 F HamLog（Nuitka → Inno Setup → 兼容版压缩包 → Release
 #   1. Nuitka 打包（保留 pip / 虚拟环境 / Nuitka 构建目录缓存，加速下次打包）
 #   2. Inno Setup 6 生成安装包（版本号自动注入，文件名形如 "F HamLog 2.4 setup.exe"）
 #   3. 生成兼容版压缩包（免安装，解压即用）
-#   4. 发布到 Releases（tag = 填入的版本号；附件 = 安装包 + 兼容版压缩包 + 远程日志服务端）
+#   4. 把安装包与兼容版压缩包回写到运行分支的约定目录并提交
+#      （安装包 → F HamLog 2 Inno Setup/ ；兼容版 → 兼容版/）
+#   5. 发布到 Releases（tag = 填入的版本号；附件 = 安装包 + 兼容版压缩包 + 远程日志服务端）
+#      默认发布为**草稿**，确认无误后在 Releases 页面手动点击发布
 #      说明内容留空，由作者在 Releases 页面手动填写
+#
+# 另见 preview.yml：每次提交自动打包为「预览版」并只上传 Artifact，不写分支、不发 Release。
 on:
   workflow_dispatch:
     inputs:
@@ -28,7 +33,7 @@ on:
       draft:
         description: '是否发布为草稿（true / false）'
         required: false
-        default: 'false'
+        default: 'true'
       upload_debug_artifact:
         description: '是否额外上传 main.dist 构建产物（调试用，会明显变慢）'
         required: false
@@ -84,6 +89,9 @@ jobs:
             ASSET_SETUP   = "F.HamLog.$display.setup.exe"
             ASSET_ZIP     = "F.HamLog.$display.zip"
             RELEASE_TITLE = "F HamLog $display($version)"
+            # 回写运行分支用的相对路径（与历次手工提交的位置保持一致）
+            COMMIT_SETUP  = "F HamLog 2 Inno Setup/F HamLog $display setup.exe"
+            COMMIT_ZIP    = "兼容版/F HamLog ${display}兼容版.zip"
           }
           # 显式按“无 BOM 的 UTF-8”写 GITHUB_ENV，避免不同 shell 下 Out-File 带 BOM 导致环境变量被污染
           $utf8NoBom = New-Object System.Text.UTF8Encoding $false
@@ -198,6 +206,15 @@ jobs:
           Write-Host "主程序：$exe（$size MB）"
           Write-Host 'main.dist 文件数：' ([System.IO.Directory]::GetFiles("$env:GITHUB_WORKSPACE\main.dist", '*', 'AllDirectories').Count)
 
+      # 放在打包之后，避免为「调试用」白等十几分钟
+      - name: 上传构建产物（调试用）
+        if: ${{ inputs.upload_debug_artifact == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: F-HamLog-dist
+          path: main.dist
+          if-no-files-found: error
+
       # ------------------------------------------------------------------
       # 3. Inno Setup 6 生成安装包（自动注入版本号）
       # ------------------------------------------------------------------
@@ -271,6 +288,50 @@ jobs:
           Write-Host "兼容版压缩包：$dst（$size MB）"
 
       # ------------------------------------------------------------------
+      # 4b. 把两个产物回写到运行分支（与历次手工提交的位置一致）
+      # ------------------------------------------------------------------
+      - name: 提交产物到运行分支
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          # 分支上的完整历史会一并取回：这里要先让工作区与远程一致，
+          # 否则随后的 commit 会基于 checkpoint 时的旧 HEAD 造成非快进推送。
+          git fetch origin $env:GITHUB_REF_NAME
+          if ($LASTEXITCODE -ne 0) { throw "拉取分支 $env:GITHUB_REF_NAME 失败" }
+          git checkout -B $env:GITHUB_REF_NAME "origin/$env:GITHUB_REF_NAME"
+          if ($LASTEXITCODE -ne 0) { throw "切换到分支 $env:GITHUB_REF_NAME 失败" }
+
+          $setupSrc = Join-Path $env:GITHUB_WORKSPACE "release\$env:SETUP_BASE.exe"
+          $zipSrc   = Join-Path $env:GITHUB_WORKSPACE "release\$env:ZIP_NAME"
+          $setupDst = Join-Path $env:GITHUB_WORKSPACE $env:COMMIT_SETUP
+          $zipDst   = Join-Path $env:GITHUB_WORKSPACE $env:COMMIT_ZIP
+
+          New-Item -ItemType Directory -Path (Split-Path $setupDst -Parent) -Force | Out-Null
+          New-Item -ItemType Directory -Path (Split-Path $zipDst -Parent) -Force | Out-Null
+          Copy-Item $setupSrc $setupDst -Force
+          Copy-Item $zipSrc   $zipDst   -Force
+
+          Write-Host "安装包   → $env:COMMIT_SETUP"
+          Write-Host "兼容版   → $env:COMMIT_ZIP"
+
+          # 只暂存这两个产物，避免把构建中间目录（main.dist / release / .venv）带进提交
+          git add -- $env:COMMIT_SETUP $env:COMMIT_ZIP
+          if ($LASTEXITCODE -ne 0) { throw '暂存产物失败' }
+
+          git diff --cached --quiet
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host '两个产物内容与分支上的现有文件一致，无需提交'
+          } else {
+            git -c user.name='github-actions[bot]' `
+                -c user.email='41898282+github-actions[bot]@users.noreply.github.com' `
+                commit -m "打包 $env:VERSION [skip ci]"
+            if ($LASTEXITCODE -ne 0) { throw '提交产物失败' }
+            git push origin "HEAD:$env:GITHUB_REF_NAME"
+            if ($LASTEXITCODE -ne 0) { throw '推送产物失败（分支是否有保护规则？）' }
+            Write-Host "已提交并推送到 $env:GITHUB_REF_NAME"
+          }
+
+      # ------------------------------------------------------------------
       # 5. 汇总附件并发布到 Releases
       # ------------------------------------------------------------------
       - name: 准备发布附件
@@ -334,6 +395,9 @@ jobs:
 
           $url = (gh release view $tag -R $repo --json url --jq .url)
           Write-Host "发布完成：$url"
+          if ($isDraft) {
+            Write-Host '当前为草稿：请到 Releases 页面确认无误后手动点击发布。'
+          }
           Write-Host '请到 Releases 页面手动填写说明内容。'
 
           # 逐行构建，避免嵌套数组被 [string[]] 拼接成一行
@@ -342,18 +406,16 @@ jobs:
           $summary.Add('')
           $summary.Add("- tag：``$tag``")
           $summary.Add("- Release：$url")
+          $summary.Add("- 草稿：$isDraft")
           $summary.Add("- 提交：``$env:GITHUB_SHA``")
           $summary.Add('- 说明内容：留空，待手动填写')
           $summary.Add('')
           $summary.Add('### 已上传附件')
           $summary.Add('')
           foreach ($a in $assets) { $summary.Add("- ``$(Split-Path $a -Leaf)``") }
+          $summary.Add('')
+          $summary.Add('### 已回写到运行分支')
+          $summary.Add('')
+          $summary.Add("- ``$env:COMMIT_SETUP``")
+          $summary.Add("- ``$env:COMMIT_ZIP``")
           [System.IO.File]::AppendAllLines($env:GITHUB_STEP_SUMMARY, $summary.ToArray(), (New-Object System.Text.UTF8Encoding $false))
-
-      - name: 上传构建产物（调试用）
-        if: ${{ inputs.upload_debug_artifact == 'true' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: F-HamLog-dist
-          path: main.dist
-          if-no-files-found: error

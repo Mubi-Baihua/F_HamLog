@@ -1,0 +1,330 @@
+name: 预览版 F HamLog（提交即打包 → Artifact）
+
+# 触发方式：每次提交到 main / develop 自动运行（不需要手动点击）。
+# 流程与 main.yml 相同，区别只在产出与去向：
+#   1. Nuitka 打包（主程序 exe 名 = F HamLog 2 Preview，与正式版区分）
+#   2. Inno Setup 6 生成安装包（AppName = F HamLog 2 Preview，AppId 与正式版不同，
+#      故两个包可共存、互不覆盖）
+#   3. 生成兼容版压缩包（免安装，解压即用）
+#   4. 版本号 = 提交时间 UTC-YYYYMMDD-HHMM（如 UTC-20260927-1835）
+#   5. 两个产物上传为 Artifact，并在上传前删除上一份，避免堆积占满额度
+#
+# 不做的事：不提交到任何分支、不创建 Release（要发正式版请手动跑 main.yml）。
+on:
+  push:
+    branches:
+      - main
+      - develop
+    # 自动提交（回写产物、[skip ci]）与文档/记忆类改动不触发预览打包
+    paths-ignore:
+      - 'F HamLog 2 Inno Setup/**'
+      - '兼容版/**'
+      - '**/*.md'
+      - '.workbuddy/**'
+  workflow_dispatch:
+
+# 同一分支只保留最新一次构建；有新提交时直接取消上一轮，既省时间也省额度
+concurrency:
+  group: preview-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  actions: write   # 需要删除上一份 Artifact
+
+env:
+  PYTHON_VERSION: '3.13'
+  # 主程序 exe 名称（不含 .exe）：与正式版区分，安装后的程序也叫这个名字
+  APP_EXE_NAME: 'F HamLog 2 Preview'
+  # 安装包 AppName
+  APP_NAME: 'F HamLog 2 Preview'
+  # 预览安装包的 AppId：必须与正式版（.github/inno/F HamLog 2.iss 里的默认值）不同，
+  # 否则预览包会覆盖/卸载掉正式版
+  APP_ID: '{{2AF71D4C-3B58-4E6A-9A21-6E10B7F3C4D8}'
+  ARTIFACT_NAME: 'F-HamLog-Preview'
+
+jobs:
+  preview:
+    name: 打包预览版
+    runs-on: windows-latest
+    timeout-minutes: 120
+
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      # ------------------------------------------------------------------
+      # 0. 解析版本号（提交时间，UTC）
+      # ------------------------------------------------------------------
+      - name: 解析版本号与产物名称
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          # 约定：显式用 UTC，避免运行器时区（通常就是 UTC）与用户本地时间混淆
+          $version = 'UTC-' + (Get-Date).ToUniversalTime().ToString('yyyyMMdd-HHmm')
+
+          # 注意：紧跟中文的变量必须写成 ${version}，否则 PowerShell 会把「变量名+中文」当一个变量名
+          $map = [ordered]@{
+            VERSION      = $version
+            SETUP_BASE   = "F HamLog 2 Preview $version setup"
+            ZIP_NAME     = "F HamLog 2 Preview ${version}兼容版.zip"
+            RELEASE_TITLE = "F HamLog 2 Preview($version)"
+          }
+          # 显式按“无 BOM 的 UTF-8”写 GITHUB_ENV，避免不同 shell 下 Out-File 带 BOM 导致环境变量被污染
+          $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+          foreach ($k in $map.Keys) {
+            [System.IO.File]::AppendAllLines($env:GITHUB_ENV, [string[]]@("$k=$($map[$k])"), $utf8NoBom)
+            Write-Host "$k = $($map[$k])"
+          }
+
+          Write-Host "主程序 exe：$env:APP_EXE_NAME.exe"
+
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置 Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      # ------------------------------------------------------------------
+      # 1. 依赖与缓存
+      # ------------------------------------------------------------------
+      - name: 缓存 pip 下载
+        uses: actions/cache@v4
+        with:
+          path: ~\AppData\Local\pip\Cache
+          key: ${{ runner.os }}-pip-${{ hashFiles('第三方模块.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      # Nuitka 会下载 depends.exe 等辅助工具，缓存下来下次免下载
+      - name: 缓存 Nuitka 辅助工具
+        uses: actions/cache@v4
+        with:
+          path: ~\AppData\Local\Nuitka
+          key: ${{ runner.os }}-nuitka-tools
+
+      # 直接复用上一次装好的虚拟环境，可省掉数分钟依赖安装时间
+      - name: 缓存虚拟环境（依赖）
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: ${{ runner.os }}-venv-${{ env.PYTHON_VERSION }}-${{ hashFiles('第三方模块.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-venv-${{ env.PYTHON_VERSION }}-
+
+      - name: 准备虚拟环境与依赖
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $venv   = Join-Path $env:GITHUB_WORKSPACE '.venv'
+          $venvPy = Join-Path $venv 'Scripts\python.exe'
+
+          # 缓存命中时先校验依赖是否齐全（Python 补丁版本变化会让旧 venv 失效）
+          $ready = $false
+          if (Test-Path $venvPy) {
+            & $venvPy -c "import PySide6, pandas, openpyxl, skyfield, numpy, cryptography, matplotlib, nuitka" 2>$null
+            if ($LASTEXITCODE -eq 0) { $ready = $true; Write-Host '缓存命中：直接复用虚拟环境' }
+          }
+
+          if (-not $ready) {
+            Write-Host '缓存未命中或已失效：重建虚拟环境并安装依赖'
+            if (Test-Path $venv) { Remove-Item $venv -Recurse -Force }
+            python -m venv $venv
+            if ($LASTEXITCODE -ne 0) { throw '创建虚拟环境失败' }
+            & $venvPy -m pip install --upgrade pip
+            & $venvPy -m pip install pyside6 pandas openpyxl nuitka skyfield numpy cryptography matplotlib
+            if ($LASTEXITCODE -ne 0) { throw '安装依赖失败' }
+          }
+
+          [System.IO.File]::AppendAllLines($env:GITHUB_ENV, [string[]]@("PYTHON_VENV=$venvPy"), (New-Object System.Text.UTF8Encoding $false))
+          # 版本号用 importlib.metadata 读取（Nuitka 4.x 已移除 nuitka.__version__）
+          & $venvPy -c "import sys, importlib.metadata as md; print('Python', sys.version.split()[0]); [print(n, md.version(n)) for n in ('nuitka','PySide6','skyfield','numpy')]"
+
+      # ------------------------------------------------------------------
+      # 2. Nuitka 独立打包
+      # ------------------------------------------------------------------
+      # 缓存 main.build：源码未变动的模块会跳过 C 编译与链接，显著加速下一次打包
+      - name: 缓存 Nuitka 构建目录
+        uses: actions/cache@v4
+        with:
+          path: main.build
+          key: ${{ runner.os }}-nuitka-build-${{ env.PYTHON_VERSION }}-${{ hashFiles('*.py') }}
+          restore-keys: |
+            ${{ runner.os }}-nuitka-build-${{ env.PYTHON_VERSION }}-
+            ${{ runner.os }}-nuitka-build-
+
+      - name: Nuitka 独立打包
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & $env:PYTHON_VENV -m nuitka --standalone `
+            --assume-yes-for-downloads `
+            --output-filename="$env:APP_EXE_NAME" `
+            --main=main.py `
+            --windows-icon-from-ico=file\F_HamLog.ico `
+            --msvc=latest `
+            --windows-console-mode=disable `
+            --enable-plugin=pyside6 `
+            --include-package=skyfield `
+            --include-package-data=skyfield `
+            --include-package=numpy `
+            --include-module=remote_crypto `
+            --windows-uac-admin `
+            --include-data-dir=file=file/
+          if ($LASTEXITCODE -ne 0) { throw "Nuitka 打包失败（退出码 $LASTEXITCODE）" }
+
+      - name: 校验打包产物
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = Join-Path $env:GITHUB_WORKSPACE "main.dist\$env:APP_EXE_NAME.exe"
+          if (-not (Test-Path $exe)) { throw "未找到主程序：$exe" }
+          $size = [math]::Round((Get-Item $exe).Length / 1MB, 1)
+          Write-Host "主程序：$exe（$size MB）"
+          Write-Host 'main.dist 文件数：' ([System.IO.Directory]::GetFiles("$env:GITHUB_WORKSPACE\main.dist", '*', 'AllDirectories').Count)
+
+      # ------------------------------------------------------------------
+      # 3. Inno Setup 6 生成安装包（注入预览用 AppName / AppId / 时间戳版本号）
+      # ------------------------------------------------------------------
+      - name: 生成安装包（Inno Setup 6）
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          # 运行器一般自带 Inno Setup 6，找不到就在常见目录与 Chocolatey 里找
+          $candidates = @(
+            'C:\Program Files (x86)\Inno Setup 6\ISCC.exe',
+            'C:\Program Files\Inno Setup 6\ISCC.exe',
+            (Join-Path $env:LOCALAPPDATA 'Programs\Inno Setup 6\ISCC.exe')
+          )
+          $iscc = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $iscc) {
+            $iscc = (Get-ChildItem 'C:\Program Files (x86)', 'C:\Program Files' -Filter 'ISCC.exe' -Recurse -ErrorAction SilentlyContinue |
+                     Select-Object -First 1).FullName
+          }
+          if (-not $iscc) {
+            Write-Host '未找到 Inno Setup，尝试通过 Chocolatey 安装'
+            choco install innosetup -y --no-progress
+            $iscc = (Get-ChildItem 'C:\Program Files (x86)', 'C:\Program Files' -Filter 'ISCC.exe' -Recurse -ErrorAction SilentlyContinue |
+                     Select-Object -First 1).FullName
+          }
+          if (-not $iscc) { throw '未找到 ISCC.exe，无法生成安装包' }
+          Write-Host "使用编译器：$iscc"
+
+          $script = Join-Path $env:GITHUB_WORKSPACE '.github\inno\F HamLog 2.iss'
+          & $iscc `
+            "/DMyAppVersion=$env:VERSION" `
+            "/DMyAppName=$env:APP_NAME" `
+            "/DMyAppId=$env:APP_ID" `
+            "/DOutputBaseFilename=$env:SETUP_BASE" `
+            "/DMyAppExeName=$env:APP_EXE_NAME.exe" `
+            "/DRepoRoot=$env:GITHUB_WORKSPACE" `
+            $script
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup 编译失败（退出码 $LASTEXITCODE）" }
+
+          $setup = Join-Path $env:GITHUB_WORKSPACE "release\$env:SETUP_BASE.exe"
+          if (-not (Test-Path $setup)) { throw "未生成安装包：$setup" }
+
+          # 校验版本号确实注入成功（ProductVersion 由系统补空格，必须 Trim 后比较）
+          $actual = ([string](Get-Item $setup).VersionInfo.ProductVersion).Trim()
+          if ($actual -ne $env:VERSION) {
+            throw "安装包版本号不一致：期望 $env:VERSION，实际 $actual"
+          }
+          $size = [math]::Round((Get-Item $setup).Length / 1MB, 1)
+          Write-Host "安装包：$setup（$size MB，版本 $actual）"
+
+      # ------------------------------------------------------------------
+      # 4. 兼容版压缩包（免安装）
+      # ------------------------------------------------------------------
+      - name: 生成兼容版压缩包
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $src = Join-Path $env:GITHUB_WORKSPACE 'main.dist'
+          $dst = Join-Path $env:GITHUB_WORKSPACE "release\$env:ZIP_NAME"
+          if (Test-Path $dst) { Remove-Item $dst -Force }
+
+          $sevenZip = 'C:\Program Files\7-Zip\7z.exe'
+          if (Test-Path $sevenZip) {
+            Push-Location $src
+            try {
+              & $sevenZip a -tzip -mx=5 $dst *
+              if ($LASTEXITCODE -ne 0) { throw "7-Zip 压缩失败（退出码 $LASTEXITCODE）" }
+            } finally { Pop-Location }
+          } else {
+            Compress-Archive -Path (Join-Path $src '*') -DestinationPath $dst -CompressionLevel Optimal
+          }
+
+          if (-not (Test-Path $dst)) { throw "未生成兼容版压缩包：$dst" }
+          $size = [math]::Round((Get-Item $dst).Length / 1MB, 1)
+          Write-Host "兼容版压缩包：$dst（$size MB）"
+
+      # ------------------------------------------------------------------
+      # 5. 上传 Artifact（先删除上一份，避免堆积）
+      # ------------------------------------------------------------------
+      - name: 准备上传文件
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $out = Join-Path $env:GITHUB_WORKSPACE 'preview_assets'
+          if (Test-Path $out) { Remove-Item $out -Recurse -Force }
+          New-Item -ItemType Directory -Path $out -Force | Out-Null
+
+          Copy-Item (Join-Path $env:GITHUB_WORKSPACE "release\$env:SETUP_BASE.exe") $out -Force
+          Copy-Item (Join-Path $env:GITHUB_WORKSPACE "release\$env:ZIP_NAME") $out -Force
+
+          Get-ChildItem $out -File | ForEach-Object {
+            Write-Host ("上传文件：{0}（{1} MB）" -f $_.Name, [math]::Round($_.Length / 1MB, 1))
+          }
+
+      - name: 删除上一份预览产物
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Artifact 有存储额度，且这里每提交一次就产出一份（每份约 170 MB），
+          # 因此每次上传前把上一份同名 Artifact 全部删掉，始终只保留最新一份。
+          # 删除失败（例如本来就没有、或权限不足）不中断构建，只提示。
+          $ids = @()
+          try {
+            $json = gh api "repos/$env:GITHUB_REPOSITORY/actions/artifacts?name=$env:ARTIFACT_NAME&per_page=100"
+            if ($LASTEXITCODE -eq 0 -and $json) {
+              $ids = @(($json | ConvertFrom-Json).artifacts | ForEach-Object { $_.id })
+            }
+          } catch {
+            Write-Warning "查询上一份 Artifact 失败：$_"
+          }
+
+          if ($ids.Count -eq 0) {
+            Write-Host "没有需要删除的旧 Artifact（$env:ARTIFACT_NAME）"
+          } else {
+            Write-Host "删除 $($ids.Count) 份旧 Artifact：$($ids -join ', ')"
+            foreach ($id in $ids) {
+              gh api --method DELETE "repos/$env:GITHUB_REPOSITORY/actions/artifacts/$id"
+              if ($LASTEXITCODE -ne 0) { Write-Warning "删除 Artifact $id 失败（继续）" }
+            }
+          }
+
+      - name: 上传预览产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: preview_assets
+          if-no-files-found: error
+
+      - name: 写入构建摘要
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $setup = Join-Path $env:GITHUB_WORKSPACE "release\$env:SETUP_BASE.exe"
+          $zip   = Join-Path $env:GITHUB_WORKSPACE "release\$env:ZIP_NAME"
+
+          $summary = New-Object System.Collections.Generic.List[string]
+          $summary.Add("## 预览版构建完成：$env:VERSION")
+          $summary.Add('')
+          $summary.Add("- 主程序 exe：``$env:APP_EXE_NAME.exe``")
+          $summary.Add("- 安装包 AppName：``$env:APP_NAME``（AppId 与正式版不同，可共存）")
+          $summary.Add("- 提交：``$env:GITHUB_SHA``")
+          $summary.Add('')
+          $summary.Add('### 产物（Artifact：``' + $env:ARTIFACT_NAME + '``）')
+          $summary.Add('')
+          $summary.Add(("- ``{0}``（{1} MB）" -f (Split-Path $setup -Leaf), [math]::Round((Get-Item $setup).Length / 1MB, 1)))
+          $summary.Add(("- ``{0}``（{1} MB）" -f (Split-Path $zip -Leaf), [math]::Round((Get-Item $zip).Length / 1MB, 1)))
+          $summary.Add('')
+          $summary.Add('> 上一份预览 Artifact 已在上传前删除，Actions 页只保留本次产物。')
+          [System.IO.File]::AppendAllLines($env:GITHUB_STEP_SUMMARY, $summary.ToArray(), (New-Object System.Text.UTF8Encoding $false))
