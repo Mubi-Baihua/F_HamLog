@@ -18,6 +18,7 @@ import copy
 import call_upper
 import backup
 import theme
+import toast_tip
 import remote_crypto
 import remote_server
 from remote_server import send_frame, recv_frame, LogServer, get_lan_ip
@@ -610,7 +611,7 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
     def undo():
         global file
         if not undo_stack:
-            QMessageBox.information(window, "撤销", "没有可撤销的操作。")
+            toast_tip.show_toast("没有可撤销的操作。", window)
             return
         redo_stack.append(copy.deepcopy(file))
         file = undo_stack.pop()
@@ -619,7 +620,7 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
     def redo():
         global file
         if not redo_stack:
-            QMessageBox.information(window, "重做", "没有可重做的操作。")
+            toast_tip.show_toast("没有可重做的操作。", window)
             return
         undo_stack.append(copy.deepcopy(file))
         file = redo_stack.pop()
@@ -654,16 +655,16 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
     def copy_from_main():
         rows = get_selected_row_indexes()
         if not rows:
-            QMessageBox.information(window, "复制", "请先勾选或选中要复制的行。")
+            toast_tip.show_toast("请先勾选或选中要复制的行。", window)
             return
         records = [file[r] for r in rows]
         if copy_records_to_clipboard(records):
-            QMessageBox.information(window, "复制", f"已复制 {len(records)} 条日志到剪贴板。")
+            toast_tip.show_toast(f"已复制 {len(records)} 条日志到剪贴板。", window)
 
     def paste_to_main():
         text = QApplication.clipboard().text()
         if not text or not text.strip():
-            QMessageBox.information(window, "粘贴", "剪贴板为空或不是文本。")
+            toast_tip.show_toast("剪贴板为空或不是文本。", window)
             return
         lines = [ln for ln in text.replace('\r\n', '\n').split('\n') if ln != '']
         if not lines:
@@ -677,7 +678,7 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
             elif h in label_to_field:
                 field_index[label_to_field[h]] = i
         if not field_index:
-            QMessageBox.warning(window, "粘贴", "剪贴板内容无法识别为日志数据。")
+            toast_tip.show_toast("剪贴板内容无法识别为日志数据。", window, kind='warning')
             return
         new_records = []
         for ln in lines[1:]:
@@ -692,7 +693,7 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         snapshot_before()
         file.extend(new_records)
         table_update()
-        QMessageBox.information(window, "粘贴", f"已粘贴 {len(new_records)} 条日志。")
+        toast_tip.show_toast(f"已粘贴 {len(new_records)} 条日志。", window)
 
 
     def table_context_menu(pos):
@@ -1039,7 +1040,7 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         save_path = sp
         _bk_snapshot()  # 复位快照 → 消除“未保存”标记
         window.setWindowTitle(f'F HamLog 2 - {os.path.basename(save_path)}')
-        QMessageBox.information(window, "保存成功", "已保存恢复的内容。")
+        toast_tip.show_toast("已保存恢复的内容。", window)
         return True
 
     def save(message=True):
@@ -1049,11 +1050,11 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
             try:
                 rc.send_save(file)
             except Exception as e:
-                QMessageBox.warning(window, "保存失败", f"无法保存到服务端：{e}")
+                toast_tip.show_toast(f"无法保存到服务端：{e}", window, kind='warning')
                 return False
             _bk_snapshot()
             if message:
-                QMessageBox.information(window, "保存成功", "已保存到服务端！")
+                toast_tip.show_toast("已保存到服务端！", window)
             return True
 
         with open('file/m_xml.txt', 'r', encoding='utf-8') as f:
@@ -1078,7 +1079,7 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
             backup.clear_backup(backup.PROJECT_BACKUP)
             _bk_snapshot()
             if message:
-                QMessageBox.information(window, "保存成功", "保存成功！")
+                toast_tip.show_toast("保存成功！", window)
         return True
 
     def osave():
@@ -1095,7 +1096,7 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         fhl_rw.write_fhl_file(sp,file,key)
         backup.clear_backup(backup.PROJECT_BACKUP)
         _bk_snapshot()
-        QMessageBox.information(window, "另存成功", "另存成功！")
+        toast_tip.show_toast("另存成功！", window)
         return True
 
     def esave():
@@ -1103,9 +1104,9 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         if rc is not None:
             try:
                 rc.send_save(file)
-                QMessageBox.information(window, "保存成功", "已保存到服务端，多人日志已关闭。")
+                toast_tip.show_toast("已保存到服务端，多人日志已关闭。", window)
             except Exception as e:
-                QMessageBox.warning(window, "保存失败", str(e))
+                toast_tip.show_toast("保存失败：" + str(e), window, kind='warning')
             window.close()
             return
         import json
@@ -1120,7 +1121,7 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
             fhl_rw.write_fhl_file(save_path,file,key)
             backup.clear_backup(backup.PROJECT_BACKUP)
             _bk_snapshot()
-            QMessageBox.information(window, "保存成功", "保存成功！")
+            toast_tip.show_toast("保存成功！", window)
         sys.exit()
 
     def input_HAM_tolls_():
@@ -1352,7 +1353,7 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         若未勾选任何行，则回退删除当前高亮选中的行。删除前二次确认，
         并记入撤销点（Ctrl+Z 可恢复），删除后自动重建表格并落盘。'''
         if table is None:
-            QMessageBox.warning(window, "删除失败", "当前未加载日志表。")
+            toast_tip.show_toast("当前未加载日志表。", window, kind='warning')
             return
         # 1) 优先收集“选择”列（第0列）中已勾选的行
         checked_rows = []
@@ -1374,8 +1375,9 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
                     rows.add(r)
             checked_rows = sorted(rows)
         if not checked_rows:
-            QMessageBox.warning(window, "删除失败",
-                "没有可删除的日志：请先在“选择”列勾选要删除的行，或直接选中（高亮）这些行。")
+            toast_tip.show_toast(
+                "没有可删除的日志：请先在“选择”列勾选要删除的行，或直接选中（高亮）这些行。",
+                window, kind='warning')
             return
         # 二次确认（破坏性操作）
         count = len(checked_rows)
@@ -1806,10 +1808,10 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
                     for idx in table_r.selectionModel().selectedRows():
                         recs.append(file[matches[idx.row()][0]])
                 if not recs:
-                    QMessageBox.information(window, "复制", "请先勾选要复制的行。")
+                    toast_tip.show_toast("请先勾选要复制的行。", window)
                     return
                 if copy_records_to_clipboard(recs):
-                    QMessageBox.information(window, "复制", f"已复制 {len(recs)} 条日志到剪贴板。")
+                    toast_tip.show_toast(f"已复制 {len(recs)} 条日志到剪贴板。", window)
             act_copy.triggered.connect(do_copy)
             menu.addAction(act_copy)
             menu.addSeparator()
@@ -2114,7 +2116,7 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
             try:
                 _rc().send_save(file)
             except Exception as e:
-                QMessageBox.warning(window, '保存失败', str(e))
+                toast_tip.show_toast('保存失败：' + str(e), window, kind='warning')
         else:
             if save_path:
                 fhl_rw.write_fhl_file(save_path, file, key)
