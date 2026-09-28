@@ -78,7 +78,12 @@ def read_fhl_file(file_path,key=None):
     return data,key
 
 def write_fhl_file(file_path, data, key=None):
-    """写入fhl文件，支持加密"""
+    """写入fhl文件，支持加密。
+
+    性能说明：先 json.dumps 到内存字符串再一次性写入，替代 json.dump(data, f)。
+    后者会对文件对象发起几十万次小 write 调用（约 8 次/记录 × 记录数），上万条日志时
+    光是 I/O 调用开销就要 1 秒以上；一次性写入后同样的内容只需几十毫秒。
+    """
     if key:
         try:
             json_data = json.dumps(data, ensure_ascii=False)
@@ -88,8 +93,9 @@ def write_fhl_file(file_path, data, key=None):
         except Exception as e:
             QMessageBox.warning(None, "加密失败", f"请检查密钥是否正确。\n错误信息：{e}")
     else:
+        text = json.dumps(data, ensure_ascii=False, indent=4)
         with open(file_path, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=4)
+            f.write(text)
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)

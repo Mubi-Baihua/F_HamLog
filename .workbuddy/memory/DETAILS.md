@@ -150,3 +150,18 @@ sat_dur(1~240) / sat_sats / mu_sats / **theme_mode**。
 - `m_xml` 中的自选超限不再静默裁剪：两处 `main()` 读 `sat_sats`/`mu_sats` 后先 `clamp_selected_count` 兜底（防卡）并记 `_oversized_from_settings`，`win.show()` 之后弹提示，选清除则 `selected_names.clear()` + `_persist()`。
 - 计数标签 = `self._count_base` 缓存基数 + `　已选 N 颗`，超限追加「，超过上限 250 颗」并转红。
 - `import_tle()` **不再自动勾选**（保持用户原有勾选），导入结果按 NORAD 编号增量并入并写回星历缓存，同样受上限约束。测试 `test_max_selected_smoke.py`（36 项，含重开循环模拟与 m_xml 超限提示三分支）。
+
+## 主表格性能优化（2026-09-28）——测试钩子与离屏坑
+- `project.main` 末尾暴露 `window._perf_api`：`table_update / set_all_rows_checked /
+  invert_rows_checked / get_selected_row_indexes / get_selected_records / checked_rows / get_table`。
+  离屏脚本用它驱动 main 内部闭包（这些闭包无法从外部直接拿到）。
+- **测跑 `project.main` 的脚本必须把 `backup.PROJECT_BACKUP` 重定向到临时目录**
+  （`backup.PROJECT_BACKUP = os.path.join(tmpdir,'project_backup.fhl')`），否则会把生成数据
+  写进用户真实 `file/project_backup.fhl`（踩过，已 `git checkout --` 还原）。
+- 离屏脚本应 `atexit` 还原 `file/m_xml.txt` 并清掉 `*.func_bak` 等临时备份。
+- `get_selected_records()` 在未勾选任何行时会弹模态 `QMessageBox.warning` → 离屏脚本会**卡死**；
+  测试需临时 monkeypatch `QMessageBox.warning` 为 no-op。
+- `project_others()` 打开的「更多信息」QMainWindow 在 offscreen 下会阻塞事件循环 →
+  冒烟脚本**不要真去点「更多」列做 GUI 断言**，改为断言委托已挂载 + `_click_cb` 非空。
+- **输出经管道（`| tail`/`head`）时的 SIGPIPE/SIGTERM 假象**：脚本其实跑完了，
+  只是被管道提前关闭杀掉；判定结果请用 `grep` 抓 `RESULT=`/`通过` 行，别只看退出码。

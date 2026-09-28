@@ -51,6 +51,37 @@
 - 超限提示统一走 `prompt_over_limit_selection(...)`；`accept()` 超限不关闭 →
   `reset_requested=True`+`reject()`，调用方 `while True:` 重开。测试 `test_max_selected_smoke.py`。
 
+## 主表格（project.py）——长日志性能定稿
+- **勾选列 / 「更多」列一律用自绘委托**（`CheckColumnDelegate`/`MoreButtonDelegate`），
+  **禁止再逐行 `setCellWidget` 塞 QWidget/QCheckBox/QPushButton**（10000 行 = 2 万控件 → 卡死）。
+- **勾选状态唯一权威 = 闭包集合 `_checked_rows`**；委托只回调 `on_toggle(row, checked)`
+  （主表 `_tbl_check_toggle`、搜索窗 `_sr_toggle`），**委托不直接改 model**（否则 item 与集合分叉）。
+- 表格统一由 `_new_table()` + `_fill_rows()` 构建（冻结刷新、批量 setItem）。
+  列定义常量 `_TABLE_HEADERS/_TABLE_COL_WIDTHS/_TABLE_FIELDS`，主表与搜索窗共用。
+- **UI 必须与旧版逐项一致（用户硬要求）**：14 列**全部显式设宽**（`_TABLE_COL_WIDTHS=[45,80,70,90,90,70,80,90,90,80,80,120,120,80]`）；
+  **不启用 `stretchLastSection`**；**不强制行高**（旧 `setDefaultSectionSize(24)` 本就是注释掉的，行高走 Qt 默认）；
+  委托外观对齐旧控件（勾选指示器走 `PM_IndicatorWidth`；
+  「更多」按钮几何 = **宽度铺满单元格无左右缩进**、高度 26 居中，对应旧 `QPushButton.setFixedHeight(26)` 铺满整格）。
+  **改表格前先 `git show HEAD:project.py` 对照原实现，别自行加"优化"。**
+- 全选/反选/取消选择 = 集合运算 + 批量写回，**不再逐行 findChild**。
+- **`table_update(delete=True, persist=True, scroll_to_bottom=False)`**：
+  `scrollToBottom()` **只在 `scroll_to_bottom=True`** 时执行。传 True 的**恰好三处**：
+  ① 首次打开项目（`table_update(delete=False)` + `table_update(scroll_to_bottom=True)`）；
+  ② `new()` 保存 —— 「新建日志」窗口（Ctrl+N）；
+  ③ `append_to_project()` —— 卫星「记录」/「批量记录」保存回调。
+  其余重建（排序/编辑/删除/**点「更多」保存**/导入/撤销/远程同步）**不得跳底**，须保持当前滚动位置。
+- **重建必须还原滚动位置**（否则每次新建 QTableWidget 都回顶部）：重建前记
+  `table.verticalScrollBar().value()`，重建后 **`QTimer.singleShot(0, lambda: bar.setValue(target))`**
+  延迟设回——**必须延到事件循环下一轮**，否则视口高度未定会被布局重置回顶部。
+  `scrollToBottom` 同理需延迟（同步调用会少滚 1 行）。行数变少时 setValue 自动收敛，无需 clamp。
+- **`table_update` 的重建耗时可接受（~0.6s/万行）**；行数 ≥2000 时显示 `WaitCursor`。
+- **`save()` 有「未变更跳过」**：靠 `_last_written={'path','json'}` 判「同路径+同内容」；
+  **首次保存必须执行**（勿简化为只比对 `_bk_state`，否则破坏「普通项目打开即自动保存一次」）。
+  写文件统一走 `_write_project_file(path)`（返回快照供 `_bk_snapshot(snap)` 复用）。
+- **`fhl_rw.write_fhl_file` 必须 `json.dumps` 后一次性 `f.write`**，
+  **禁止 `json.dump(data, f)`**（上千条起会退化为几十万次小 write）。
+- 测试钩子：`project.main` 末尾 `window._perf_api`（见 `DETAILS.md`/当日日志）。
+
 ## 呼号统一大写（call_upper.py）
 - `UpperCallDelegate` + `connect_callsign_upper(edit, field_getter)`（仅 m_call/o_call）；
   接入点见 `DETAILS.md`。挂完 `setItemDelegateForRow` 必须
