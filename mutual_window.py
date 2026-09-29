@@ -76,7 +76,7 @@ class StationBox(QGroupBox):
         self.el_spin.setRange(0, 90)
         self.el_spin.setValue(int(min_el))
         self.el_spin.setSuffix(' °')
-        self.el_spin.setToolTip('本站的最低可用仰角：低于该仰角认为天线被遮挡 / 信号不可用，不计入可通联时间。')
+#         self.el_spin.setToolTip('本站的最低可用仰角：低于该仰角认为天线被遮挡 / 信号不可用，不计入可通联时间。')
 
         grid.addWidget(QLabel('网格:'), 1, 0)
         grid.addWidget(self.grid_edit, 1, 1)
@@ -269,32 +269,32 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
     start_edit.setText(datetime.datetime.now(LOCAL_TZ).strftime('%Y-%m-%d %H:%M'))
     start_edit.setPlaceholderText('YYYY-MM-DD HH:MM')
     start_edit.setMinimumWidth(150)
-    start_edit.setToolTip('预测起始时刻（系统本地时间），默认当前时间，支持 YYYY-MM-DD HH:MM 或带秒。')
+#     start_edit.setToolTip('预测起始时刻（系统本地时间），默认当前时间，支持 YYYY-MM-DD HH:MM 或带秒。')
 
     dur_spin = QSpinBox()
     dur_spin.setRange(sp.MIN_PREDICT_HOURS, sp.MAX_PREDICT_HOURS)
     dur_spin.setValue(mu_dur)
-    dur_spin.setToolTip('预测时间跨度，最长 %d 小时（10 天）。'
-                        % sp.MAX_PREDICT_HOURS)
+    dur_spin.setToolTip('预测时长：最长 %d 小时（10 天）' % sp.MAX_PREDICT_HOURS)
 
     sel_btn = QPushButton('选择卫星…')
+    sel_btn.setToolTip('选择卫星：最多 %d 颗' % sp.MAX_SELECTED_SATELLITES)
 
     refresh_btn = QPushButton('刷新星历')
 
     def update_tle_tooltip():
         """按最新配置生成「刷新星历」的提示（数据源见独立窗口「设置 → 星历数据源…」）。"""
         sources = sp.load_tle_sources()
-        refresh_btn.setToolTip(
-            '按下面列出的数据源依次下载卫星星历(TLE)，先列出的优先 '
-            '（可在「设置 → 星历数据源…」独立窗口中增删与排序）：\n'
-            + '\n'.join('%d. %s' % (i + 1, u) for i, u in enumerate(sources)))
+#         refresh_btn.setToolTip(
+#             '按下面列出的数据源依次下载卫星星历(TLE)，先列出的优先 '
+#             '（可在「设置 → 星历数据源…」独立窗口中增删与排序）：\n'
+#             + '\n'.join('%d. %s' % (i + 1, u) for i, u in enumerate(sources)))
 
     update_tle_tooltip()
 
     clear_tle_btn = QPushButton('清空星历')
-    clear_tle_btn.setToolTip(
-        '删除本地星历缓存并清空当前卫星列表；\n'
-        '自选卫星的选择保留，之后用「刷新星历」重新下载。')
+#     clear_tle_btn.setToolTip(
+#         '删除本地星历缓存并清空当前卫星列表；\n'
+#         '自选卫星的选择保留，之后用「刷新星历」重新下载。')
 
     par.addWidget(QLabel('开始时间:'))
     par.addWidget(start_edit)
@@ -307,10 +307,10 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
     par.addWidget(refresh_btn)
     par.addWidget(clear_tle_btn)
     map_btn = QPushButton('卫星地图')
-    map_btn.setToolTip(
-        '打开全球卫星地图：显示所有已选卫星（与上方“范围/自选卫星”实时同步）'
-        '自当前时刻起的地面轨迹与实时位置，以及本台站与对方台站。\n'
-        '在结果表中点选一行，该卫星会在地图上聚焦高亮。')
+#     map_btn.setToolTip(
+#         '打开全球卫星地图：显示所有已选卫星（与上方“范围/自选卫星”实时同步）'
+#         '自当前时刻起的地面轨迹与实时位置，以及本台站与对方台站。\n'
+#         '在结果表中点选一行，该卫星会在地图上聚焦高亮。')
     par.addWidget(map_btn)
     layout.addWidget(par_grp)
 
@@ -424,11 +424,11 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
             for i in range(start, end):
                 r = rows[i]
                 name_item = QTableWidgetItem(r['name'])
-                name_item.setToolTip(
-                    'A 站方位 %.0f°→%.0f°\nB 站方位 %.0f°→%.0f°\n'
-                    '最佳时刻两站仰角较低者：%.1f°'
-                    % (r['a_az'][0], r['a_az'][1], r['b_az'][0], r['b_az'][1],
-                       r['best_min_elev']))
+#                 name_item.setToolTip(
+#                     'A 站方位 %.0f°→%.0f°\nB 站方位 %.0f°→%.0f°\n'
+#                     '最佳时刻两站仰角较低者：%.1f°'
+#                     % (r['a_az'][0], r['a_az'][1], r['b_az'][0], r['b_az'][1],
+#                        r['best_min_elev']))
                 table.setItem(i, 0, name_item)
                 start_txt = r['start_str'] + ('（截断）' if r['clipped'] else '')
                 table.setItem(i, 1, QTableWidgetItem(start_txt))
@@ -438,7 +438,7 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
                 table.setItem(i, 5, QTableWidgetItem(f"{r['b_max_elev']:.1f}°"))
                 table.setItem(i, 6, QTableWidgetItem(r['best_str']))
                 btn = QPushButton('记录')
-                btn.setToolTip('打开批量记录窗口并预填该卫星的卫星名/传播模式/收发频率等信息')
+#                 btn.setToolTip('打开批量记录窗口并预填该卫星的卫星名/传播模式/收发频率等信息')
                 btn.clicked.connect(lambda _checked=False, i=i: log_row(i))
                 table.setCellWidget(i, 7, btn)
 

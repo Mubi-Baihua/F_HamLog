@@ -210,9 +210,9 @@ def main(window=None, on_save=None):
     src_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
     # 自绘：左边地址、右边延迟（延迟不进 item.text()）
     src_list.setItemDelegate(SourceItemDelegate(src_list))
-    src_list.setToolTip(
-        '双击某一项即可编辑地址（需以 http:// 或 https:// 开头）。\n'
-        '行尾显示的是自动测得的响应延迟。')
+#     src_list.setToolTip(
+#         '双击某一项即可编辑地址（需以 http:// 或 https:// 开头）。\n'
+#         '行尾显示的是自动测得的响应延迟。')
     # 选中行不整行填充蓝色：用主题链接色文字 + 透明背景表示选中（保留斑马纹底色）
     src_list.setStyleSheet(_list_qss())
     layout.addWidget(src_list, 1)
@@ -239,13 +239,13 @@ def main(window=None, on_save=None):
     reset_btn = QPushButton('恢复默认', central)
     save_btn = QPushButton('保存', central)
     close_btn = QPushButton('关闭', central)
-    add_btn.setToolTip('插入一个空行并进入编辑：可直接输入 TLE 下载地址（可为 Celestrak 之外的镜像）')
-    del_btn.setToolTip('删除选中项（至少保留一个数据源）')
-    up_btn.setToolTip('上移：提高优先级')
-    down_btn.setToolTip('下移：降低优先级')
-    reset_btn.setToolTip('恢复为内置默认数据源（Celestrak 全部活动卫星）')
-    save_btn.setToolTip('把当前列表写入配置文件，并关闭本窗口')
-    close_btn.setToolTip('关闭本窗口（未保存的更改将被丢弃）')
+#     add_btn.setToolTip('插入一个空行并进入编辑：可直接输入 TLE 下载地址（可为 Celestrak 之外的镜像）')
+#     del_btn.setToolTip('删除选中项（至少保留一个数据源）')
+#     up_btn.setToolTip('上移：提高优先级')
+#     down_btn.setToolTip('下移：降低优先级')
+#     reset_btn.setToolTip('恢复为内置默认数据源（Celestrak 全部活动卫星）')
+#     save_btn.setToolTip('把当前列表写入配置文件，并关闭本窗口')
+#     close_btn.setToolTip('关闭本窗口（未保存的更改将被丢弃）')
     btn_row.addWidget(add_btn)
     btn_row.addWidget(del_btn)
     btn_row.addWidget(up_btn)
@@ -293,8 +293,8 @@ def main(window=None, on_save=None):
         url = item.text().strip()
         checked = item.checkState() == Qt.CheckState.Checked
         delay = item.data(_ROLE_DELAY) or '尚未测试'
-        item.setToolTip('%s\n%s ｜ 延迟：%s\n（双击可编辑地址，方框切换启用）'
-                        % (url, '已启用' if checked else '已禁用', delay))
+#         item.setToolTip('%s\n%s ｜ 延迟：%s\n（双击可编辑地址，方框切换启用）'
+#                         % (url, '已启用' if checked else '已禁用', delay))
 
     def _entries():
         """当前列表内容（含启用状态），顺序即优先级。"""

@@ -1339,21 +1339,17 @@ class MapWindow(QMainWindow):
         ctl.addWidget(QLabel('显示:'))
         self._combo = QComboBox()
         self._combo.setMinimumWidth(190)
-        self._combo.setToolTip(
-            '「全部已选卫星」= 来源窗口（卫星过境 / 通联预测）当前选中范围内的所有卫星；\n'
-            '也可只看其中某一颗（选中即成为聚焦卫星，整条加粗并显示覆盖区）。\n'
-            '来源窗口修改自选卫星后，这里会实时同步；直接在地图上点击卫星也可聚焦。')
+#         self._combo.setToolTip(
+#             '「全部已选卫星」= 来源窗口（卫星过境 / 通联预测）当前选中范围内的所有卫星；\n'
+#             '也可只看其中某一颗（选中即成为聚焦卫星，整条加粗并显示覆盖区）。\n'
+#             '来源窗口修改自选卫星后，这里会实时同步；直接在地图上点击卫星也可聚焦。')
         ctl.addWidget(self._combo)
 
         ctl.addWidget(QLabel('轨迹时长(小时):'))
         self._hours = QSpinBox()
         self._hours.setRange(MIN_TRACK_HOURS, MAX_TRACK_HOURS)
         self._hours.setValue(int(self._track_hours))
-        self._hours.setToolTip(
-            '地面轨迹的时间跨度：从「当前时刻」起，向后延伸这么多小时（最长 %d 小时）。\n'
-            '与「预测时长」相互独立；此处的设置会被记住，下次打开地图时自动恢复，\n'
-            '并与另一个来源窗口（卫星过境 / 通联预测）打开的地图保持一致。'
-            % MAX_TRACK_HOURS)
+        self._hours.setToolTip('轨迹时长：最长 %d 小时' % MAX_TRACK_HOURS)
         self._hours.valueChanged.connect(self._on_hours)
         ctl.addWidget(self._hours)
 
@@ -1361,9 +1357,9 @@ class MapWindow(QMainWindow):
         self._max_spin = QSpinBox()
         self._max_spin.setRange(1, MAX_SHOW_LIMIT)
         self._max_spin.setValue(DEFAULT_MAX_SHOW)
-        self._max_spin.setToolTip(
-            '同时在地图上显示的卫星数量上限（按名称顺序取前 N 颗）。\n'
-            '已选卫星过多时地图会很拥挤，可调小；需要全看时调大。')
+#         self._max_spin.setToolTip(
+#             '同时在地图上显示的卫星数量上限（按名称顺序取前 N 颗）。\n'
+#             '已选卫星过多时地图会很拥挤，可调小；需要全看时调大。')
         self._max_spin.valueChanged.connect(self._on_max_changed)
         ctl.addWidget(self._max_spin)
 
@@ -1374,9 +1370,9 @@ class MapWindow(QMainWindow):
         self._el_a_spin.setRange(0, 90)
         self._el_a_spin.setSuffix(' °')
         self._el_a_spin.setValue(int(round(self._min_elev)))
-        self._el_a_spin.setToolTip(
-            '本站（台站 A）最低可用仰角：低于该仰角的弧段不计入「可见区段」'
-            '（地图上实线加粗的部分）。与来源窗口共享同一设置。')
+#         self._el_a_spin.setToolTip(
+#             '本站（台站 A）最低可用仰角：低于该仰角的弧段不计入「可见区段」'
+#             '（地图上实线加粗的部分）。与来源窗口共享同一设置。')
         self._el_a_spin.valueChanged.connect(self._on_el_a)
         ctl.addWidget(self._el_a_spin)
 
@@ -1386,9 +1382,9 @@ class MapWindow(QMainWindow):
         self._el_b_spin.setRange(0, 90)
         self._el_b_spin.setSuffix(' °')
         self._el_b_spin.setValue(int(round(self._min_elev_b)))
-        self._el_b_spin.setToolTip(
-            '对方台站 B 最低可用仰角：低于该仰角的弧段不计入「对方可见区段」'
-            '（地图上虚线加粗的部分）。仅在通联预测（存在对方台站）时可用。')
+#         self._el_b_spin.setToolTip(
+#             '对方台站 B 最低可用仰角：低于该仰角的弧段不计入「对方可见区段」'
+#             '（地图上虚线加粗的部分）。仅在通联预测（存在对方台站）时可用。')
         self._el_b_spin.valueChanged.connect(self._on_el_b)
         ctl.addWidget(self._el_b_spin)
         self._el_b_label.setVisible(self._station_b_valid())
@@ -1401,8 +1397,8 @@ class MapWindow(QMainWindow):
 
         self._chk_foot = QCheckBox('覆盖区')
         self._chk_foot.setChecked(True)
-        self._chk_foot.setToolTip(
-            '显示卫星 0° 仰角覆盖范围。多星同显时只画聚焦卫星（及 5 颗以内时的全部卫星），避免遮挡。')
+#         self._chk_foot.setToolTip(
+#             '显示卫星 0° 仰角覆盖范围。多星同显时只画聚焦卫星（及 5 颗以内时的全部卫星），避免遮挡。')
         self._chk_foot.toggled.connect(self._on_chk_foot)
         ctl.addWidget(self._chk_foot)
 
@@ -1417,8 +1413,8 @@ class MapWindow(QMainWindow):
         ctl.addWidget(self._chk_twilight)
 
         self._marker_mgr_btn = QPushButton('标记点管理')
-        self._marker_mgr_btn.setToolTip(
-            '使用记事本编辑地图标记点（名称/网格/纬度/经度/颜色）。')
+#         self._marker_mgr_btn.setToolTip(
+#             '使用记事本编辑地图标记点（名称/网格/纬度/经度/颜色）。')
         self._marker_mgr_btn.clicked.connect(self._open_marker_manager)
         ctl.addWidget(self._marker_mgr_btn)
 

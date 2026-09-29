@@ -165,7 +165,7 @@ def main(window):
     aouto_list_.setChecked(aouto_list_b)
     sat_auto_update = QCheckBox("星历自动更新", central_widget)
     sat_auto_update.setChecked(sat_auto_update_b)
-    sat_auto_update.setToolTip("开启后，程序会在后台按设定间隔自动刷新卫星星历(TLE)")
+#     sat_auto_update.setToolTip("开启后，程序会在后台按设定间隔自动刷新卫星星历(TLE)")
     sat_update_hours_spin = QSpinBox(central_widget)
     sat_update_hours_spin.setRange(1, 168)
     sat_update_hours_spin.setValue(sat_update_hours)
@@ -180,8 +180,8 @@ def main(window):
     _idx = theme_mode_box.findData(theme.load_mode())
     if _idx >= 0:
         theme_mode_box.setCurrentIndex(_idx)
-    theme_mode_box.setToolTip('跟随系统：随系统深浅色自动切换；浅色/深色：固定外观。'
-                              '改动立即生效并保存，无需点「保存更改」。')
+#     theme_mode_box.setToolTip('跟随系统：随系统深浅色自动切换；浅色/深色：固定外观。'
+#                               '改动立即生效并保存，无需点「保存更改」。')
 
     def on_theme_mode_changed(_index=None):
         mode = theme_mode_box.currentData()
@@ -205,9 +205,9 @@ def main(window):
 
     # ---------- 星历数据源：按钮与「插件设置」同一行（数据源配置在独立窗口） ----------
     src_set_btn = QPushButton("设置星历数据源", central_widget)
-    src_set_btn.setToolTip(
-        "在独立的「星历数据源」窗口中增删与排序 TLE 下载地址，列表里双击即可编辑；"
-        "保存后立即生效。")
+#     src_set_btn.setToolTip(
+#         "在独立的「星历数据源」窗口中增删与排序 TLE 下载地址，列表里双击即可编辑；"
+#         "保存后立即生效。")
 
     def set_sources():
         """打开独立的「星历数据源」窗口（非模态；已打开则前置复用）。"""
