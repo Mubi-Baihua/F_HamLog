@@ -86,11 +86,14 @@ jobs:
           if ($LASTEXITCODE -ne 0) { Write-Warning "拉取 $env:WATCH_BRANCH 失败（继续用本地已有历史）" }
 
           # 上一次执行的时间点（本工作流「上一次」运行，必须排除当前这次自身）
-          # ⚠️ 关键修复：gh run list 会包含正在运行的当前 run（createdAt≈现在），
+          # ⚠️ 关键修复 1：gh run list 会包含正在运行的当前 run（createdAt≈现在），
           #    若直接用最近一条当 $since，则 git rev-list --since≈现在 永远计到 0 个提交，
           #    导致「明明有提交却一直复用旧产物、从不重新打包」。
           #    因此要先跳过当前 run（SELF_RUN_ID），取它之前的那条作为上一次执行的时间点。
-          #    若除自身外查不到任何历史 run（即首次运行）→ $since 保持空 → 视为首次，正常打包。
+          # ⚠️ 关键修复 2（时区）：gh run list 的 createdAt 是 UTC 的 ISO 串（如 2026-09-28T12:00:53Z）。
+          #    若直接 [string] 转成 "09/28/2026 20:00:53" 再交给 git，时区标记会丢失；
+          #    git 会按 runner 的本地时区（通常 UTC）解释 → 凭空偏移 8 小时 → 漏掉窗口内的提交。
+          #    因此必须显式转成 UTC 的 ISO 串（带 Z）再传给 git，保证跨时区解析一致。
           $since = ''
           try {
             $listJson = gh run list --workflow=$env:WORKFLOW_FILE --limit=10 --json databaseId,createdAt 2>$null
@@ -98,7 +101,9 @@ jobs:
               $runs = @($listJson | ConvertFrom-Json)
               foreach ($r in $runs) {
                 if ([string]$r.databaseId -eq [string]$env:SELF_RUN_ID) { continue }   # 跳过当前这次自身
-                $since = [string]$r.createdAt
+                # 解析为 DateTime 后强制按 UTC 输出 ISO 串（带 Z），避免丢失时区导致偏移
+                $dt = [datetime]::Parse([string]$r.createdAt, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::AdjustToUniversal -bor [System.Globalization.DateTimeStyles]::AssumeUniversal)
+                $since = $dt.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
                 break
               }
             }
