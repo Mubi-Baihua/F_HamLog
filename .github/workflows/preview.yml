@@ -75,6 +75,8 @@ jobs:
           WORKFLOW_FILE: preview.yml
           WATCH_BRANCH: develop
           ARTIFACT_NAME: ${{ env.ARTIFACT_NAME }}
+          # 当前这次 run 的 id：下面取「上一次运行」时必须跳过它自己
+          SELF_RUN_ID: ${{ github.run_id }}
         run: |
           $ErrorActionPreference = 'Stop'
           $utf8NoBom = New-Object System.Text.UTF8Encoding $false
@@ -83,13 +85,22 @@ jobs:
           git fetch origin $env:WATCH_BRANCH --quiet
           if ($LASTEXITCODE -ne 0) { Write-Warning "拉取 $env:WATCH_BRANCH 失败（继续用本地已有历史）" }
 
-          # 上一次执行的时间点（本工作流的最近一条历史 run）
+          # 上一次执行的时间点（本工作流「上一次」运行，必须排除当前这次自身）
+          # ⚠️ 关键修复：gh run list 会包含正在运行的当前 run（createdAt≈现在），
+          #    若直接用最近一条当 $since，则 git rev-list --since≈现在 永远计到 0 个提交，
+          #    导致「明明有提交却一直复用旧产物、从不重新打包」。
+          #    因此要先跳过当前 run（SELF_RUN_ID），取它之前的那条作为上一次执行的时间点。
+          #    若除自身外查不到任何历史 run（即首次运行）→ $since 保持空 → 视为首次，正常打包。
           $since = ''
           try {
-            $listJson = gh run list --workflow=$env:WORKFLOW_FILE --limit=1 --json createdAt 2>$null
+            $listJson = gh run list --workflow=$env:WORKFLOW_FILE --limit=10 --json databaseId,createdAt 2>$null
             if ($LASTEXITCODE -eq 0 -and $listJson) {
               $runs = @($listJson | ConvertFrom-Json)
-              if ($runs.Count -gt 0) { $since = [string]$runs[0].createdAt }
+              foreach ($r in $runs) {
+                if ([string]$r.databaseId -eq [string]$env:SELF_RUN_ID) { continue }   # 跳过当前这次自身
+                $since = [string]$r.createdAt
+                break
+              }
             }
           } catch {
             Write-Warning "查询上一次运行失败：$_"
