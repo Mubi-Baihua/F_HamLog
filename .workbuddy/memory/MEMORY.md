@@ -51,6 +51,47 @@
 - 超限提示统一走 `prompt_over_limit_selection(...)`；`accept()` 超限不关闭 →
   `reset_requested=True`+`reject()`，调用方 `while True:` 重开。测试 `test_max_selected_smoke.py`。
 
+## 主表格（project.py）——长日志性能定稿
+- **勾选列 / 「更多」列一律用自绘委托**（`CheckColumnDelegate`/`MoreButtonDelegate`），
+  **禁止再逐行 `setCellWidget` 塞 QWidget/QCheckBox/QPushButton**（10000 行 = 2 万控件 → 卡死）。
+- **勾选状态唯一权威 = 闭包集合 `_checked_rows`**；委托只回调 `on_toggle(row, checked)`
+  （主表 `_tbl_check_toggle`、搜索窗 `_sr_toggle`），**委托不直接改 model**（否则 item 与集合分叉）。
+- 表格统一由 `_new_table()` + `_fill_rows()` 构建（冻结刷新、批量 setItem）。
+  列定义常量 `_TABLE_HEADERS/_TABLE_COL_WIDTHS/_TABLE_FIELDS`，主表与搜索窗共用。
+- **UI 必须与旧版逐项一致（用户硬要求）**：14 列**全部显式设宽**（`_TABLE_COL_WIDTHS=[45,80,70,90,90,70,80,90,90,80,80,120,120,80]`）；
+  **不启用 `stretchLastSection`**；**不强制行高**（旧 `setDefaultSectionSize(24)` 本就是注释掉的，行高走 Qt 默认）；
+  委托外观对齐旧控件（勾选指示器走 `PM_IndicatorWidth`；
+  「更多」按钮几何 = **宽度铺满单元格无左右缩进**、高度 26 居中，对应旧 `QPushButton.setFixedHeight(26)` 铺满整格）。
+  **改表格前先 `git show HEAD:project.py` 对照原实现，别自行加"优化"。**
+- 全选/反选/取消选择 = 集合运算 + 批量写回，**不再逐行 findChild**。
+- **`table_update(delete=True, persist=True, scroll_to_bottom=False)`**：
+  `scrollToBottom()` **只在 `scroll_to_bottom=True`** 时执行。传 True 的**恰好三处**：
+  ① 首次打开项目（`table_update(delete=False)` + `table_update(scroll_to_bottom=True)`）；
+  ② `new()` 保存 —— 「新建日志」窗口（Ctrl+N）；
+  ③ `append_to_project()` —— 卫星「记录」/「批量记录」保存回调。
+  其余重建（排序/编辑/删除/**点「更多」保存**/导入/撤销/远程同步）**不得跳底**，须保持当前滚动位置。
+- **重建必须还原滚动位置**（否则每次新建 QTableWidget 都回顶部）：重建前记
+  `table.verticalScrollBar().value()`，重建后 **`QTimer.singleShot(0, lambda: bar.setValue(target))`**
+  延迟设回——**必须延到事件循环下一轮**，否则视口高度未定会被布局重置回顶部。
+  `scrollToBottom` 同理需延迟（同步调用会少滚 1 行）。行数变少时 setValue 自动收敛，无需 clamp。
+- **`table_update` 的重建耗时可接受（~0.6s/万行）**；行数 ≥2000 时显示 `WaitCursor`。
+- **`save()` 有「未变更跳过」**：靠 `_last_written={'path','json'}` 判「同路径+同内容」；
+  **首次保存必须执行**（勿简化为只比对 `_bk_state`，否则破坏「普通项目打开即自动保存一次」）。
+  写文件统一走 `_write_project_file(path)`（返回快照供 `_bk_snapshot(snap)` 复用）。
+- **`fhl_rw.write_fhl_file` 必须 `json.dumps` 后一次性 `f.write`**，
+  **禁止 `json.dump(data, f)`**（上千条起会退化为几十万次小 write）。
+- 测试钩子：`project.main` 末尾 `window._perf_api`（见 `DETAILS.md`/当日日志）。
+
+## 悬浮提示（toast_tip.py）
+- `toast_tip.show_toast(text, parent=None, timeout=1000, kind='info')`：非模态、无边框、
+  置顶、不抢焦点、跟随主题取 ToolTip 配色、1 秒自动关（淡入淡出）、多提示堆叠、
+  父窗销毁一并销毁。**Windows 上绝不能给分层窗口加 `QGraphicsDropShadowEffect`**
+  （脏矩形越界 → `UpdateLayeredWindowIndirect failed`）；改用 1px 边框体现卡片感。
+- **结果反馈类**（复制/粘贴/撤销/重做/删除失败/保存类）用 `toast_tip.show_toast`；
+  **二次确认（`QMessageBox.question`）、`QFileDialog`、格式错误/导入导出/加解密/搜索/统计/
+  多人日志/插件/服务端/QRZ 等仍用对话框**。
+- 其余窗口（satellite_window / mutual_window / batch_project 等）同类提示**尚未改**。
+
 ## 呼号统一大写（call_upper.py）
 - `UpperCallDelegate` + `connect_callsign_upper(edit, field_getter)`（仅 m_call/o_call）；
   接入点见 `DETAILS.md`。挂完 `setItemDelegateForRow` 必须
@@ -113,7 +154,21 @@
   随时可能被用户手工改过。宁可保留改动也不要 checkout。
 - 造「导入星历」fixture：星必须选 `int(编号) <= 99999`——≥100000 是 Alpha-5（100093 写作
   `A0093`），`'%05d'` 直写 6 位数会溢出 5 列编号位、被错位解析。
+- **合并/改动后必跑全套冒烟**：提示从 `QMessageBox` 换成 `toast_tip.show_toast` 后，
+  靠 monkeypatch `QMessageBox.information` 捕获提示的旧测试会**静默失效**
+  （表现为"提示未出现"的假失败）→ 需同时 monkeypatch `toast_tip.show_toast`。
+  `test_recover_save_smoke.py` 已按此适配。
 - 其余离屏坑（嵌套模态消息框、FakeWorker、两进程真机回归）见 `DETAILS.md`。
+
+## Git 合并 `file/*.tle` 等数据文件
+- `.tle` 冲突**几乎总是「不同时刻的同一批数据」**，逐块手工合并没意义。
+  先 `git show <base|HEAD|MERGE_HEAD>:file/amateur.tle | wc -l` 比三侧行数，
+  **取更完整/更新的一侧**（通常是跑过全量 TLE 更新的 develop 侧）：
+  `git checkout --ours -- file/amateur.tle`（我们）或 `--theirs`（对方）。
+- `file/m_xml.txt` 冲突通常只差 `sat_last_update` 时间戳 → 取较新值即可。
+- `.workbuddy/memory/*.md` 是追加型 → **双方内容全部保留**，只删标记行。
+- `project.py` 出现 `_bk_snapshot(...)` 冲突时：我方传 `snap`（性能优化），
+  对方用旧签名 + toast 提示 → **合并为 `_bk_snapshot(snap)` + 各自的提示调用**。
 
 ## 发布流程（GitHub Actions）
 - 仓库 `github.com/Mubi-Baihua/F_HamLog`。**默认分支 = `main`**（`origin/HEAD → main`）；

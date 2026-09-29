@@ -119,6 +119,16 @@ QMessageBox.warning = staticmethod(_fake_warning)
 
 app = QApplication(sys.argv)
 import project
+import toast_tip
+
+
+def _fake_toast(text, parent=None, timeout=1000, kind='info'):
+    # 悬浮提示取代了部分 QMessageBox.information/warning；统一记入 _msgs 以便断言
+    _msgs.append(('toast', kind, text))
+    return None
+
+
+toast_tip.show_toast = _fake_toast
 
 
 def reset(tag):

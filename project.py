@@ -1,6 +1,6 @@
 from PySide6.QtWidgets import *
 from PySide6.QtGui import QAction
-from PySide6.QtCore import Qt, QEvent, QObject, QTimer, QThread, Signal  # 新增导入 Qt
+from PySide6.QtCore import Qt, QEvent, QObject, QTimer, QThread, Signal, QRect  # 新增导入 Qt
 from dialog_defaults import desktop_dir
 from functools import partial
 import time as time_
@@ -18,6 +18,7 @@ import copy
 import call_upper
 import backup
 import theme
+import toast_tip
 import remote_crypto
 import remote_server
 from remote_server import send_frame, recv_frame, LogServer, get_lan_ip
@@ -76,6 +77,105 @@ def _upgrade_file_records(file_list):
         return
     for e in file_list:
         _ensure_log_keys(e)
+
+
+# ---------------------------------------------------------------------------
+# 长日志（上万条）表格优化：勾选列 / 「更多」按钮列改用「自绘委托」而非逐行
+# QWidget（QCheckBox、QPushButton）。原因：10000 行若各塞 2 个真实控件，就是
+# 2 万个 QWidget，仅创建与布局就要数秒，且全选/反选还要逐行 findChild 遍历控件。
+# 改为委托后，勾选状态只存一份 set（O(1) 切换），绘制时才回调，行数再多也不卡。
+# ---------------------------------------------------------------------------
+
+# 勾选列（第 0 列）的委托：纯绘制 + 鼠标点击切换
+_CHECK_ROLE = Qt.UserRole + 101
+
+
+class CheckColumnDelegate(QStyledItemDelegate):
+    """第 0 列「选择」：绘制一个居中复选框，点击即切换勾选状态。
+
+    on_toggle(row, checked) 由外部注入：勾选状态的唯一权威是外部集合（_checked_rows），
+    这里不直接改 model，避免「委托改了 item、集合没改」导致状态分叉。
+
+    外观对齐旧实现：旧代码该列是 QCheckBox(setFixedSize(25, 20)) 居中放置，
+    这里按同样的尺寸与对齐方式绘制「复选框指示器」，视觉与旧版一致。
+    """
+
+    # 与旧 QCheckBox 的 setFixedSize(25, 20) 保持一致，仅取指示器部分居中绘制
+    BOX_W, BOX_H = 25, 20
+
+    def __init__(self, parent=None, on_toggle=None):
+        super().__init__(parent)
+        self._on_toggle = on_toggle
+
+    def paint(self, painter, option, index):
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+        opt.text = ''
+        opt.widget.style().drawControl(QStyle.CE_ItemViewItem, opt, painter, opt.widget)
+        checked = bool(index.data(_CHECK_ROLE) or False)
+        # 指示器尺寸：交给样式按当前字体算出原生大小，与 QCheckBox 的绘制完全一致
+        size = max(QApplication.style().pixelMetric(QStyle.PM_IndicatorWidth,
+                                                    None, opt.widget), 13)
+        rect = QRect(opt.rect.center().x() - size // 2,
+                     opt.rect.center().y() - size // 2, size, size)
+        state = QStyle.State_Enabled | (QStyle.State_On if checked else QStyle.State_Off)
+        cb_opt = QStyleOptionButton()
+        cb_opt.rect = rect
+        cb_opt.state = state
+        QApplication.style().drawPrimitive(QStyle.PE_IndicatorCheckBox, cb_opt, painter)
+
+    def editorEvent(self, event, model, option, index):
+        # 单击（鼠标左键抬起在单元格内）即切换勾选，与原生 QCheckBox 手感一致
+        if event.type() == QEvent.MouseButtonRelease and event.button() == Qt.LeftButton:
+            checked = bool(index.data(_CHECK_ROLE) or False)
+            if self._on_toggle is not None:
+                self._on_toggle(index.row(), not checked)
+            return True
+        return super().editorEvent(event, model, option, index)
+
+
+class MoreButtonDelegate(QStyledItemDelegate):
+    """末列「更多」：绘制一个按钮外观，点击回调到指定函数。
+
+    外观对齐旧实现：旧代码该列是 QPushButton("更多").setFixedHeight(26)，
+    委托用样式绘制 CE_PushButton，尺寸取单元格内容区（上下留 3px 边距 → 高度约 26）。
+    """
+
+    def __init__(self, parent=None, text='更多'):
+        super().__init__(parent)
+        self._text = text
+        self._click_cb = None  # callable(row) -> None，由使用者设置
+
+    def set_click(self, cb):
+        self._click_cb = cb
+
+    def _btn_rect(self, rect):
+        # 旧实现：QPushButton("更多").setFixedHeight(26) 直接 setCellWidget 铺满整格
+        # （无 layout、无边距）→ 宽度占满列宽，高度 26 在格内居中。此处照搬该几何。
+        btn_h = min(26, max(rect.height(), 12))
+        top = rect.top() + (rect.height() - btn_h) // 2
+        return QRect(rect.left(), top, rect.width(), btn_h)
+
+    def paint(self, painter, option, index):
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+        opt.text = ''
+        opt.widget.style().drawControl(QStyle.CE_ItemViewItem, opt, painter, opt.widget)
+        btn_opt = QStyleOptionButton()
+        btn_opt.state = QStyle.State_Enabled
+        if option.state & QStyle.State_MouseOver:
+            btn_opt.state |= QStyle.State_MouseOver
+        btn_opt.rect = self._btn_rect(opt.rect)
+        btn_opt.text = self._text
+        QApplication.style().drawControl(QStyle.CE_PushButton, btn_opt, painter)
+
+    def editorEvent(self, event, model, option, index):
+        if event.type() == QEvent.MouseButtonRelease and event.button() == Qt.LeftButton:
+            if self._btn_rect(option.rect).contains(event.pos()):
+                if self._click_cb is not None:
+                    self._click_cb(index.row())
+                return True
+        return super().editorEvent(event, model, option, index)
 
 
 # ---------------------------------------------------------------------------
@@ -539,15 +639,21 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         'last': _bk_init,    # 当前“已持久化”基线（多人日志下 = 服务端已持有的内容）
         'local': _bk_init,   # 最近一次写入本机文件的内容（退出多人日志后作基线）
     }
+    # 本会话最近一次「真正写到本机文件」的路径与内容：用于跳过重复的整份重写，
+    # 又不会误跳过首次保存（详见 save() 内注释）。
+    _last_written = {'path': None, 'json': None}
 
-    def _bk_snapshot():
+    def _bk_snapshot(snap=None):
         """把当前内容记为「已持久化」。
 
         单人模式：内容已写入本机文件 → 同时更新“本机文件基线”。
         多人日志：内容已由服务端持有（本次同步 / 已推送）→ 只更新“已持久化”基线，
         不动本机文件基线（退出会话后靠它判断内容相对本机文件是否有变化）。
+
+        snap：可传入已算好的 _bk_json() 结果，避免同一份内容被重复序列化。
         """
-        snap = _bk_json()
+        if snap is None:
+            snap = _bk_json()
         _bk_state['last'] = snap
         if _rc() is None:
             _bk_state['local'] = snap
@@ -598,6 +704,44 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
     table = None
     undo_stack = []   # 撤销栈：保存 file 的完整深拷贝快照
     redo_stack = []   # 重做栈
+    # 勾选行的行号集合（O(1) 全选/反选/查询；上万行时不再逐行遍历控件）
+    _checked_rows = set()
+
+    def _sync_check_items(tbl, rows, checked):
+        """把行号集合的勾选状态批量写回表格 item。
+
+        冻结刷新，避免上万次 setData 触发重绘。
+        """
+        if tbl is None:
+            return
+        prev = tbl.updatesEnabled()
+        tbl.setUpdatesEnabled(False)
+        for r in rows:
+            it = tbl.item(r, 0)
+            if it is not None:
+                it.setData(_CHECK_ROLE, bool(checked))
+        tbl.setUpdatesEnabled(prev)
+
+    def _row_checked(r):
+        """读取某行当前勾选状态（以集合为准，集合缺失时回退读 item）。"""
+        if r in _checked_rows:
+            return True
+        if table is not None:
+            it = table.item(r, 0)
+            if it is not None:
+                return bool(it.data(_CHECK_ROLE))
+        return False
+
+    def _tbl_check_toggle(row, checked):
+        """勾选单元格被点击时触发：同步更新集合与 item（委托只回调、不直接改 model）。"""
+        if checked:
+            _checked_rows.add(row)
+        else:
+            _checked_rows.discard(row)
+        if table is not None:
+            it = table.item(row, 0)
+            if it is not None:
+                it.setData(_CHECK_ROLE, bool(checked))
 
     # ---------- 撤销 / 重做 / 复制 / 粘贴 ----------
     def snapshot_before():
@@ -610,7 +754,7 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
     def undo():
         global file
         if not undo_stack:
-            QMessageBox.information(window, "撤销", "没有可撤销的操作。")
+            toast_tip.show_toast("没有可撤销的操作。", window)
             return
         redo_stack.append(copy.deepcopy(file))
         file = undo_stack.pop()
@@ -619,7 +763,7 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
     def redo():
         global file
         if not redo_stack:
-            QMessageBox.information(window, "重做", "没有可重做的操作。")
+            toast_tip.show_toast("没有可重做的操作。", window)
             return
         undo_stack.append(copy.deepcopy(file))
         file = redo_stack.pop()
@@ -630,14 +774,8 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         result = []
         if table is None:
             return result
-        for row in range(table.rowCount()):
-            cell_w = table.cellWidget(row, 0)
-            if cell_w is not None:
-                cb = cell_w.findChild(QCheckBox)
-                if cb is not None and cb.isChecked():
-                    result.append(row)
-        if result:
-            return result
+        if _checked_rows:
+            return [r for r in sorted(_checked_rows) if 0 <= r < table.rowCount()]
         for idx in table.selectionModel().selectedRows():
             result.append(idx.row())
         return result
@@ -654,16 +792,16 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
     def copy_from_main():
         rows = get_selected_row_indexes()
         if not rows:
-            QMessageBox.information(window, "复制", "请先勾选或选中要复制的行。")
+            toast_tip.show_toast("请先勾选或选中要复制的行。", window)
             return
         records = [file[r] for r in rows]
         if copy_records_to_clipboard(records):
-            QMessageBox.information(window, "复制", f"已复制 {len(records)} 条日志到剪贴板。")
+            toast_tip.show_toast(f"已复制 {len(records)} 条日志到剪贴板。", window)
 
     def paste_to_main():
         text = QApplication.clipboard().text()
         if not text or not text.strip():
-            QMessageBox.information(window, "粘贴", "剪贴板为空或不是文本。")
+            toast_tip.show_toast("剪贴板为空或不是文本。", window)
             return
         lines = [ln for ln in text.replace('\r\n', '\n').split('\n') if ln != '']
         if not lines:
@@ -677,7 +815,7 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
             elif h in label_to_field:
                 field_index[label_to_field[h]] = i
         if not field_index:
-            QMessageBox.warning(window, "粘贴", "剪贴板内容无法识别为日志数据。")
+            toast_tip.show_toast("剪贴板内容无法识别为日志数据。", window, kind='warning')
             return
         new_records = []
         for ln in lines[1:]:
@@ -692,7 +830,7 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         snapshot_before()
         file.extend(new_records)
         table_update()
-        QMessageBox.information(window, "粘贴", f"已粘贴 {len(new_records)} 条日志。")
+        toast_tip.show_toast(f"已粘贴 {len(new_records)} 条日志。", window)
 
 
     def table_context_menu(pos):
@@ -708,8 +846,86 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         a7 = QAction('重做', window); a7.triggered.connect(redo); menu.addAction(a7)
         menu.exec(table.viewport().mapToGlobal(pos))
 
-    def table_update(delete=True, persist=True):
+    # 表格列定义：(表头, 取值函数)。取值函数直接读 file 里的记录 dict。
+    # 注意：表头顺序与宽度必须与「搜索结果」窗口保持一致（下方 table_r 亦复用本常量）。
+    _TABLE_HEADERS = ["选择", "日期", "时间", "己方呼号", "对方呼号", "频率",
+                      "调制模式", "传播模式", "卫星名称", "己方接收信号", "对方接收信号",
+                      "己方QTH", "对方QTH", "更多"]
+    _TABLE_COL_WIDTHS = [45, 80, 70, 90, 90, 70, 80, 90, 90, 80, 80, 120, 120, 80]
+    # 数据列（1..12）对应的记录字段；列 0 = 勾选、列 13 = 更多按钮，不走文本
+    _TABLE_FIELDS = ['date', 'time', 'm_call', 'o_call', 'freq', 'mode', 'prop_mode',
+                     'sat_name', 'm_rst', 'o_rst', 'm_qth', 'o_qth']
+    # 行数达到该值以上时，重建表格期间显示等待光标（几百毫秒的操作有明显感知）
+    _BUSY_CURSOR_THRESHOLD = 2000
+
+    def _new_table(rows, parent=None, on_toggle=None):
+        """按统一列定义创建一个已配好列宽/委托的表格（主表与搜索结果表共用）。
+
+        on_toggle(row, checked)：勾选单元格被点击时的回调。主表用 _tbl_check_toggle
+        （同步 _checked_rows）；搜索结果窗口传入自己的处理函数（同步到主表）。
+
+        关键性能点：先冻结刷新、批量填充、最后统一解冻，避免每 setItem 都触发重绘。
+        UI 与旧实现保持一致：不使用 stretchLastSection，14 列全部显式设宽（含末列），
+        行高沿用 Qt 默认（旧代码的 setDefaultSectionSize 本就是注释掉的）。
+        """
+        tbl = QTableWidget(rows, len(_TABLE_HEADERS))
+        if parent is not None:
+            tbl.setParent(parent)
+        tbl.setHorizontalHeaderLabels(_TABLE_HEADERS)
+        tbl.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        tbl.setSelectionBehavior(QAbstractItemView.SelectRows)
+        tbl.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        tbl.setContextMenuPolicy(Qt.CustomContextMenu)
+        tbl.setUpdatesEnabled(False)        # 填充期间冻结重绘
+        hdr = tbl.horizontalHeader()
+        hdr.setSectionResizeMode(QHeaderView.Interactive)
+        # 勾选列与「更多」列用委托绘制，避免上万行各建真实控件
+        if on_toggle is None:
+            on_toggle = _tbl_check_toggle
+        tbl.setItemDelegateForColumn(0, CheckColumnDelegate(tbl, on_toggle=on_toggle))
+        tbl.setItemDelegateForColumn(len(_TABLE_HEADERS) - 1, MoreButtonDelegate(tbl))
+        return tbl
+
+    def _fill_rows(tbl, rows, more_cb):
+        """把 rows（每条为 (记录 dict, ...)）批量填进表格。
+
+        more_cb(row) 接收行号——「更多」委托按点击到的 index.row() 回调，无需逐行设回调。
+        """
+        more_item = tbl.itemDelegateForColumn(len(_TABLE_HEADERS) - 1)
+        if more_item is not None and more_cb is not None:
+            more_item.set_click(more_cb)
+        fields = _TABLE_FIELDS
+        last_col = len(_TABLE_HEADERS) - 1
+        set_item = tbl.setItem       # 局部绑定，省去 14 万次属性查找
+        for r, pair in enumerate(rows):
+            rec = pair[0]
+            # 勾选列：用 item 承载勾选状态（_CHECK_ROLE），由 CheckColumnDelegate 绘制/切换
+            chk = QTableWidgetItem()
+            chk.setData(_CHECK_ROLE, False)
+            set_item(r, 0, chk)
+            # 数据列：按字段顺序逐个建 item；缺字段用 ''（str(None) 会得到 'None'，需排除）
+            for c, field in enumerate(fields, start=1):
+                val = rec.get(field, '')
+                set_item(r, c, QTableWidgetItem('' if val is None else str(val)))
+            # 末列「更多」：委托绘制按钮，点击按行号回调
+            set_item(r, last_col, QTableWidgetItem())
+        # 列宽：与旧实现完全一致（14 列全部显式设宽，末列也是 80）
+        for c, w in enumerate(_TABLE_COL_WIDTHS):
+            tbl.setColumnWidth(c, w)
+
+    def table_update(delete=True, persist=True, scroll_to_bottom=False):
+        """重建主表格。
+
+        scroll_to_bottom：仅「首次打开项目」时传 True（打开后自动跳到最后一条记录）。
+        其余场景（排序、编辑、删除、导入、撤销、远程同步、点「更多」保存等）重建后会
+        把垂直滚动位置恢复到重建前的像素偏移——行高统一，像素偏移可精确还原，
+        避免每次重建都把视图甩回顶部（用户点「更多」保存后应停在原来那几行附近）。
+        """
         nonlocal table
+        # 重建前先记住当前滚动位置（旧表格即将被销毁）；行高统一，像素偏移可精确还原
+        prev_scroll = None
+        if table is not None:
+            prev_scroll = table.verticalScrollBar().value()
         if delete:
             # 只有先把旧表格从布局移除并销毁，重建后界面才只会剩一个表格。
             # （历史上远程同步曾用 delete=False，导致旧表格残留在布局里 → 出现两个表格）
@@ -720,81 +936,39 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
             if persist:
                 list_time(message=False)
                 save(message=False)
-            
 
         file_length = len(file)
-        # 创建表格部件：14 列（含「选择」复选框列与末列「更多」）
-        table = QTableWidget(file_length, 14)
-        table.setHorizontalHeaderLabels(["选择","日期","时间","己方呼号","对方呼号","频率","调制模式","传播模式","卫星名称", "己方接收信号", "对方接收信号", "己方QTH", "对方QTH","更多"])
-        table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        table.setSelectionMode(QAbstractItemView.ExtendedSelection)
-        # 右键上下文菜单（含 选择/复制/粘贴/撤销/重做）
-        table.setContextMenuPolicy(Qt.CustomContextMenu)
-        table.customContextMenuRequested.connect(table_context_menu)
-        print(file_length)
-        # 统一使用默认列宽，不设置任何固定宽度
-        
-        # 添加一些示例数据
-        for i in range(file_length):
-            checkbox = QCheckBox()
-            checkbox.setChecked(False)
-            checkbox.setFixedSize(25, 20)
-            checkbox_widget = QWidget()
-            checkbox_layout = QHBoxLayout(checkbox_widget)
-            checkbox_layout.setContentsMargins(0, 0, 0, 0)
-            checkbox_layout.setAlignment(Qt.AlignCenter)
-            checkbox_layout.addWidget(checkbox)
-            table.setCellWidget(i, 0, checkbox_widget)
+        # 上万行重建需数百毫秒；期间显示等待光标，避免用户以为界面卡死
+        if file_length >= _BUSY_CURSOR_THRESHOLD:
+            QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            table = _new_table(file_length)
+            table.customContextMenuRequested.connect(table_context_menu)
+            # 重建时保持原有的勾选状态（勾选集合由 _checked_rows 承载，见 set_all_rows_checked）
+            prev_checked = {i for i in _checked_rows if 0 <= i < file_length}
 
-            date = QTableWidgetItem(file[i]['date'])
-            table.setItem(i, 1, date)
-            time = QTableWidgetItem(file[i]['time'])
-            table.setItem(i, 2, time)
-            m_call = QTableWidgetItem(file[i]['m_call'])
-            table.setItem(i, 3, m_call)
-            o_call = QTableWidgetItem(file[i]['o_call'])
-            table.setItem(i, 4, o_call)
-            freq = QTableWidgetItem(file[i]['freq'])
-            table.setItem(i, 5, freq)
-            mode = QTableWidgetItem(file[i]['mode'])
-            table.setItem(i, 6, mode)
-            prop_mode = QTableWidgetItem(file[i].get('prop_mode', ''))
-            table.setItem(i, 7, prop_mode)
-            sat_name = QTableWidgetItem(file[i].get('sat_name', ''))
-            table.setItem(i, 8, sat_name)
-            m_rst = QTableWidgetItem(file[i]['m_rst'])
-            table.setItem(i, 9, m_rst)
-            o_rst = QTableWidgetItem(file[i]['o_rst'])
-            table.setItem(i, 10, o_rst)
-            m_qth = QTableWidgetItem(file[i]['m_qth'])
-            table.setItem(i, 11, m_qth)
-            o_qth = QTableWidgetItem(file[i]['o_qth'])
-            table.setItem(i, 12, o_qth)
-            other_button = QPushButton("更多")
-            other_button.setFixedHeight(26)
-            table.setCellWidget(i, 13, other_button)
-            other_button.clicked.connect(partial(project_others, i))
+            # 批量填充（冻结刷新期间进行）
+            rows = [(file[i],) for i in range(file_length)]
+            _fill_rows(table, rows, project_others)
+            _checked_rows.clear()
+            _checked_rows.update(prev_checked)
+            _sync_check_items(table, sorted(prev_checked), True)
 
-        table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
-        table.setColumnWidth(0, 45)
-        table.setColumnWidth(1, 80)
-        table.setColumnWidth(2, 70)
-        table.setColumnWidth(3, 90)
-        table.setColumnWidth(4, 90)
-        table.setColumnWidth(5, 70)
-        table.setColumnWidth(6, 80)
-        table.setColumnWidth(7, 90)
-        table.setColumnWidth(8, 90)
-        table.setColumnWidth(9, 80)
-        table.setColumnWidth(10, 80)
-        table.setColumnWidth(11, 120)
-        table.setColumnWidth(12, 120)
-        table.setColumnWidth(13, 80)
-        #table.verticalHeader().setDefaultSectionSize(24)
-        layout.addWidget(table)
-
-        table.scrollToBottom()  # 自动跳到底部
+            layout.addWidget(table)
+            table.setUpdatesEnabled(True)   # 解冻，一次性重绘
+            if scroll_to_bottom:
+                # 延到事件循环下一轮，等布局算好视口高度再跳，确保真正落到最后一行
+                QTimer.singleShot(0, table.scrollToBottom)
+            elif prev_scroll:
+                # 恢复重建前的滚动位置。延到事件循环下一轮再设，等 Qt 按新布局算好
+                # 视口尺寸与滚动范围，避免设完后被布局过程重置回顶部。
+                # 行数变少时 setValue 会按新的最大值自动收敛，无需手动 clamp。
+                _bar = table.verticalScrollBar()
+                _target = prev_scroll
+                QTimer.singleShot(0, lambda: _bar.setValue(_target))
+        finally:
+            if file_length >= _BUSY_CURSOR_THRESHOLD:
+                QApplication.restoreOverrideCursor()
 
     def new(preset=None):
             with open('file/m_xml.txt', 'r', encoding='utf-8') as f:
@@ -903,7 +1077,7 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
                 snapshot_before()
                 file.append(file_app)
 
-                table_update()
+                table_update(scroll_to_bottom=True)   # 新建日志追加在末尾 → 跳到最后一条，便于查看
             save_button = QPushButton("新建日志")
             save_button.clicked.connect(save_changes)
             layout_others.addWidget(save_button)
@@ -1034,12 +1208,12 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         if sp == '':
             return False
         global key
-        fhl_rw.write_fhl_file(sp, file, key)
+        snap = _write_project_file(sp)
         backup.clear_backup(backup.PROJECT_BACKUP)
         save_path = sp
-        _bk_snapshot()  # 复位快照 → 消除“未保存”标记
+        _bk_snapshot(snap)  # 复位快照 → 消除“未保存”标记
         window.setWindowTitle(f'F HamLog 2 - {os.path.basename(save_path)}')
-        QMessageBox.information(window, "保存成功", "已保存恢复的内容。")
+        toast_tip.show_toast("已保存恢复的内容。", window)
         return True
 
     def save(message=True):
@@ -1049,11 +1223,11 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
             try:
                 rc.send_save(file)
             except Exception as e:
-                QMessageBox.warning(window, "保存失败", f"无法保存到服务端：{e}")
+                toast_tip.show_toast(f"无法保存到服务端：{e}", window, kind='warning')
                 return False
             _bk_snapshot()
             if message:
-                QMessageBox.information(window, "保存成功", "已保存到服务端！")
+                toast_tip.show_toast("已保存到服务端！", window)
             return True
 
         with open('file/m_xml.txt', 'r', encoding='utf-8') as f:
@@ -1074,12 +1248,30 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
                 if recovered:
                     return _save_recovered_as()
                 return osave()
-            fhl_rw.write_fhl_file(save_path,file,key)
+            # 内容未变化时跳过整份重写：table_update 每次都会静默调用 save()，
+            # 上万条日志时「重建表格 + 重写整份文件」会各花一秒左右。
+            # 注意：只跳过「本会话已把同样内容写到同一路径」的重复保存——首次保存
+            # 仍必须执行（磁盘上的文件可能与内存不同，打开时需对齐），否则会破坏
+            # 「普通项目打开即自动保存一次」的既有行为。
+            _cur = _bk_json()
+            if not message and _last_written.get('path') == save_path \
+                    and _last_written.get('json') == _cur:
+                return True
+            snap = _write_project_file(save_path)
             backup.clear_backup(backup.PROJECT_BACKUP)
-            _bk_snapshot()
+            _bk_snapshot(snap)
             if message:
-                QMessageBox.information(window, "保存成功", "保存成功！")
+                toast_tip.show_toast("保存成功！", window)
         return True
+
+    def _write_project_file(path):
+        """把当前 file 写到 path，并记录「本会话已写入」的路径与内容（供 save() 跳过重复写）。"""
+        global key
+        fhl_rw.write_fhl_file(path, file, key)
+        # 顺手算一次内容快照，既记录“已写入内容”，也供调用方的 _bk_snapshot 复用
+        _last_written['path'] = path
+        _last_written['json'] = _bk_json()
+        return _last_written['json']
 
     def osave():
         import json
@@ -1091,11 +1283,10 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         )
         if sp == '':
             return False
-        global key
-        fhl_rw.write_fhl_file(sp,file,key)
+        snap = _write_project_file(sp)
         backup.clear_backup(backup.PROJECT_BACKUP)
-        _bk_snapshot()
-        QMessageBox.information(window, "另存成功", "另存成功！")
+        _bk_snapshot(snap)
+        toast_tip.show_toast("另存成功！", window)
         return True
 
     def esave():
@@ -1103,9 +1294,9 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         if rc is not None:
             try:
                 rc.send_save(file)
-                QMessageBox.information(window, "保存成功", "已保存到服务端，多人日志已关闭。")
+                toast_tip.show_toast("已保存到服务端，多人日志已关闭。", window)
             except Exception as e:
-                QMessageBox.warning(window, "保存失败", str(e))
+                toast_tip.show_toast("保存失败：" + str(e), window, kind='warning')
             window.close()
             return
         import json
@@ -1117,10 +1308,11 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
             if not _do_save():
                 return
         else:
-            fhl_rw.write_fhl_file(save_path,file,key)
+            # 显式「保存并退出」：无条件落盘（不做未变更跳过），确保用户意图被执行
+            snap = _write_project_file(save_path)
             backup.clear_backup(backup.PROJECT_BACKUP)
-            _bk_snapshot()
-            QMessageBox.information(window, "保存成功", "保存成功！")
+            _bk_snapshot(snap)
+            toast_tip.show_toast("保存成功！", window)
         sys.exit()
 
     def input_HAM_tolls_():
@@ -1170,42 +1362,32 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         if table is None:
             QMessageBox.warning(window, "导出失败", "当前未加载日志表。")
             return None
-        selected_records = []
-        for row in range(table.rowCount()):
-            # 优先检查嵌入的 QCheckBox 控件
-            cell_w = table.cellWidget(row, 0)
-            if cell_w is not None:
-                cb = cell_w.findChild(QCheckBox)
-                if cb is not None and cb.isChecked():
-                    selected_records.append(file[row])
-                continue
-
-            # 退回到 QTableWidgetItem（如果存在的话）
-            checkbox_item = table.item(row, 0)
-            if checkbox_item is not None and checkbox_item.checkState() == Qt.Checked:
-                selected_records.append(file[row])
-
+        selected_records = [file[r] for r in get_selected_row_indexes()
+                            if 0 <= r < len(file)]
         if not selected_records:
             QMessageBox.warning(window, "导出失败", "请先勾选要导出的日志行。")
             return None
         return selected_records
 
     def _get_main_checkbox(orig_index):
-        # 获取主页面表格指定行第0列内嵌的复选框控件
+        # 兼容旧接口：返回布尔「是否勾选」而非控件（勾选列已改为委托绘制）
         if table is None:
             return None
         if orig_index < 0 or orig_index >= table.rowCount():
             return None
-        cell_w = table.cellWidget(orig_index, 0)
-        if cell_w is not None:
-            return cell_w.findChild(QCheckBox)
-        return None
+        return _row_checked(orig_index)
 
     def set_main_checkbox(orig_index, checked):
-        # 将搜索结果的勾选状态同步到主页面对应行的复选框
-        cb = _get_main_checkbox(orig_index)
-        if cb is not None:
-            cb.setChecked(bool(checked))
+        # 将搜索结果的勾选状态同步到主页面对应行（只更新集合 + 单个 item）
+        if table is None or orig_index < 0 or orig_index >= table.rowCount():
+            return
+        if checked:
+            _checked_rows.add(orig_index)
+        else:
+            _checked_rows.discard(orig_index)
+        it = table.item(orig_index, 0)
+        if it is not None:
+            it.setData(_CHECK_ROLE, bool(checked))
 
     def output_selected_fhl():
         selected_records = get_selected_records()
@@ -1352,20 +1534,10 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         若未勾选任何行，则回退删除当前高亮选中的行。删除前二次确认，
         并记入撤销点（Ctrl+Z 可恢复），删除后自动重建表格并落盘。'''
         if table is None:
-            QMessageBox.warning(window, "删除失败", "当前未加载日志表。")
+            toast_tip.show_toast("当前未加载日志表。", window, kind='warning')
             return
         # 1) 优先收集“选择”列（第0列）中已勾选的行
-        checked_rows = []
-        for row in range(table.rowCount()):
-            cell_w = table.cellWidget(row, 0)
-            cb = cell_w.findChild(QCheckBox) if cell_w is not None else None
-            if cb is None:
-                item = table.item(row, 0)
-                if item is not None and item.checkState() == Qt.Checked:
-                    checked_rows.append(row)
-                continue
-            if cb.isChecked():
-                checked_rows.append(row)
+        checked_rows = [r for r in sorted(_checked_rows) if 0 <= r < table.rowCount()]
         # 2) 若未勾选任何行，回退到当前高亮选中的行
         if not checked_rows:
             rows = set()
@@ -1374,8 +1546,9 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
                     rows.add(r)
             checked_rows = sorted(rows)
         if not checked_rows:
-            QMessageBox.warning(window, "删除失败",
-                "没有可删除的日志：请先在“选择”列勾选要删除的行，或直接选中（高亮）这些行。")
+            toast_tip.show_toast(
+                "没有可删除的日志：请先在“选择”列勾选要删除的行，或直接选中（高亮）这些行。",
+                window, kind='warning')
             return
         # 二次确认（破坏性操作）
         count = len(checked_rows)
@@ -1426,26 +1599,32 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
     edit_menu.addAction(delete_selected_action)
 
     def set_all_rows_checked(checked):
-        # 遍历主表格“选择”列（第0列）的复选框，统一设置勾选状态
+        # 全选/取消选择：只改内存中的勾选集合 + 一次性写回 item，O(n) 但不建控件、不逐行重绘
         if table is None:
             return
-        for row in range(table.rowCount()):
-            cell_w = table.cellWidget(row, 0)
-            if cell_w is not None:
-                cb = cell_w.findChild(QCheckBox)
-                if cb is not None:
-                    cb.setChecked(checked)
+        n = table.rowCount()
+        if checked:
+            _checked_rows.clear()
+            _checked_rows.update(range(n))
+        else:
+            _checked_rows.clear()
+        _sync_check_items(table, range(n), checked)
 
     def invert_rows_checked():
-        # 反转每一行的勾选状态
+        # 反选：集合补集运算，O(n)；写回 item 期间冻结刷新
         if table is None:
             return
-        for row in range(table.rowCount()):
-            cell_w = table.cellWidget(row, 0)
-            if cell_w is not None:
-                cb = cell_w.findChild(QCheckBox)
-                if cb is not None:
-                    cb.setChecked(not cb.isChecked())
+        n = table.rowCount()
+        inverted = set(range(n)) - _checked_rows
+        _checked_rows.clear()
+        _checked_rows.update(inverted)
+        prev = table.updatesEnabled()
+        table.setUpdatesEnabled(False)
+        for r in range(n):
+            it = table.item(r, 0)
+            if it is not None:
+                it.setData(_CHECK_ROLE, r in inverted)
+        table.setUpdatesEnabled(prev)
 
     select_menu = menu_bar.addMenu('选择')
 
@@ -1619,20 +1798,40 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         research_window.setCentralWidget(central)
         lay = QVBoxLayout(central)
 
-        search_checkboxes = []  # [(checkbox, orig_index), ...]
+        search_checkboxes = []  # [(table_row, orig_index), ...] 在下方填写
+
+        # 搜索结果窗口的勾选状态：直接读/写对应 item 的 _CHECK_ROLE（委托绘制）
+        def _sr_checked(table_row):
+            it = table_r.item(table_row, 0) if table_r is not None else None
+            return bool(it.data(_CHECK_ROLE)) if it is not None else False
+
+        def _sr_set_all(checked):
+            if table_r is None:
+                return
+            prev = table_r.updatesEnabled()
+            table_r.setUpdatesEnabled(False)
+            for r in range(table_r.rowCount()):
+                it = table_r.item(r, 0)
+                if it is not None:
+                    it.setData(_CHECK_ROLE, checked)
+                if r < len(search_checkboxes):
+                    set_main_checkbox(search_checkboxes[r][1], checked)
+            table_r.setUpdatesEnabled(prev)
 
         # 选择逻辑：与 project.py 主窗口一致（全选 / 反选 / 取消选择）
         def _search_select_all():
-            for cb, _ in search_checkboxes:
-                cb.setChecked(True)
+            _sr_set_all(True)
 
         def _search_select_none():
-            for cb, _ in search_checkboxes:
-                cb.setChecked(False)
+            _sr_set_all(False)
 
         def _search_invert():
-            for cb, _ in search_checkboxes:
-                cb.setChecked(not cb.isChecked())
+            for r in range(table_r.rowCount() if table_r is not None else 0):
+                it = table_r.item(r, 0)
+                if it is not None:
+                    new_val = not bool(it.data(_CHECK_ROLE))
+                    it.setData(_CHECK_ROLE, new_val)
+                    set_main_checkbox(search_checkboxes[r][1], new_val)
 
         # 仅针对当前搜索结果（matches）的统计与导出
         def _search_records():
@@ -1643,7 +1842,7 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
             if scope == '全部通联记录':
                 return file
             if scope == '仅选中的行':
-                return [file[orig_index] for cb, orig_index in search_checkboxes if cb.isChecked()]
+                return [file[orig] for r, orig in search_checkboxes if _sr_checked(r)]
             return [rec for _, rec in matches]  # 全部搜索结果
 
         def _export_search_fhl():
@@ -1738,58 +1937,37 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         top_row.addStretch(1)
         lay.addLayout(top_row)
 
-        # 新增"选择"列（列0），其余列整体右移一列
-        table_r = QTableWidget(len(matches), 14)
-        table_r.setHorizontalHeaderLabels(["选择","日期","时间","己方呼号","对方呼号","频率","调制模式","传播模式","卫星名称", "己方接收信号", "对方接收信号", "己方QTH", "对方QTH","更多"])
-        table_r.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        # 新增"选择"列（列0），其余列整体右移一列；复用统一表格定义（委托绘制，支持上万行）
+        search_checkboxes = []  # [(row, orig_index), ...] 供全选/反选/导出读取
+
+        def _sr_toggle(row, checked):
+            """搜索结果窗口勾选被点击：写回本窗口 item，并同步到主表对应行。"""
+            it = table_r.item(row, 0) if row < table_r.rowCount() else None
+            if it is not None:
+                it.setData(_CHECK_ROLE, bool(checked))
+            if 0 <= row < len(search_checkboxes):
+                set_main_checkbox(search_checkboxes[row][1], checked)
+
+        def _search_more_cb(row):
+            # 「更多」按搜索结果行号 → 映射回主 file 的原始索引
+            project_others(matches[row][0])
+
+        table_r = _new_table(len(matches), on_toggle=_sr_toggle)
         for row, (orig_index, rec) in enumerate(matches):
-            # 选择复选框：初始状态与主页面当前勾选保持一致
-            checkbox = QCheckBox()
-            main_cb = _get_main_checkbox(orig_index)
-            checkbox.setChecked(main_cb.isChecked() if main_cb is not None else False)
-            checkbox.setFixedSize(25, 20)
-            checkbox_widget = QWidget()
-            checkbox_layout = QHBoxLayout(checkbox_widget)
-            checkbox_layout.setContentsMargins(0, 0, 0, 0)
-            checkbox_layout.setAlignment(Qt.AlignCenter)
-            checkbox_layout.addWidget(checkbox)
-            table_r.setCellWidget(row, 0, checkbox_widget)
-            # 勾选变化时实时同步到主页面对应行
-            checkbox.toggled.connect(partial(set_main_checkbox, orig_index))
-            search_checkboxes.append((checkbox, orig_index))
-
-            table_r.setItem(row, 1, QTableWidgetItem(record_text(rec, 'date')))
-            table_r.setItem(row, 2, QTableWidgetItem(record_text(rec, 'time')))
-            table_r.setItem(row, 3, QTableWidgetItem(record_text(rec, 'm_call')))
-            table_r.setItem(row, 4, QTableWidgetItem(record_text(rec, 'o_call')))
-            table_r.setItem(row, 5, QTableWidgetItem(record_text(rec, 'freq')))
-            table_r.setItem(row, 6, QTableWidgetItem(record_text(rec, 'mode')))
-            table_r.setItem(row, 7, QTableWidgetItem(record_text(rec, 'prop_mode')))
-            table_r.setItem(row, 8, QTableWidgetItem(record_text(rec, 'sat_name')))
-            table_r.setItem(row, 9, QTableWidgetItem(record_text(rec, 'm_rst')))
-            table_r.setItem(row, 10, QTableWidgetItem(record_text(rec, 'o_rst')))
-            table_r.setItem(row, 11, QTableWidgetItem(record_text(rec, 'm_qth')))
-            table_r.setItem(row, 12, QTableWidgetItem(record_text(rec, 'o_qth')))
-            more_btn = QPushButton("更多")
-            more_btn.setFixedHeight(26)
-            more_btn.clicked.connect(partial(project_others, orig_index))
-            table_r.setCellWidget(row, 13, more_btn)
-
-        table_r.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
-        table_r.setColumnWidth(0, 45)
-        table_r.setColumnWidth(1, 80)
-        table_r.setColumnWidth(2, 70)
-        table_r.setColumnWidth(3, 90)
-        table_r.setColumnWidth(4, 90)
-        table_r.setColumnWidth(5, 70)
-        table_r.setColumnWidth(6, 80)
-        table_r.setColumnWidth(7, 90)
-        table_r.setColumnWidth(8, 90)
-        table_r.setColumnWidth(9, 80)
-        table_r.setColumnWidth(10, 80)
-        table_r.setColumnWidth(11, 120)
-        table_r.setColumnWidth(12, 120)
-        table_r.setColumnWidth(13, 80)
+            # 初始勾选状态与主页面保持一致
+            checked = bool(_get_main_checkbox(orig_index))
+            it = QTableWidgetItem()
+            it.setData(_CHECK_ROLE, checked)
+            table_r.setItem(row, 0, it)
+            for c, field in enumerate(_TABLE_FIELDS, start=1):
+                table_r.setItem(row, c, QTableWidgetItem(record_text(rec, field)))
+            table_r.setItem(row, len(_TABLE_HEADERS) - 1, QTableWidgetItem())
+            search_checkboxes.append((row, orig_index))
+        # 列宽与旧实现一致（14 列全部显式设宽，末列也是 80）
+        for c, w in enumerate(_TABLE_COL_WIDTHS):
+            table_r.setColumnWidth(c, w)
+        table_r.itemDelegateForColumn(len(_TABLE_HEADERS) - 1).set_click(_search_more_cb)
+        table_r.setUpdatesEnabled(True)
         lay.addWidget(table_r)
         table_r.scrollToBottom()
 
@@ -1799,17 +1977,17 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
             act_copy = QAction('复制选中行', window)
             def do_copy():
                 recs = []
-                for cb, orig_index in search_checkboxes:
-                    if cb.isChecked():
+                for r, orig_index in search_checkboxes:
+                    if _sr_checked(r):
                         recs.append(file[orig_index])
                 if not recs:
                     for idx in table_r.selectionModel().selectedRows():
                         recs.append(file[matches[idx.row()][0]])
                 if not recs:
-                    QMessageBox.information(window, "复制", "请先勾选要复制的行。")
+                    toast_tip.show_toast("请先勾选要复制的行。", window)
                     return
                 if copy_records_to_clipboard(recs):
-                    QMessageBox.information(window, "复制", f"已复制 {len(recs)} 条日志到剪贴板。")
+                    toast_tip.show_toast(f"已复制 {len(recs)} 条日志到剪贴板。", window)
             act_copy.triggered.connect(do_copy)
             menu.addAction(act_copy)
             menu.addSeparator()
@@ -2106,7 +2284,7 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         snapshot_before()
         for rec in records:
             file.append(rec)
-        table_update()
+        table_update(scroll_to_bottom=True)   # 新记录追加在末尾 → 跳到最后一条，便于查看
         # 直接落盘到当前项目文件（不依赖自动保存开关，也不弹“保存成功”）
         global key
         if _rc() is not None:
@@ -2114,7 +2292,7 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
             try:
                 _rc().send_save(file)
             except Exception as e:
-                QMessageBox.warning(window, '保存失败', str(e))
+                toast_tip.show_toast('保存失败：' + str(e), window, kind='warning')
         else:
             if save_path:
                 fhl_rw.write_fhl_file(save_path, file, key)
@@ -2237,7 +2415,7 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         pack_menu.addAction(run_pack(pack))
 
     table_update(delete=False)
-    table_update()
+    table_update(scroll_to_bottom=True)   # 首次打开项目：跳到最后一条记录
 
     # ---------- 未保存内容自动备份 / 关闭守卫 ----------
     # 打开项目时：把当前（已保存）内容写入备份作为基线；若为空则清空。
@@ -2667,6 +2845,21 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         _refresh()
         _update_peers()
         dlg.show()
+
+    # 暴露内部闭包给离屏冒烟/基准脚本（不影响正常使用）
+    window._perf_api = {
+        'table_update': table_update,
+        'set_all_rows_checked': set_all_rows_checked,
+        'invert_rows_checked': invert_rows_checked,
+        'get_selected_row_indexes': get_selected_row_indexes,
+        'get_selected_records': get_selected_records,
+        'delete_selected_logs': delete_selected_logs,
+        'project_others': project_others,
+        'append_to_project': append_to_project,
+        'new': new,
+        'checked_rows': _checked_rows,
+        'get_table': lambda: table,
+    }
 
     window.show()
 
