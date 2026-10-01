@@ -178,6 +178,17 @@ class MoreButtonDelegate(QStyledItemDelegate):
         return super().editorEvent(event, model, option, index)
 
 
+class LocateButtonDelegate(MoreButtonDelegate):
+    """「定位到此条」列：外观与「更多」列一致，点击回调到定位函数。
+
+    仅用于「搜索结果」窗口——把主窗口聚焦并将主表滚动/选中到该条日志。
+    复用 MoreButtonDelegate 的绘制与命中判定，只改默认按钮文字。
+    """
+
+    def __init__(self, parent=None, text='定位'):
+        super().__init__(parent, text=text)
+
+
 # ---------------------------------------------------------------------------
 # 多人日志客户端：与 remote_server 共用帧协议，作为「开放多人日志」/「加入多人日志」的
 # 统一后端。远程模式下 project.main 的所有功能（表格/新建/搜索/导入导出/卫星记录等）
@@ -657,6 +668,7 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         _bk_state['last'] = snap
         if _rc() is None:
             _bk_state['local'] = snap
+        _refresh_title()   # 内容已持久化 → 去掉标题里的未保存标记
 
     def _bk_is_dirty():
         try:
@@ -675,6 +687,7 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         except Exception:
             return
         _bk_state['last'] = snap if snap == _bk_state.get('local', '') else ''
+        _refresh_title()   # 基线变了 → 同步标题上的未保存标记
 
     def _bk_write(force=False):
         # 多人日志：内容由服务端持有并落盘，本机不写“未保存”备份——否则下次启动会误报
@@ -689,6 +702,39 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
 
     def _bk_clear():
         backup.clear_backup(backup.PROJECT_BACKUP)
+
+    # ---------- 窗口标题的「未保存」标记 ----------
+    # 约定：标题最前面加一个 '*' 表示当前内容相对「已持久化」有未保存更改。
+    # 标题由「前缀（* 或空）+ 基标题」组成；基标题 = 多人日志标题 或 window._local_title。
+    # 所有 setWindowTitle 都经 _set_title 走，保证 * 在任何标题下都统一、且保存后能自动去掉。
+    def _title_base():
+        """当前应展示的「基标题」（不含 * 前缀）。"""
+        if _rc() is not None:
+            _role = '服务端' if window._is_host else '客户端'
+            return f'F HamLog 2 - 多人日志（{_role}） {window._remote.host}:{window._remote.port}'
+        return window._local_title or 'F HamLog 2'
+
+    def _set_title(base=None):
+        """设置窗口标题，并按当前是否有未保存更改加上 '*' 前缀。
+
+        base：显式传入基标题（如断开后的「... - 多人日志已断开」）；
+              不传则按 _title_base() 推导（多人日志 / 本地项目标题）。
+        """
+        try:
+            dirty = _bk_is_dirty()
+        except Exception:
+            dirty = False
+        title = _title_base() if base is None else base
+        window.setWindowTitle(('*' if dirty else '') + title)
+
+    def _refresh_title():
+        """重算并应用标题（内容变化 / 保存完成后调用，用于同步 * 标记）。"""
+        if not _qt_alive(window):
+            return
+        try:
+            _set_title()
+        except Exception:
+            pass
 
     def _bk_close_texts():
         """关闭守卫文案：多人日志下「保存」实为「同步到服务端」。"""
@@ -1212,7 +1258,8 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         backup.clear_backup(backup.PROJECT_BACKUP)
         save_path = sp
         _bk_snapshot(snap)  # 复位快照 → 消除“未保存”标记
-        window.setWindowTitle(f'F HamLog 2 - {os.path.basename(save_path)}')
+        window._local_title = f'F HamLog 2 - {os.path.basename(save_path)}'
+        _set_title()        # 经统一入口落标题（_bk_snapshot 已复位基线 → 不带 *）
         toast_tip.show_toast("已保存恢复的内容。", window)
         return True
 
@@ -1436,19 +1483,18 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
     print(save_path)
     window.resize(1350, 700)
     if _rc() is not None:
-        _role = '服务端' if is_host else '客户端'
-        window.setWindowTitle(f'F HamLog 2 - 多人日志（{_role}） {window._remote.host}:{window._remote.port}')
-        # 断开多人日志后恢复用的本地标题（而非多人日志标题本身）
+        # 断并多人日志后恢复用的本地标题（而非多人日志标题本身）
         window._local_title = 'F HamLog 2'
     elif quick_poject:
-        window.setWindowTitle(f'F HamLog 2 - 通联日志')
-        window._local_title = window.windowTitle()
+        window._local_title = 'F HamLog 2 - 通联日志'
     elif save_path:
-        window.setWindowTitle(f'F HamLog 2 - {os.path.basename(save_path)}')
-        window._local_title = window.windowTitle()
+        window._local_title = f'F HamLog 2 - {os.path.basename(save_path)}'
     else:
-        window.setWindowTitle('F HamLog 2 - 恢复的项目')
-        window._local_title = window.windowTitle()
+        window._local_title = 'F HamLog 2 - 恢复的项目'
+    # 统一由 _set_title 落标题（按未保存状态决定是否带 * 前缀）；
+    # 此刻 _bk_state 尚未按打开内容复位，先按「当前内容」占位，
+    # 稍后 _bk_snapshot()/recovered 分支会再刷新一次。
+    _set_title()
     # window.showMaximized()
     # 创建菜单栏
     menu_bar = window.menuBar()
@@ -1792,31 +1838,63 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
             return
 
         research_window = QMainWindow()
-        research_window.resize(1300, 600)
+        # 宽度 1300 → 1350：为新增的「定位到此条」列留出空间
+        research_window.resize(1350, 600)
         research_window.setWindowTitle(f"搜索结果：{edit.text().strip()}")
         central = QWidget()
         research_window.setCentralWidget(central)
         lay = QVBoxLayout(central)
 
         search_checkboxes = []  # [(table_row, orig_index), ...] 在下方填写
+        # 搜索结果勾选状态（性能优化，与主表 _checked_rows 同思路）：
+        #   _sr_checked_rows     —— 已勾选行对应的「原始索引」集合（统计/导出/同步判定的权威）
+        #   _sr_checked_rows_idx —— 已勾选行对应的「搜索结果行号」集合（绘制/全选反选用）
+        # 两者同步维护；委托只回调、不直接改 model，统一由下面几个函数写回 item。
+        _sr_checked_rows = set()
+        _sr_checked_rows_idx = set()
 
-        # 搜索结果窗口的勾选状态：直接读/写对应 item 的 _CHECK_ROLE（委托绘制）
-        def _sr_checked(table_row):
-            it = table_r.item(table_row, 0) if table_r is not None else None
-            return bool(it.data(_CHECK_ROLE)) if it is not None else False
+        # 搜索结果窗口的勾选状态：以集合为准，O(1) 查询
+        def _sr_set_row(row, checked):
+            """写单行勾选状态：同时更新两个集合与 item，并同步到主表。"""
+            it = table_r.item(row, 0) if table_r is not None else None
+            if it is not None:
+                it.setData(_CHECK_ROLE, bool(checked))
+            if 0 <= row < len(search_checkboxes):
+                orig = search_checkboxes[row][1]
+                if checked:
+                    _sr_checked_rows.add(orig)
+                    _sr_checked_rows_idx.add(row)
+                else:
+                    _sr_checked_rows.discard(orig)
+                    _sr_checked_rows_idx.discard(row)
+                set_main_checkbox(orig, checked)
 
         def _sr_set_all(checked):
+            """全选 / 取消选择：集合整体赋值（O(n) 但只做集合运算），
+            写回 item 期间冻结刷新，避免上万次 setData 触发重绘。"""
             if table_r is None:
                 return
+            if checked:
+                _sr_checked_rows_idx.clear()
+                _sr_checked_rows_idx.update(range(table_r.rowCount()))
+                _sr_checked_rows.clear()
+                for _row, orig in search_checkboxes:
+                    _sr_checked_rows.add(orig)
+            else:
+                _sr_checked_rows_idx.clear()
+                _sr_checked_rows.clear()
             prev = table_r.updatesEnabled()
             table_r.setUpdatesEnabled(False)
-            for r in range(table_r.rowCount()):
-                it = table_r.item(r, 0)
-                if it is not None:
-                    it.setData(_CHECK_ROLE, checked)
-                if r < len(search_checkboxes):
-                    set_main_checkbox(search_checkboxes[r][1], checked)
-            table_r.setUpdatesEnabled(prev)
+            try:
+                for r in range(table_r.rowCount()):
+                    it = table_r.item(r, 0)
+                    if it is not None:
+                        it.setData(_CHECK_ROLE, checked)
+            finally:
+                table_r.setUpdatesEnabled(prev)
+            # 一次写回主表（避免逐行 _row_checked 的重复遍历）
+            for _row, orig in search_checkboxes:
+                set_main_checkbox(orig, checked)
 
         # 选择逻辑：与 project.py 主窗口一致（全选 / 反选 / 取消选择）
         def _search_select_all():
@@ -1826,12 +1904,28 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
             _sr_set_all(False)
 
         def _search_invert():
-            for r in range(table_r.rowCount() if table_r is not None else 0):
-                it = table_r.item(r, 0)
-                if it is not None:
-                    new_val = not bool(it.data(_CHECK_ROLE))
-                    it.setData(_CHECK_ROLE, new_val)
-                    set_main_checkbox(search_checkboxes[r][1], new_val)
+            """反选：集合补集运算，O(n)，不逐行读 item。"""
+            if table_r is None:
+                return
+            n = table_r.rowCount()
+            new_idx = set(range(n)) - _sr_checked_rows_idx
+            _sr_checked_rows_idx.clear()
+            _sr_checked_rows_idx.update(new_idx)
+            _sr_checked_rows.clear()
+            for r in new_idx:
+                if 0 <= r < len(search_checkboxes):
+                    _sr_checked_rows.add(search_checkboxes[r][1])
+            prev = table_r.updatesEnabled()
+            table_r.setUpdatesEnabled(False)
+            try:
+                for r in range(n):
+                    it = table_r.item(r, 0)
+                    if it is not None:
+                        it.setData(_CHECK_ROLE, r in new_idx)
+            finally:
+                table_r.setUpdatesEnabled(prev)
+            for r, orig in search_checkboxes:
+                set_main_checkbox(orig, r in new_idx)
 
         # 仅针对当前搜索结果（matches）的统计与导出
         def _search_records():
@@ -1842,7 +1936,7 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
             if scope == '全部通联记录':
                 return file
             if scope == '仅选中的行':
-                return [file[orig] for r, orig in search_checkboxes if _sr_checked(r)]
+                return [file[orig] for orig in sorted(_sr_checked_rows)]
             return [rec for _, rec in matches]  # 全部搜索结果
 
         def _export_search_fhl():
@@ -1938,48 +2032,106 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         lay.addLayout(top_row)
 
         # 新增"选择"列（列0），其余列整体右移一列；复用统一表格定义（委托绘制，支持上万行）
-        search_checkboxes = []  # [(row, orig_index), ...] 供全选/反选/导出读取
+        # search_checkboxes 在下方填表时按行号预分配（[(row, orig_index), ...]）
 
         def _sr_toggle(row, checked):
-            """搜索结果窗口勾选被点击：写回本窗口 item，并同步到主表对应行。"""
-            it = table_r.item(row, 0) if row < table_r.rowCount() else None
-            if it is not None:
-                it.setData(_CHECK_ROLE, bool(checked))
-            if 0 <= row < len(search_checkboxes):
-                set_main_checkbox(search_checkboxes[row][1], checked)
+            """搜索结果窗口勾选被点击：更新集合/item，并同步到主表对应行。"""
+            _sr_set_row(row, checked)
 
         def _search_more_cb(row):
             # 「更多」按搜索结果行号 → 映射回主 file 的原始索引
             project_others(matches[row][0])
 
+        def _locate_in_main(row):
+            """定位到此条：聚焦主窗口，把主表滚动到该条并选中高亮。
+
+            按搜索结果行号 → 映射回主 file 的原始索引 → 主表行号（两者当前一一对应）。
+            主表被重建过（如编辑后）时原始索引仍与行号一致（file 未做重排），
+            但仍做一次边界校验，避免越界。
+            """
+            if not (0 <= row < len(matches)):
+                return
+            orig = matches[row][0]
+            if table is None or not (0 <= orig < table.rowCount()):
+                toast_tip.show_toast("主窗口日志表尚未就绪，无法定位。", window, kind='warning')
+                return
+            # 1) 聚焦主窗口（还原最小化/置于最前并激活）
+            try:
+                if window.isMinimized():
+                    window.showNormal()
+                window.raise_()
+                window.activateWindow()
+            except Exception:
+                pass
+            # 2) 滚动到该行并选中高亮
+            item = table.item(orig, 0)
+            if item is not None:
+                table.scrollToItem(item, QAbstractItemView.PositionAtCenter)
+            table.clearSelection()
+            table.selectRow(orig)
+            table.setCurrentCell(orig, 0)
+
         table_r = _new_table(len(matches), on_toggle=_sr_toggle)
+        # 搜索结果表在主表列定义之后追加一列「定位到此条」（仅搜索结果窗口有），
+        # 故需在创建后覆盖表头与列宽，并给该列挂上定位委托。
+        _SR_HEADERS = _TABLE_HEADERS + ["定位到此条"]
+        _SR_COL_WIDTHS = _TABLE_COL_WIDTHS + [80]
+        table_r.setColumnCount(len(_SR_HEADERS))
+        table_r.setHorizontalHeaderLabels(_SR_HEADERS)
+        locate_col = len(_SR_HEADERS) - 1
+        _locate_delegate = LocateButtonDelegate(table_r)
+        _locate_delegate.set_click(_locate_in_main)
+        table_r.setItemDelegateForColumn(locate_col, _locate_delegate)
+        # 性能优化（与主表 _fill_rows 同思路）：填充期间由 _new_table 冻结刷新，
+        # 循环内不再逐行解冻；最后统一解冻一次性重绘。
+        # 局部绑定 setItem 与常量，省去数万次属性查找；search_checkboxes 预分配，
+        # 按行号索引写回，避免逐行 append 的重复扩容。
+        _set_item = table_r.setItem
+        _fields = _TABLE_FIELDS
+        last_col = len(_TABLE_HEADERS) - 1
+        search_checkboxes = [None] * len(matches)
+        clear_sr = _sr_checked_rows.clear
+        clear_sr_idx = _sr_checked_rows_idx.clear
+        clear_sr()
+        clear_sr_idx()
         for row, (orig_index, rec) in enumerate(matches):
-            # 初始勾选状态与主页面保持一致
-            checked = bool(_get_main_checkbox(orig_index))
+            # 初始勾选状态与主页面保持一致（以主表勾选集合为准，O(1)）
+            checked = bool(_row_checked(orig_index))
+            if checked:
+                _sr_checked_rows.add(orig_index)
+                _sr_checked_rows_idx.add(row)
             it = QTableWidgetItem()
             it.setData(_CHECK_ROLE, checked)
-            table_r.setItem(row, 0, it)
-            for c, field in enumerate(_TABLE_FIELDS, start=1):
-                table_r.setItem(row, c, QTableWidgetItem(record_text(rec, field)))
-            table_r.setItem(row, len(_TABLE_HEADERS) - 1, QTableWidgetItem())
-            search_checkboxes.append((row, orig_index))
-        # 列宽与旧实现一致（14 列全部显式设宽，末列也是 80）
-        for c, w in enumerate(_TABLE_COL_WIDTHS):
+            _set_item(row, 0, it)
+            for c, field in enumerate(_fields, start=1):
+                val = rec.get(field, '')
+                _set_item(row, c, QTableWidgetItem('' if val is None else str(val)))
+            _set_item(row, last_col, QTableWidgetItem())
+            _set_item(row, locate_col, QTableWidgetItem())
+            search_checkboxes[row] = (row, orig_index)
+        # 列宽与旧实现一致（14 列全部显式设宽，末列也是 80），末列后追加「定位到此条」
+        for c, w in enumerate(_SR_COL_WIDTHS):
             table_r.setColumnWidth(c, w)
-        table_r.itemDelegateForColumn(len(_TABLE_HEADERS) - 1).set_click(_search_more_cb)
+        table_r.itemDelegateForColumn(last_col).set_click(_search_more_cb)
         table_r.setUpdatesEnabled(True)
         lay.addWidget(table_r)
         table_r.scrollToBottom()
 
-        # 搜索结果表格右键菜单：复制选中行 / 全选 / 反选 / 取消选择（复制的记录可粘贴到主窗口或 Excel）
+        # 搜索结果表格右键菜单：定位到此条 / 复制选中行 / 全选 / 反选 / 取消选择
+        # （复制的记录可粘贴到主窗口或 Excel）
         def _search_context_menu(pos):
             menu = QMenu(window)
+            # 右键所在行（无有效行时禁用「定位」）；定位多行时取第一行
+            _r = table_r.indexAt(pos).row()
+            act_locate = QAction('定位到此条', window)
+            act_locate.triggered.connect(lambda: _locate_in_main(_r))
+            act_locate.setEnabled(_r >= 0)
+            menu.addAction(act_locate)
+            menu.addSeparator()
             act_copy = QAction('复制选中行', window)
             def do_copy():
-                recs = []
-                for r, orig_index in search_checkboxes:
-                    if _sr_checked(r):
-                        recs.append(file[orig_index])
+                # 勾选集合为先（O(1) 判定），未勾选时回退到表格高亮选中行
+                recs = [file[orig] for orig in sorted(_sr_checked_rows)]
                 if not recs:
                     for idx in table_r.selectionModel().selectedRows():
                         recs.append(file[matches[idx.row()][0]])
@@ -1998,6 +2150,16 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
 
         table_r.setContextMenuPolicy(Qt.CustomContextMenu)
         table_r.customContextMenuRequested.connect(_search_context_menu)
+
+        # 双击任意非勾选/非按钮单元格 → 同样定位到主窗口该条（与「定位到此条」按钮等价）
+        def _search_double_click(index):
+            if index is None or not index.isValid():
+                return
+            if index.column() in (0, last_col, locate_col):
+                return
+            _locate_in_main(index.row())
+
+        table_r.cellDoubleClicked.connect(_search_double_click)
 
         research_window.show()
 
@@ -2432,6 +2594,7 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         _bk_write()
     else:
         _bk_clear()
+    _refresh_title()   # 基线复位后再刷一次标题（恢复项目保持 * 未保存；普通项目去掉 *）
 
     # 周期定时器：存在未保存更改时即时备份，覆盖意外关闭/崩溃场景
     def _bk_tick():
@@ -2440,6 +2603,7 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
             return
         if _bk_is_dirty():
             _bk_write()
+        _refresh_title()   # 每次 tick 都同步标题 * 标记（内容变干净时也要去掉 *）
 
     _bk_timer = QTimer(window)
     _bk_timer.setInterval(1500)
@@ -2501,13 +2665,10 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         window._is_host = is_host
         window._server = server
         window._remote_dc_shown = False
-        if is_host:
-            window.setWindowTitle(f'F HamLog 2 - 多人日志（服务端） {conn.host}:{conn.port}')
-        else:
-            window.setWindowTitle(f'F HamLog 2 - 多人日志（客户端） {conn.host}:{conn.port}')
         # 仅在尚未记录时补一个本地标题，避免覆盖正常项目的原标题（断开后要恢复它）
         if not window._local_title:
             window._local_title = 'F HamLog 2'
+        _set_title()   # 切到多人日志标题（基标题由 _title_base 按 _remote 推导）
         if window._aes_action is not None:
             window._aes_action.setVisible(False)
         # 进入多人日志：内容改由服务端持有（本机开放时，当前内容已作为房间初始内容），
@@ -2567,7 +2728,7 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
                                     '需要继续同步请重新加入多人日志。')
                 if window._local_title:
                     # 标题上留标记：断线后窗口看起来仍像在会话中，容易误以为「日志没同步」
-                    window.setWindowTitle(f'{window._local_title} - 多人日志已断开')
+                    _set_title(f'{window._local_title} - 多人日志已断开')
                 if window._aes_action is not None:
                     window._aes_action.setVisible(True)
             except Exception:
@@ -2619,7 +2780,7 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         _bk_on_remote_exit()
         if restore_ui and _qt_alive(window):
             if window._local_title:
-                window.setWindowTitle(window._local_title)
+                _set_title(window._local_title)   # 恢复本地项目标题（按未保存状态带 *）
             if window._aes_action is not None:
                 window._aes_action.setVisible(True)
 
@@ -2859,6 +3020,11 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         'new': new,
         'checked_rows': _checked_rows,
         'get_table': lambda: table,
+        'research_call': research_call,   # 供搜索相关离屏冒烟脚本驱动
+        '_set_title': _set_title,         # 供标题 * 标记冒烟脚本驱动
+        '_bk_is_dirty': _bk_is_dirty,
+        '_bk_tick': _bk_tick,
+        'save': save,
     }
 
     window.show()

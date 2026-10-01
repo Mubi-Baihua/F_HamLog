@@ -901,24 +901,24 @@ def main(window, preset=None, on_saved=None, preset_records=None, recovered=Fals
 
     button_add = QPushButton('添加日志列 (Ctrl+N)')
     button_add.setMinimumHeight(34)
-    button_add.setToolTip('新建一条日志列（Ctrl+N）')
+#     button_add.setToolTip('新建一条日志列（Ctrl+N）')
     button_add.clicked.connect(add_log_column)
 
     button_del = QPushButton('删除当前列 (Ctrl+D)')
     button_del.setMinimumHeight(34)
-    button_del.setToolTip('删除当前选中的日志列（Ctrl+D，模板列不可删除）')
+#     button_del.setToolTip('删除当前选中的日志列（Ctrl+D，模板列不可删除）')
     button_del.clicked.connect(delete_current_column)
 
     button_undo = QPushButton('撤销 (Ctrl+Z)')
     button_undo.setMinimumHeight(34)
-    button_undo.setToolTip('撤销上一步操作（Ctrl+Z）')
+#     button_undo.setToolTip('撤销上一步操作（Ctrl+Z）')
     button_undo.clicked.connect(do_undo)
     button_undo.setEnabled(undo_stack.canUndo())
     undo_stack.canUndoChanged.connect(button_undo.setEnabled)
 
     button_redo = QPushButton('重做 (Ctrl+Y)')
     button_redo.setMinimumHeight(34)
-    button_redo.setToolTip('重做（Ctrl+Y 或 Ctrl+Shift+Z）')
+#     button_redo.setToolTip('重做（Ctrl+Y 或 Ctrl+Shift+Z）')
     button_redo.clicked.connect(do_redo)
     button_redo.setEnabled(undo_stack.canRedo())
     undo_stack.canRedoChanged.connect(button_redo.setEnabled)
@@ -930,7 +930,7 @@ def main(window, preset=None, on_saved=None, preset_records=None, recovered=Fals
 
     button_save = QPushButton('完成 (Ctrl+S)')
     button_save.setMinimumHeight(34)
-    button_save.setToolTip('保存全部记录（Ctrl+S）')
+#     button_save.setToolTip('保存全部记录（Ctrl+S）')
     button_save.clicked.connect(_finish_save)
 
     btn_row.addWidget(button_add)

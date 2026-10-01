@@ -66,7 +66,7 @@ def main(window):
     def back_set():
         import os
         import shutil
-        print("从之前版本导入数据")  # 保持引用，防止被回收
+        print("从其他版本导入数据")  # 保持引用，防止被回收
         folder = QFileDialog.getExistingDirectory(window, "选择之前版本 F HamLog.exe 所在的文件夹", desktop_dir())
         if folder:
             print(f"选择的文件夹: {folder}")
@@ -89,11 +89,28 @@ def main(window):
 
                 if os.path.exists(os.path.join(file_path, 'sat_radio_dict.txt')):
                     shutil.copyfile(os.path.join(file_path, 'sat_radio_dict.txt'), 'file/sat_radio_dict.txt')
-                    back_item += '、卫星转发器表(sat_radio_dict.txt)'
+                    back_item += '、卫星转发器表'
 
                 if os.path.exists(os.path.join(file_path, 'tqsl_dict.txt')):
                     shutil.copyfile(os.path.join(file_path, 'tqsl_dict.txt'), 'file/tqsl_dict.txt')
-                    back_item += '、TQSL映射表(tqsl_dict.txt)'
+                    back_item += '、TQSL映射表'
+
+                if os.path.exists(os.path.join(file_path, 'sat_map_markers.txt')):
+                    shutil.copyfile(os.path.join(file_path, 'sat_map_markers.txt'), 'file/sat_map_markers.txt')
+                    back_item += '、卫星地图标记点'
+
+                if os.path.exists(os.path.join(file_path, 'tle_sources.txt')):
+                    shutil.copyfile(os.path.join(file_path, 'tle_sources.txt'), 'file/tle_sources.txt')
+                    back_item += '、星历数据源'
+
+                if os.path.exists(os.path.join(file_path, 'amateur.tle')):
+                    shutil.copyfile(os.path.join(file_path, 'amateur.tle'), 'file/amateur.tle')
+                    back_item += '、卫星数据缓存'
+
+                if os.path.exists(os.path.join(file_path, 'known_server_keys.txt')):
+                    shutil.copyfile(os.path.join(file_path, 'known_server_keys.txt'), 'file/known_server_keys.txt')
+                    back_item += '、多人日志缓存'
+    
 
                 # 旧版本的数据以「卫星名」为键，这里立即按当前星历升级为卫星编号
                 # （静默执行：解析不出的条目原样保留，不打断导入流程）。
@@ -102,10 +119,10 @@ def main(window):
                 except Exception:
                     pass
 
-                QMessageBox.information(window, "从之前版本导入数据", f"成功导入{back_item}\n（目前不支持从之前版本中导入插件）")
+                QMessageBox.information(window, "从其他版本导入数据", f"成功导入{back_item}\n（目前不支持从之前版本中导入插件）")
                 window.close()
             else:
-                QMessageBox.warning(window, "从之前版本导入数据", "请选择之前版本 F HamLog.exe 所在的文件夹！")
+                QMessageBox.warning(window, "从其他版本导入数据", "请选择之前版本 F HamLog.exe 所在的文件夹！")
                 back_set()
 
     # 颜色模式与自动保存合并成一行后，内容高度减少约 30px，窗口高度同步收回
@@ -148,7 +165,7 @@ def main(window):
     aouto_list_.setChecked(aouto_list_b)
     sat_auto_update = QCheckBox("星历自动更新", central_widget)
     sat_auto_update.setChecked(sat_auto_update_b)
-    sat_auto_update.setToolTip("开启后，程序会在后台按设定间隔自动刷新卫星星历(TLE)")
+#     sat_auto_update.setToolTip("开启后，程序会在后台按设定间隔自动刷新卫星星历(TLE)")
     sat_update_hours_spin = QSpinBox(central_widget)
     sat_update_hours_spin.setRange(1, 168)
     sat_update_hours_spin.setValue(sat_update_hours)
@@ -163,8 +180,8 @@ def main(window):
     _idx = theme_mode_box.findData(theme.load_mode())
     if _idx >= 0:
         theme_mode_box.setCurrentIndex(_idx)
-    theme_mode_box.setToolTip('跟随系统：随系统深浅色自动切换；浅色/深色：固定外观。'
-                              '改动立即生效并保存，无需点「保存更改」。')
+#     theme_mode_box.setToolTip('跟随系统：随系统深浅色自动切换；浅色/深色：固定外观。'
+#                               '改动立即生效并保存，无需点「保存更改」。')
 
     def on_theme_mode_changed(_index=None):
         mode = theme_mode_box.currentData()
@@ -188,9 +205,9 @@ def main(window):
 
     # ---------- 星历数据源：按钮与「插件设置」同一行（数据源配置在独立窗口） ----------
     src_set_btn = QPushButton("设置星历数据源", central_widget)
-    src_set_btn.setToolTip(
-        "在独立的「星历数据源」窗口中增删与排序 TLE 下载地址，列表里双击即可编辑；"
-        "保存后立即生效。")
+#     src_set_btn.setToolTip(
+#         "在独立的「星历数据源」窗口中增删与排序 TLE 下载地址，列表里双击即可编辑；"
+#         "保存后立即生效。")
 
     def set_sources():
         """打开独立的「星历数据源」窗口（非模态；已打开则前置复用）。"""
@@ -266,7 +283,7 @@ def main(window):
     bottom_layout = QHBoxLayout()
     pack_button = QPushButton("插件设置", central_widget)
     pack_button.clicked.connect(lambda: pack_set())
-    back_button = QPushButton("从之前版本导入数据", central_widget)
+    back_button = QPushButton("从其他版本导入数据", central_widget)
     back_button.clicked.connect(lambda: back_set())
     # 三个按钮平分整行宽度（与「保存更改」同样的通栏样式）
     bottom_layout.addWidget(pack_button, 1)

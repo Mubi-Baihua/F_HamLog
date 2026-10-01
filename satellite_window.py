@@ -260,9 +260,9 @@ class SatelliteSelectDialog(QDialog):
         # 因此拿编号搜之前必须先打开这个开关。
         # 单独占一行：与搜索框挤在同一行时，开关文字会把搜索框压到只剩几十像素宽。
         self.by_number_chk = QCheckBox('使用卫星编号搜索')
-        self.by_number_chk.setToolTip(
-            '勾选后，搜索框除卫星名外还会按卫星编号（NORAD ID）匹配。'
-            '编号里包含搜索词的卫星同样会被列出。')
+#         self.by_number_chk.setToolTip(
+#             '勾选后，搜索框除卫星名外还会按卫星编号（NORAD ID）匹配。'
+#             '编号里包含搜索词的卫星同样会被列出。')
         num_row = QHBoxLayout()
         num_row.addWidget(self.by_number_chk)
         num_row.addStretch(1)
@@ -542,11 +542,11 @@ class DictEditorDialog(QDialog):
         # 会直接把对话框顶宽（实测一段 104 字的说明能把最小宽度从 640 撑到 1270px，
         # 一打开就比原先宽一倍）。开关编号语义写进 tooltip，不占用正文宽度。
         hint.setWordWrap(True)
-        hint.setToolTip(
-            '第一列填卫星名（可从本地星历中搜索补全），保存时自动转成卫星编号'
-            '（NORAD ID）写入文件；\n'
-            '下次打开再按当前星历把编号显示回卫星名。\n'
-            '编号跨星历改名/换源都稳定，不会因为数据源换了名字就对不上。')
+#         hint.setToolTip(
+#             '第一列填卫星名（可从本地星历中搜索补全），保存时自动转成卫星编号'
+#             '（NORAD ID）写入文件；\n'
+#             '下次打开再按当前星历把编号显示回卫星名。\n'
+#             '编号跨星历改名/换源都稳定，不会因为数据源换了名字就对不上。')
         lay.addWidget(hint)
 
         self.table = QTableWidget(0, len(self._columns))
@@ -852,49 +852,49 @@ def main(parent_window, quick_log_callback=None, title='卫星过境'):
         改完立即生效；这里每次下载前重建提示，避免显示过期列表。
         """
         sources = sp.load_tle_sources()
-        refresh_btn.setToolTip(
-            '按下面列出的数据源依次下载卫星星历(TLE)，先列出的优先；'
-            '同一颗卫星以列表中先出现的数据源为准。\n'
-            '下载结果只按卫星编号更新，本地已有的卫星不会因为数据源里暂时没有而被删除。\n'
-            '数据源可在「设置 → 星历数据源…」独立窗口中增删与排序：\n'
-            + '\n'.join('%d. %s' % (i + 1, u) for i, u in enumerate(sources)))
+#         refresh_btn.setToolTip(
+#             '按下面列出的数据源依次下载卫星星历(TLE)，先列出的优先；'
+#             '同一颗卫星以列表中先出现的数据源为准。\n'
+#             '下载结果只按卫星编号更新，本地已有的卫星不会因为数据源里暂时没有而被删除。\n'
+#             '数据源可在「设置 → 星历数据源…」独立窗口中增删与排序：\n'
+#             + '\n'.join('%d. %s' % (i + 1, u) for i, u in enumerate(sources)))
 
     update_tle_tooltip()
     clear_tle_btn = QPushButton('清空星历')
-    clear_tle_btn.setToolTip(
-        '删除本地星历缓存并清空当前卫星列表；\n'
-        '自选卫星的选择保留，之后用「刷新星历」重新下载。')
+#     clear_tle_btn.setToolTip(
+#         '删除本地星历缓存并清空当前卫星列表；\n'
+#         '自选卫星的选择保留，之后用「刷新星历」重新下载。')
     obs_btn = QPushButton('观测站设置')
     edit_radio_btn = QPushButton('编辑转发器')
-    edit_radio_btn.setToolTip(
-        '编辑卫星转发器数据（下行/上行频率与模式）。\n'
-        '第一列填卫星名即可（可从本地星历搜索补全），保存时自动转成\n'
-        '卫星编号(NORAD ID)写入文件；下次打开按当前星历显示回卫星名。')
+#     edit_radio_btn.setToolTip(
+#         '编辑卫星转发器数据（下行/上行频率与模式）。\n'
+#         '第一列填卫星名即可（可从本地星历搜索补全），保存时自动转成\n'
+#         '卫星编号(NORAD ID)写入文件；下次打开按当前星历显示回卫星名。')
     edit_tqsl_btn = QPushButton('编辑TQSL映射')
-    edit_tqsl_btn.setToolTip(
-        '编辑 TQSL/LoTW 卫星名称映射。\n'
-        '第一列填卫星名即可（可从本地星历搜索补全），保存时自动转成\n'
-        '卫星编号(NORAD ID)写入文件；下次打开按当前星历显示回卫星名。')
+#     edit_tqsl_btn.setToolTip(
+#         '编辑 TQSL/LoTW 卫星名称映射。\n'
+#         '第一列填卫星名即可（可从本地星历搜索补全），保存时自动转成\n'
+#         '卫星编号(NORAD ID)写入文件；下次打开按当前星历显示回卫星名。')
     import_tle_btn = QPushButton('导入星历数据')
-    import_tle_btn.setToolTip(
-        '从 tle / txt / csv 文件导入卫星星历数据（TLE 或 Celestrak OMM CSV 格式，\n'
-        'CSV 会自动重建为两行根数）。只按卫星编号增量更新：同编号替换为新数据、\n'
-        '新编号追加，文件中没有的卫星保持原样；导入不会自动勾选卫星。')
+#     import_tle_btn.setToolTip(
+#         '从 tle / txt / csv 文件导入卫星星历数据（TLE 或 Celestrak OMM CSV 格式，\n'
+#         'CSV 会自动重建为两行根数）。只按卫星编号增量更新：同编号替换为新数据、\n'
+#         '新编号追加，文件中没有的卫星保持原样；导入不会自动勾选卫星。')
     # 双站通联预测：从本窗口直接打开，无需再回到主页或菜单
     mutual_btn = QPushButton('通联预测')
-    mutual_btn.setToolTip('打开双站通联预测：输入对方台站位置与各自最低仰角，预测两地可通过哪些卫星互相通联')
+#     mutual_btn.setToolTip('打开双站通联预测：输入对方台站位置与各自最低仰角，预测两地可通过哪些卫星互相通联')
     # 卫星地图：打开全球地图窗口，显示选中卫星的地面轨迹 / 当前位置 / 本台站
     map_btn = QPushButton('卫星地图')
-    map_btn.setToolTip(
-        '打开全球卫星地图：显示所有已选卫星（与下方“范围/自选卫星”实时同步）'
-        '自当前时刻起的地面轨迹与实时位置，以及本台站。\n'
-        '在结果表中点选一行，该卫星会在地图上聚焦高亮。')
+#     map_btn.setToolTip(
+#         '打开全球卫星地图：显示所有已选卫星（与下方“范围/自选卫星”实时同步）'
+#         '自当前时刻起的地面轨迹与实时位置，以及本台站。\n'
+#         '在结果表中点选一行，该卫星会在地图上聚焦高亮。')
     # 星历自动更新实时开关（等价于“设置”中的复选框）
     auto_cb = QCheckBox('星历自动更新')
     _auto_on = bool(settings.get('sat_auto_update', False))
     _auto_hours = int(settings.get('sat_update_hours', 24) or 24)
     auto_cb.setChecked(_auto_on)
-    auto_cb.setToolTip('开启后按“设置”中的间隔（当前每 %d 小时）自动刷新卫星星历(TLE)。也可在“设置”中修改。' % _auto_hours)
+#     auto_cb.setToolTip('开启后按“设置”中的间隔（当前每 %d 小时）自动刷新卫星星历(TLE)。也可在“设置”中修改。' % _auto_hours)
     tool_top.addWidget(refresh_btn)
     tool_top.addWidget(clear_tle_btn)
     tool_top.addWidget(obs_btn)
@@ -929,18 +929,19 @@ def main(parent_window, quick_log_callback=None, title='卫星过境'):
     start_edit.setText(datetime.datetime.now(LOCAL_TZ).strftime('%Y-%m-%d %H:%M'))
     start_edit.setPlaceholderText('YYYY-MM-DD HH:MM（如 2026-07-27 17:45）')
     start_edit.setMinimumWidth(150)
-    start_edit.setToolTip('预测起始时刻（系统本地时间），默认当前时间，支持 YYYY-MM-DD HH:MM 或带秒。')
+#     start_edit.setToolTip('预测起始时刻（系统本地时间），默认当前时间，支持 YYYY-MM-DD HH:MM 或带秒。')
     dur_label = QLabel('预测时长(小时):')
     dur_spin = QSpinBox()
     dur_spin.setRange(sp.MIN_PREDICT_HOURS, sp.MAX_PREDICT_HOURS)  # 最长 240 小时（10 天）
-    dur_spin.setToolTip('预测时间跨度，最长 %d 小时（10 天）。' % sp.MAX_PREDICT_HOURS)
+    dur_spin.setToolTip('预测时长：最长 %d 小时（10 天）' % sp.MAX_PREDICT_HOURS)
     dur_spin.setValue(sat_dur)  # 自动读取上次的值（已钳制到 240 以内）
     el_label = QLabel('最低仰角(°):')
     el_spin = QSpinBox()
     el_spin.setRange(0, 90)
     el_spin.setValue(sat_el)
-    el_spin.setToolTip('本站（观测站）的最低可用仰角：低于该仰角认为天线被遮挡 / 信号不可用，不计入可见过境。')
+#     el_spin.setToolTip('本站（观测站）的最低可用仰角：低于该仰角认为天线被遮挡 / 信号不可用，不计入可见过境。')
     sel_btn = QPushButton('选择卫星…')
+    sel_btn.setToolTip('选择卫星：最多 %d 颗' % sp.MAX_SELECTED_SATELLITES)
     tool_bottom.addWidget(start_label)
     tool_bottom.addWidget(start_edit)
     tool_bottom.addSpacing(12)
@@ -968,7 +969,7 @@ def main(parent_window, quick_log_callback=None, title='卫星过境'):
     prog_layout.addWidget(progress_bar, 1)
     cancel_dl_btn = QPushButton('取消下载')
     cancel_dl_btn.setVisible(False)
-    cancel_dl_btn.setToolTip('取消当前正在进行的星历下载')
+#     cancel_dl_btn.setToolTip('取消当前正在进行的星历下载')
 
     def cancel_download():
         # 置取消标志；后台线程在分块读时检测到后会抛出 TleFetchCanceled
@@ -1183,7 +1184,7 @@ def main(parent_window, quick_log_callback=None, title='卫星过境'):
                     f"{r['aos_az']:.0f}°→{r['los_az']:.0f}°"))
                 table.setItem(i, 5, QTableWidgetItem(_duration_str(r['duration'])))
                 rec_btn = QPushButton('记录')
-                rec_btn.setToolTip('打开批量记录窗口并预填该卫星的卫星名/传播模式/收发频率等信息')
+#                 rec_btn.setToolTip('打开批量记录窗口并预填该卫星的卫星名/传播模式/收发频率等信息')
                 rec_btn.clicked.connect(
                     lambda _checked=False, i=i: log_row(i))
                 table.setCellWidget(i, 6, rec_btn)
