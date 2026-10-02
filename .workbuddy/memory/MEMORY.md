@@ -83,7 +83,8 @@
 ## 验证环境（离屏 GUI 冒烟）
 - venv 可 `QT_QPA_PLATFORM=offscreen` 真实冒烟；主窗/卫星窗/互通窗/批量/独立服务端均可离屏。
 - **坑**：槽里 `sys.exit()` 从 PySide6 C++ 边界直接终止进程 → 测试前 `sys.exit = lambda *a, **k: None`。
-- 约定：冒烟脚本 `__*_smoke.py`，结果 `__*_out.txt`（已被 `.gitignore` 覆盖）；**优先 monkeypatch 路径常量到临时文件**（`sp.TLE_SOURCES_PATH`/`sp.SETTINGS_PATH`/`smw.MARKERS_PATH`）。
+- 约定：测试/冒烟脚本统一放在 `test/` 目录（2026-10-02 由根目录迁入，原 `tests/` 仅含 1 个文件已合并删除）；命名 `__*_smoke.py` / `__*_probe.py` / `test_*.py`，结果 `__*_out.txt`（已被 `.gitignore` 覆盖）；**优先 monkeypatch 路径常量到临时文件**（`sp.TLE_SOURCES_PATH`/`sp.SETTINGS_PATH`/`smw.MARKERS_PATH`）。
+  脚本靠 `os.path.dirname(os.path.dirname(os.path.abspath(__file__)))` 把项目根固定到 sys.path，移入子目录后仍可导入；内嵌子进程引导字符串里的单级 dirname（如 `__rl_autocreate_smoke.py` 的 DRIVER）**故意保留**，勿一并改成两级。
 - **绝不能 `git checkout -- file/…` 还原 `file/` 数据文件**（用户正在用，可能已手工改）；测完核对并还原 `m_xml.txt`/`amateur.tle`/`sat_map_markers.txt`/`tle_sources.txt`。
 - 造「导入星历」fixture：星选 `int(编号) <= 99999`（≥100000 是 Alpha-5，如 100093=`A0093`）；`'%05d'` 直写 6 位会溢出 5 列编号位。
 - 提示从 `QMessageBox` 换 `toast_tip.show_toast` 后，旧 monkeypatch `QMessageBox.information` 的测试会**静默失效**→ 需同时 monkeypatch `toast_tip.show_toast`。
