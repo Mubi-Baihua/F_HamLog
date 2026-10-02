@@ -5,7 +5,10 @@
 - 默认显示 1 秒后自动关闭（带轻微淡入淡出，避免突兀）；
 - 跟随当前主题（浅色/深色）取 ToolTip 配色，警告类用语义红；
 - 多个提示**原地堆叠**在屏幕上方中央（新提示覆盖在旧提示之上，不上下挪动），不会一路往下排；
-- 父窗口销毁时随之一并销毁，不残留。
+- 父窗口销毁时随之一并销毁，不残留；
+- **宽度按文案自适应**：以文字单行完整显示所需的宽度为准——比当前宽度窄的文案保持当前宽度（不缩窄，
+  下限 `_MIN_W`），比当前宽度宽的文案**自动加宽**（上限为屏幕可用宽度的 80%，至少 `_MAX_W`）；
+  只有超过上限的长文案才折行成多行并增加高度。
 
 典型用法（取代 QMessageBox.information/warning 的结果反馈）::
 
@@ -14,7 +17,7 @@
     toast_tip.show_toast('剪贴板内容无法识别为日志数据。', window, kind='warning')
 """
 from PySide6.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve
-from PySide6.QtGui import QPalette, QColor, QPainter, QPen
+from PySide6.QtGui import QPalette, QColor, QPainter, QPen, QFontMetrics
 from PySide6.QtCore import QRectF
 from PySide6.QtWidgets import QWidget, QLabel, QApplication
 
@@ -22,6 +25,32 @@ from PySide6.QtWidgets import QWidget, QLabel, QApplication
 _ACTIVE = []
 _DEFAULT_TIMEOUT = 1000      # 默认显示时长（毫秒）
 _FADE_MS = 200              # 退场淡出时长
+
+# ---- 宽度口径（改这里就等于改所有悬浮提示的宽度）----
+_PAD_X = 12                 # QLabel 左右内边距（与下面 QSS 的 padding 保持一致）
+_PAD_Y = 6                  # QLabel 上下内边距（同上）
+_SLACK_X = 22               # 沿用的额外余量：文案两侧再留白，避免贴着卡片边缘
+_MIN_W = 96                 # 最小宽度：文案很短时也不缩窄
+_MAX_W = 440                # 上限基数：实际上限取「屏幕可用宽度的 80%」与此值的较大者
+_MAX_RATIO = 0.8
+_MAX_ABS = 900              # 绝对上限：再长也不超过这个宽度（避免提示横贯整屏），超过才折行
+_H_EXTRA = 12               # 高度额外余量（沿用旧实现：卡片高 = label 高 + 12）
+
+
+def _label_css(fg):
+    """label 样式（字体/内边距集中在这里，宽度口径与 _PAD_X/_PAD_Y 保持一致）。"""
+    return ('QLabel{background:transparent; color:%s; font-size:9pt; padding:%dpx %dpx;}'
+            % (fg.name(), _PAD_Y, _PAD_X))
+
+
+def _max_toast_width():
+    """宽度上限：屏幕可用宽度的 80%，再收敛到 [_MAX_W, _MAX_ABS]。超过上限的长文案才折行。"""
+    scr = QApplication.primaryScreen()
+    if scr is None:
+        return _MAX_W
+    ratio_w = int(scr.availableGeometry().width() * _MAX_RATIO)
+    return max(_MAX_W, min(ratio_w, _MAX_ABS))
+
 
 
 def _toast_bg_fg(kind):
@@ -60,13 +89,20 @@ class _Toast(QWidget):
         label = QLabel(text, self)
         label.setWordWrap(True)
         label.setAlignment(Qt.AlignCenter)
-        label.setStyleSheet(
-            'QLabel{background:transparent; color:%s; font-size:9pt; '
-            'padding:6px 12px;}' % fg.name())
+        label.setStyleSheet(_label_css(fg))
         label.adjustSize()
 
-        w = min(max(label.width() + 22, 96), 440)
-        h = label.height() + 12
+        # 宽度自适应：
+        #   1) need_w = 文字单行完整显示所需的宽度（文字宽 + 左右内边距 + 额外余量）；
+        #   2) 需要的宽度 < 当前宽度（短文案，落到 _MIN_W 下限）→ 保持当前宽度，不缩窄；
+        #      需要的宽度 > 当前宽度 → 自动加宽；
+        #   3) 只有超过上限（_max_toast_width()：屏幕宽 80%，且限制在 440~900）才折行。
+        fm = QFontMetrics(label.font())
+        need_w = fm.horizontalAdvance(text) + _PAD_X * 2 + _SLACK_X
+        w = min(max(need_w, _MIN_W), _max_toast_width())
+        # 高度按最终宽度重排后取真实所需：单行文案结果与旧实现一致（label 高 24 + 12 = 36），
+        # 折行文案则随行数自动长高，不会再被压扁截断。
+        h = label.heightForWidth(w) + _H_EXTRA
         self.setFixedSize(w, h)
         label.setGeometry(0, 0, w, h)
         self._w, self._h = w, h
@@ -87,9 +123,7 @@ class _Toast(QWidget):
         bg, fg = _toast_bg_fg(self._kind)
         self._bg, self._fg = bg, fg
         if self._label is not None:
-            self._label.setStyleSheet(
-                'QLabel{background:transparent; color:%s; font-size:9pt; '
-                'padding:6px 12px;}' % fg.name())
+            self._label.setStyleSheet(_label_css(fg))
         self.update()
 
     def paintEvent(self, ev):

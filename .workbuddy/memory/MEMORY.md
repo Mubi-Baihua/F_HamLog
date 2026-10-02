@@ -52,7 +52,9 @@
 - **2026-09-29：所有 `.setToolTip(...)` 悬停提示已整段注释（6 文件共 47 处：tle_source_window 9 / mutual_window 8 / satellite_map_window 7 / batch_project 5 / set 3 / satellite_window 15），便于日后启用。**
 - **`toast_tip.py` 是动作型通知（复制/粘贴/撤销等反馈），不是悬停提示，未动**；`theme.py` 的 `QPalette.ToolTipBase/Text` 只是调色板角色，未动。
 - `toast_tip.show_toast(text, parent=None, timeout=1000, kind='info')`：非模态、无边框、置顶、不抢焦点、跟随主题、1 秒自动关、多提示堆叠、父窗销毁一并销毁。**Windows 上分层窗口绝不能加 `QGraphicsDropShadowEffect`**（脏矩形越界），改用 1px 边框。
+- **宽度自适应（2026-10-02 定稿）**：`need_w = QFontMetrics.horizontalAdvance(text) + _PAD_X*2 + _SLACK_X`（单行完整显示所需）→ `w = min(max(need_w, _MIN_W), _max_toast_width())`：**比当前窄就保持当前宽度，比当前宽就加宽**，超过上限（`clamp(屏幕宽×0.8, 440, 900)`）才折行；高度用 `label.heightForWidth(w) + _H_EXTRA`（该 API 的高度**含 QSS padding**：单行 24 = 文字 12 + 上下 12）。**改宽度只改 `toast_tip.py` 顶部常量区**（`_MIN_W`/`_MAX_W`/`_MAX_ABS`/`_SLACK_X`/`_PAD_X`）。**别再退回 `label.width()` 口径**——`wordWrap=True` 时它给的是折行后的宽度，长文案会被压成窄卡片而不是加宽。
 - 结果反馈类用 `toast_tip.show_toast`；二次确认/`QFileDialog`/格式错误/加解密/搜索/统计/多人日志/服务端/QRZ 等仍用对话框。
+- **2026-10-02：删除日志已取消二次确认（定稿）**——两处删除（`delete_selected_logs()` 多选 / `del_log(index)` 单条）都**直接删除 + `toast_tip.show_toast("已删除 N 条日志。")`**，安全网是删除前的 `snapshot_before()`（Ctrl+Z 可整表还原）。**不要再加回 `QMessageBox.question` 确认**。删除后必须处理 `_checked_rows`：批量删除**清空**，单条删除**行号整体前移**（否则重建表格时勾选错位到别的日志）。
 
 ## 呼号统一大写（call_upper.py）
 - `UpperCallDelegate` + `connect_callsign_upper(edit, field_getter)`（仅 m_call/o_call）；挂完 `setItemDelegateForRow` 须 `table._upper_call_delegate = delegate` 保引用。
@@ -88,6 +90,9 @@
 - **绝不能 `git checkout -- file/…` 还原 `file/` 数据文件**（用户正在用，可能已手工改）；测完核对并还原 `m_xml.txt`/`amateur.tle`/`sat_map_markers.txt`/`tle_sources.txt`。
 - 造「导入星历」fixture：星选 `int(编号) <= 99999`（≥100000 是 Alpha-5，如 100093=`A0093`）；`'%05d'` 直写 6 位会溢出 5 列编号位。
 - 提示从 `QMessageBox` 换 `toast_tip.show_toast` 后，旧 monkeypatch `QMessageBox.information` 的测试会**静默失效**→ 需同时 monkeypatch `toast_tip.show_toast`。
+- **`os._exit()` 会跳过 `atexit`**：脚本用 `atexit` 做清理时，收尾必须显式先调清理函数再 `os._exit()`，否则残留 `file/m_xml.txt.*_bak` 等备份文件。
+- **`project.main()` 不会触碰星历**（2026-10-02 探针结论，`test/__tle_write_probe.py` 可复现）：跑 `pj.main()` 期间 `satellite_auto_update`/`satellite_window` 根本不被导入、零新线程、真实 `file/amateur.tle`+`m_xml.txt` md5 不变；**唯一的星历自动更新入口是 `main.py` 里的 `satellite_auto_update.AutoTleUpdater`**。
+  若发现 `amateur.tle` 被重写 / `sat_last_update` 变成"刚刚"，先怀疑**用户本机正开着的应用实例**（`sat_auto_update=True` 时整点巡检会刷新；`aouto_save=True` 会 touch `file/project_backup.fhl`），不要急着回滚用户数据。
 
 ## Git 合并 `file/*.tle` 等数据文件
 - `.tle` 冲突几乎总是「不同时刻同一批数据」：比三侧行数，**取更完整/更新一侧**（`git checkout --ours/--theirs -- file/amateur.tle`）。

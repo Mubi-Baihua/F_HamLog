@@ -75,6 +75,46 @@ t5.close()
 pump()
 ok('close 后从列表移除', t5 not in toast_tip._ACTIVE)
 
+# 7. 宽度自适应：短文案保持当前宽度，长文案加宽（不折行），超长才折行
+from PySide6.QtGui import QFontMetrics  # noqa: E402
+
+
+def need_w(text, t):
+    """文字单行显示所需的总宽度（含左右内边距 + 额外余量）。"""
+    fm = QFontMetrics(t._label.font())
+    return fm.horizontalAdvance(text) + toast_tip._PAD_X * 2 + toast_tip._SLACK_X
+
+
+# 7.1 短文案：宽度 = 当前口径（口径不变，即“保持现在的宽度”）
+s = '已保存成功！'
+t6 = toast_tip.show_toast(s, win)
+pump()
+ok('短文案：宽度保持当前口径（不缩窄）', t6.width() == need_w(s, t6),
+   '%d vs %d' % (t6.width(), need_w(s, t6)))
+
+# 7.2 长文案：需要的宽度 > 440 → 自动加宽到 need_w，且保持单行（高度 36）
+L = '没有可删除的日志：请先在“选择”列勾选要删除的行，或直接选中（高亮）这些行。'
+t7 = toast_tip.show_toast(L, win)
+pump()
+ok('长文案：按需要加宽（>旧上限 440）', t7.width() == need_w(L, t7) and t7.width() > 440,
+   'w=%d need=%d' % (t7.width(), need_w(L, t7)))
+ok('长文案：加宽后不折行（单行高度）', t7.height() == 36, 'h=%d' % t7.height())
+
+# 7.3 超长文案：触及上限（屏幕 80%）才折行，高度随行数增长
+XL = '这是一条特别长的提示文案，用来验证超过屏幕宽度上限之后会自动折行显示而不会被截断或压扁。' * 3
+t8 = toast_tip.show_toast(XL, win)
+pump()
+cap = toast_tip._max_toast_width()
+ok('超长文案：宽度收敛到上限', t8.width() == cap, 'w=%d cap=%d' % (t8.width(), cap))
+ok('超长文案：折行后高度增长', t8.height() > 36, 'h=%d' % t8.height())
+ok('超长文案：label 高度容纳全部文字',
+   t8._label.heightForWidth(t8.width()) <= t8._label.height(),
+   '%d <= %d' % (t8._label.heightForWidth(t8.width()), t8._label.height()))
+
+for _t in (t6, t7, t8):
+    _t.close()
+pump()
+
 win.close()
 pump()
 

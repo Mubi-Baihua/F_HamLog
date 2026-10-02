@@ -1207,11 +1207,17 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
             project_others_window.close()
             table_update()
         def del_log(index):
-            if QMessageBox.question(window, "删除日志", "确定要删除此日志吗？") == QMessageBox.Yes:
-                snapshot_before()
-                file.pop(index)
-                project_others_window.close()
-                table_update()
+            # 不做二次确认：直接删除，删除后以悬浮提示反馈（删除前已记撤销点，Ctrl+Z 可恢复）
+            snapshot_before()
+            file.pop(index)
+            # 被删行之后的勾选行号需整体前移 1（并丢弃该行本身），
+            # 否则重建表格时勾选状态会错位到相邻的其它日志上。
+            shifted = {r - 1 if r > index else r for r in _checked_rows if r != index}
+            _checked_rows.clear()
+            _checked_rows.update(shifted)
+            project_others_window.close()
+            table_update()
+            toast_tip.show_toast("已删除 1 条日志。", window)
 
         qrz_button = QPushButton("查看对方QRZ主页")
         def open_qrz():
@@ -1577,8 +1583,8 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
 
     def delete_selected_logs():
         '''删除主表格中选中的日志：优先删除“选择”列已勾选的行；
-        若未勾选任何行，则回退删除当前高亮选中的行。删除前二次确认，
-        并记入撤销点（Ctrl+Z 可恢复），删除后自动重建表格并落盘。'''
+        若未勾选任何行，则回退删除当前高亮选中的行。不做二次确认（直接删除），
+        删除前记撤销点（Ctrl+Z 可恢复），删除后自动重建表格、落盘并悬浮提示。'''
         if table is None:
             toast_tip.show_toast("当前未加载日志表。", window, kind='warning')
             return
@@ -1596,21 +1602,18 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
                 "没有可删除的日志：请先在“选择”列勾选要删除的行，或直接选中（高亮）这些行。",
                 window, kind='warning')
             return
-        # 二次确认（破坏性操作）
+        # 不做二次确认：直接删除，删除后以悬浮提示反馈（删除前已记撤销点，Ctrl+Z 可恢复）
         count = len(checked_rows)
-        reply = QMessageBox.question(
-            window, "确认删除",
-            f"确定要删除选中的 {count} 条日志吗？",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No
-        )
-        if reply != QMessageBox.Yes:
-            return
         # 记撤销点，随后按行号从大到小删除，避免索引错位
         snapshot_before()
         for row in sorted(checked_rows, reverse=True):
             del file[row]
+        # 删除后必须清空勾选集合：_checked_rows 里存的是「删除前」的行号，
+        # 若不清空，table_update() 重建时会把这些旧行号当作勾选状态套用到
+        # 剩余日志上，表现为「删完之后勾选跑到了别的日志上」。
+        _checked_rows.clear()
         table_update()
+        toast_tip.show_toast(f"已删除 {count} 条日志。", window)
 
     # 创建"编辑"菜单（撤销/重做/复制/粘贴/删除选中）
     edit_menu = menu_bar.addMenu('编辑')
@@ -3015,6 +3018,8 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         'get_selected_row_indexes': get_selected_row_indexes,
         'get_selected_records': get_selected_records,
         'delete_selected_logs': delete_selected_logs,
+        'undo': undo,      # 供删除（已取消二次确认）的「删后仍可 Ctrl+Z 撤销」离屏验证
+        'redo': redo,
         'project_others': project_others,
         'append_to_project': append_to_project,
         'new': new,
