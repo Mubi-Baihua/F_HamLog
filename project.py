@@ -2,6 +2,7 @@ from PySide6.QtWidgets import *
 from PySide6.QtGui import QAction
 from PySide6.QtCore import Qt, QEvent, QObject, QTimer, QThread, Signal, QRect  # 新增导入 Qt
 from dialog_defaults import desktop_dir
+import i18n
 from functools import partial
 import time as time_
 import sys
@@ -166,7 +167,7 @@ class MoreButtonDelegate(QStyledItemDelegate):
         if option.state & QStyle.State_MouseOver:
             btn_opt.state |= QStyle.State_MouseOver
         btn_opt.rect = self._btn_rect(opt.rect)
-        btn_opt.text = self._text
+        btn_opt.text = i18n.tr(self._text)
         QApplication.style().drawControl(QStyle.CE_PushButton, btn_opt, painter)
 
     def editorEvent(self, event, model, option, index):
@@ -725,7 +726,7 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         except Exception:
             dirty = False
         title = _title_base() if base is None else base
-        window.setWindowTitle(('*' if dirty else '') + title)
+        window.setWindowTitle(('*' if dirty else '') + i18n.tr(title))
 
     def _refresh_title():
         """重算并应用标题（内容变化 / 保存完成后调用，用于同步 * 标记）。"""
@@ -1091,6 +1092,10 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
             table_others.setItemDelegateForRow(2, _call_del)
             table_others.setItemDelegateForRow(3, _call_del)
             table_others._upper_call_delegate = _call_del  # 保持引用，防止被回收
+            # 字段名写在「单元格」里（不是表头），translate_widget 只翻表头不会翻它，
+            # 故显式接入翻译；每次按中文原文重设，中英来回切都能正确还原。
+            i18n.bind_cell_texts(project_others_window, table_others,
+                                 list(translation_dict.values()), col=0)
             central_widget = QWidget()
             project_others_window.setCentralWidget(central_widget)
             layout_others = QVBoxLayout(central_widget)
@@ -1171,6 +1176,10 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         table_others.setItemDelegateForRow(2, _call_del)
         table_others.setItemDelegateForRow(3, _call_del)
         table_others._upper_call_delegate = _call_del  # 保持引用，防止被回收
+        # 字段名写在「单元格」里（不是表头），translate_widget 只翻表头不会翻它，
+        # 故显式接入翻译；每次按中文原文重设，中英来回切都能正确还原。
+        i18n.bind_cell_texts(project_others_window, table_others,
+                             list(translation_dict.values()), col=0)
         central_widget = QWidget()
         project_others_window.setCentralWidget(central_widget)
         layout_others = QVBoxLayout(central_widget)
@@ -1254,7 +1263,7 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         nonlocal save_path
         sp, _ = QFileDialog.getSaveFileName(
             window,
-            "保存恢复的文件",
+            i18n.tr("保存恢复的文件"),
             os.path.join(desktop_dir(), '恢复的项目.fhl'),
             "F HamLog项目 (*.fhl)")
         if sp == '':
@@ -1330,7 +1339,7 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         import json
         sp, _ = QFileDialog.getSaveFileName(
             window,  # 父窗口，可以是None或者您的主窗口
-            "另存为文件",  # 对话框标题
+            i18n.tr("另存为文件"),  # 对话框标题
             desktop_dir(),  # 初始目录：桌面，默认文件名为空
             "F HamLog项目 (*.fhl)"  # 文件过滤器，只显示.fos文件
         )
@@ -1448,7 +1457,7 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
             return
         save_path, _ = QFileDialog.getSaveFileName(
             window,
-            "导出选中日志为FHL文件",
+            i18n.tr("导出选中日志为FHL文件"),
             desktop_dir(),
             "F HamLog项目 (*.fhl)"
         )
@@ -1480,7 +1489,7 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
     if save_path == '' and not recovered and remote is None:
         save_path, _ = QFileDialog.getSaveFileName(
             window,  # 父窗口，可以是None或者您的主窗口
-            "新建文件",  # 对话框标题
+            i18n.tr("新建文件"),  # 对话框标题
             desktop_dir(),  # 初始目录：桌面，默认文件名为空
             "F HamLog项目 (*.fhl)"  # 文件过滤器，只显示.fos文件
         )
@@ -1948,7 +1957,7 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
                 QMessageBox.warning(research_window, "导出失败", "没有可导出的搜索结果。")
                 return
             save_path, _ = QFileDialog.getSaveFileName(
-                research_window, "导出搜索结果为FHL文件", desktop_dir(), "F HamLog项目 (*.fhl)")
+                research_window, i18n.tr("导出搜索结果为FHL文件"), desktop_dir(), i18n.tr("F HamLog项目 (*.fhl)"))
             if not save_path:
                 return
             fhl_rw.write_fhl_file(save_path, recs, key)
@@ -2541,7 +2550,7 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
     plugin_action.setDefaultWidget(plugin_label)
     pack_menu.addAction(plugin_action)
     if len(pack_list) == 0:
-        plugin_label.setText("未安装插件，请前往 设置 安装插件")
+        plugin_label.setText(i18n.tr("未安装插件，请前往 设置 安装插件"))
     else:
             plugin_action.setVisible(False)
     
@@ -2850,8 +2859,8 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
             _l.setWordWrap(True)
         def _do_copy(lbl, btn):
             QApplication.clipboard().setText(lbl.text())
-            btn.setText('已复制')
-            QTimer.singleShot(800, lambda: btn.setText('复制'))
+            btn.setText(i18n.tr('已复制'))
+            QTimer.singleShot(800, lambda: btn.setText(i18n.tr('复制')))
         def _make_row(label_text, lbl):
             h = QHBoxLayout()
             h.addWidget(QLabel(label_text))
@@ -2894,19 +2903,19 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
             # 作为客户端加入时，本窗口仅用于查看在线用户，隐藏「服务端」分栏
             box_srv.setVisible(not is_guest)
             if rc is None:
-                status.setText('状态：未连接')
-                btn_open.setText('开放多人日志')
+                status.setText(i18n.tr('状态：未连接'))
+                btn_open.setText(i18n.tr('开放多人日志'))
                 info_w.setVisible(False)
                 pw_lan.setEnabled(True)
             elif window._is_host:
-                status.setText(f'状态：服务端 {rc.host}:{rc.port}')
-                btn_open.setText('关闭多人日志')
+                status.setText(i18n.tr(f'状态：服务端 {rc.host}:{rc.port}'))
+                btn_open.setText(i18n.tr('关闭多人日志'))
                 pw_lan.setEnabled(False)
                 pw_lan.setText(rc.password)
                 # 重新打开管理窗口时，按当前连接恢复连接信息
                 lbl_ip.setText(rc.display_ip or get_lan_ip())
                 lbl_port.setText(str(rc.port))
-                lbl_pw.setText(rc.password or '（无）')
+                lbl_pw.setText(rc.password or i18n.tr('（无）'))
                 srv_obj = getattr(window, '_server', None)
                 if srv_obj is not None and getattr(srv_obj, 'fingerprint_short', ''):
                     lbl_fp.setText(srv_obj.fingerprint_short)
@@ -3037,6 +3046,7 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
+    i18n.install(app)
     win = QMainWindow()
     main(win)
     app.exec()

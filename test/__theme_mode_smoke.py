@@ -35,7 +35,7 @@ theme.settings_path = lambda: TMP_SETTINGS      # 只读/只写临时设置
 backup.BATCH_BACKUP = os.path.join(TMP, 'batch_backup.fhl')
 
 from PySide6.QtWidgets import (QApplication, QMainWindow, QLabel, QComboBox,  # noqa: E402
-                               QCheckBox, QSpinBox)
+                               QCheckBox, QSpinBox, QPushButton)
 from PySide6.QtCore import Qt  # noqa: E402
 from PySide6.QtGui import QPalette, QColor  # noqa: E402
 
@@ -268,23 +268,34 @@ if boxes:
        theme.read_settings().get(theme.MODE_KEY) == theme.MODE_DARK,
        str(theme.read_settings().get(theme.MODE_KEY)))
 
-    # 深色下截一张设置窗口图，并确认「颜色模式」并入开关行后没把布局挤坏
+    # 深色下截一张设置窗口图，并确认「颜色模式」并入「语言」行后没把布局挤坏
     png = os.path.join(HERE, '__theme_mode_set_out.png')
     sw.grab().save(png)
     shots.append(png)
     cw = sw.centralWidget()
 
-    # 1) 「自动保存」与「颜色模式」必须落在同一水平行
-    row_items = ([c for c in sw.findChildren(QCheckBox)]
-                 + boxes
-                 + [lb for lb in sw.findChildren(QLabel)
-                    if lb.text() in ('更新间隔:', '颜色模式:')]
+    # 1) 布局分两行（2026-10-03 起）：
+    #    上线 = 三个开关 + 「更新间隔:」+ 星历间隔
+    #    下线 = 「颜色模式:」+ 下拉 + 「语言 Language:」+ 下拉 + 「保存更改」
+    #    （「颜色模式」按需求从开关行移到「语言」左侧：两者都是即改即生效的设置）
+    top_items = ([c for c in sw.findChildren(QCheckBox)]
+                 + [lb for lb in sw.findChildren(QLabel) if lb.text() == '更新间隔:']
                  + [sp for sp in sw.findChildren(QSpinBox)])
-    ok('设置窗口找到待检查的一行控件', len(row_items) >= 4, '控件数=%d' % len(row_items))
+    set_items = ([lb for lb in sw.findChildren(QLabel)
+                  if lb.text() in ('颜色模式:', 'Theme:',
+                                   '语言 Language:', 'Language:')]
+                 + list(boxes)
+                 + [pb for pb in sw.findChildren(QPushButton)
+                    if pb.text() in ('保存更改', 'Save changes')])
+    row_items = top_items + set_items
+    ok('设置窗口找到待检查的两行控件', len(row_items) >= 8, '控件数=%d' % len(row_items))
     if cw is not None and row_items:
-        ys = [w.mapTo(cw, w.rect().center()).y() for w in row_items]
-        ok('自动保存与颜色模式在同一行', max(ys) - min(ys) <= 2,
-           '行中心 y=%s' % sorted(set(ys)))
+        ys_top = [w.mapTo(cw, w.rect().center()).y() for w in top_items]
+        ok('开关行与「更新间隔:」在同一行', max(ys_top) - min(ys_top) <= 2,
+           '行中心 y=%s' % sorted(set(ys_top)))
+        ys_set = [w.mapTo(cw, w.rect().center()).y() for w in set_items]
+        ok('颜色模式与语言、保存按钮在同一行', max(ys_set) - min(ys_set) <= 2,
+           '行中心 y=%s' % sorted(set(ys_set)))
 
         # 2) 横向：一行内每个控件都没被压缩、也没越过右边界
         squeezed = ['%s %d<%d' % (w.__class__.__name__, w.width(), w.sizeHint().width())

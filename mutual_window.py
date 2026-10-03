@@ -30,6 +30,7 @@ from PySide6.QtCore import QThread, Signal, QTimer
 
 import satellite_pred as sp
 import theme
+import i18n
 from satellite_window import (
     SatelliteSelectDialog, TleFetchWorker, LOCAL_TZ, TLE_CACHE,
     _load_settings, _save_settings, _duration_str, _utc_to_local_str,
@@ -324,6 +325,10 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
     status.setStyleSheet(theme.hint_css())
     layout.addWidget(status)
 
+    def _status_set(text):
+        """设置状态文字：动态文案按当前语言翻译后再显示。"""
+        status.setText(i18n.tr(text))
+
     # ---------- 结果表 ----------
     headers = ['卫星', '可通联开始(本地)', '可通联结束(本地)', '可通联时长',
                'A最大仰角', 'B最大仰角', '最佳时刻(本地)', '记录']
@@ -461,24 +466,24 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
         nonlocal selected_numbers
         _persist()  # 先把当前设置落盘（含可能刚改动的台站/仰角/时长）
         if not sats:
-            status.setText('没有可用的卫星数据，请先“刷新星历”。')
+            _status_set('没有可用的卫星数据，请先“刷新星历”。')
             return
         va = box_a.get_values()
         vb = box_b.get_values()
         if va is None or vb is None:
-            status.setText('两个台站的经纬度/海拔必须都是有效数字。')
+            _status_set('两个台站的经纬度/海拔必须都是有效数字。')
             return
         # 台站 A（本站）位置在「卫星过境预测 → 观测站设置」中填写，
         # 通联预测不再单独提示“尚未设置位置”；未设置时静默跳过预测（不弹窗、不提示）。
         if va[0] == 0.0 and va[1] == 0.0:
             return
         if vb[0] == 0.0 and vb[1] == 0.0:
-            status.setText('台站 B（对方）尚未设置位置，请填写对方 QTH 或网格后自动开始预测。')
+            _status_set('台站 B（对方）尚未设置位置，请填写对方 QTH 或网格后自动开始预测。')
             return
 
         start_local, err = _parse_start()
         if err:
-            status.setText('开始时间无效：' + err)
+            _status_set('开始时间无效：' + err)
             table.setRowCount(0)
             return
         start = start_local.replace(tzinfo=LOCAL_TZ).astimezone(datetime.timezone.utc)
@@ -491,7 +496,7 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
 
         active_sats = active_sats_list()
         if not selected_numbers:
-            status.setText('尚未选择卫星，请点击“选择卫星…”勾选。')
+            _status_set('尚未选择卫星，请点击“选择卫星…”勾选。')
             table.setRowCount(0)
             _push_sats_to_map()
             return
@@ -502,7 +507,7 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
             old.wait(3000)
 
         dist = sp.great_circle_km(va[0], va[1], vb[0], vb[1])
-        status.setText('正在计算两地可通联窗口（%d 颗卫星，跨度 %d 小时%s）…'
+        _status_set('正在计算两地可通联窗口（%d 颗卫星，跨度 %d 小时%s）…'
                        % (len(active_sats), int(hours),
                           '，可能较慢' if hours > 72 else ''))
         worker = MutualWorker(active_sats, va, vb, start, hours,
@@ -510,20 +515,20 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
         win._worker = worker
 
         def on_progress(v):
-            status.setText('正在计算两地可通联窗口… %d%%' % v)
+            _status_set('正在计算两地可通联窗口… %d%%' % v)
 
         def on_done(rows):
             if getattr(win, '_worker', None) is worker:
                 win._worker = None
             populate(rows)
             total = sum(r['duration'] for r in rows)
-            status.setText(
+            _status_set(
                 'A 纬%.3f° 经%.3f°（≥%d°） ｜ B 纬%.3f° 经%.3f°（≥%d°） ｜ 地面距离 %.0f km'
                 ' ｜ 卫星 %d 颗 ｜ 可通联窗口 %d 个 ｜ 累计 %s'
                 % (va[0], va[1], box_a.min_elev(), vb[0], vb[1], box_b.min_elev(),
                    dist, len(active_sats), len(rows), _duration_str(total)))
             if not rows:
-                status.setText(status.text() + '（可尝试降低最低仰角或延长预测时长）')
+                _status_set(status.text() + i18n.tr('（可尝试降低最低仰角或延长预测时长）'))
 
         worker.progress.connect(on_progress)
         worker.done.connect(on_done)
@@ -539,7 +544,7 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
     def refresh_tle(force=False, then_predict=True):
         nonlocal sats
         update_tle_tooltip()   # 反映「星历数据源」窗口里的最新改动
-        status.setText('正在获取业余卫星星历…')
+        _status_set('正在获取业余卫星星历…')
         refresh_btn.setEnabled(False)
         old = getattr(win, '_tle_worker', None)
         if old is not None and old.isRunning():
@@ -565,7 +570,7 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
             if selected_numbers is None:
                 selected_numbers = set()
             refresh_btn.setEnabled(True)
-            status.setText('已载入星历：本次取得 %d 颗，共 %d 颗卫星%s。'
+            _status_set('已载入星历：本次取得 %d 颗，共 %d 颗卫星%s。'
                            % (len(s), len(sats), _extra))
             # 若地图窗口已打开，同步最新的「已选卫星」列表（名称/轨道根数）
             _push_sats_to_map()
@@ -575,11 +580,11 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
                         and not (vb[0] == 0.0 and vb[1] == 0.0)):
                     run_prediction()
                 else:
-                    status.setText('已载入星历，共 %d 颗卫星。请填写两个台站的位置（坐标或网格）后自动开始预测。'
+                    _status_set('已载入星历，共 %d 颗卫星。请填写两个台站的位置（坐标或网格）后自动开始预测。'
                                    % len(sats))
 
         def on_warning(w):
-            status.setText(w)
+            _status_set(w)
 
         def on_error(e):
             if getattr(win, '_tle_worker', None) is worker:
@@ -627,7 +632,7 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
         s = _load_settings()
         if s.pop('sat_last_update', None) is not None:
             _save_settings(s)
-        status.setText('星历已清空，自选卫星的选择已保留；点击「刷新星历」重新下载。')
+        _status_set('星历已清空，自选卫星的选择已保留；点击「刷新星历」重新下载。')
         _push_sats_to_map()
 
     def open_select():
@@ -759,7 +764,7 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
     def _on_start_text(_txt):
         _, err = _parse_start()
         if err and sats:
-            status.setText('开始时间格式无效：' + err)
+            _status_set('开始时间格式无效：' + err)
 
     refresh_btn.clicked.connect(lambda: refresh_tle(force=True))
     clear_tle_btn.clicked.connect(clear_tle)
@@ -832,5 +837,6 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
 if __name__ == '__main__':
     from PySide6.QtWidgets import QApplication
     app = QApplication([])
+    i18n.install(app)
     main(None)
     app.exec()

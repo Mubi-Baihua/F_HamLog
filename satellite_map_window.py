@@ -45,6 +45,7 @@ from PySide6.QtGui import (
 
 import satellite_pred as sp
 import theme
+import i18n
 # 复用卫星过境预测窗口的设置读写（单向依赖：satellite_window 只在函数内部
 # 延迟 import 本模块，因此这里的顶层 import 不会造成循环导入）
 from satellite_window import _load_settings, _save_settings
@@ -1425,12 +1426,7 @@ class MapWindow(QMainWindow):
         # 卫星过境（无对方台站）会隐藏该组控件，若不约束最小宽度，其地图窗口会比
         # 通联预测（含该组）窄约 180px，导致两处打开的地图宽度不一致。设统一最小宽度后，
         # 两种来源打开的地图窗口宽度保持一致（卫星过境那组虽隐藏，但窗口不会因此变窄）。
-        self._el_b_label.setVisible(True)
-        self._el_b_spin.setVisible(True)
-        _uniform_min_w = self.centralWidget().minimumSizeHint().width()
-        self.setMinimumWidth(_uniform_min_w)
-        self._el_b_label.setVisible(self._station_b_valid())
-        self._el_b_spin.setVisible(self._station_b_valid())
+        self._refit_min_width()
 
         sep = QFrame()
         sep.setFrameShape(QFrame.HLine)
@@ -1622,6 +1618,27 @@ class MapWindow(QMainWindow):
         return self._track_hours
 
     # ---- 内部 ----
+    def _refit_min_width(self):
+        """重测控制条所需的最小窗口宽度（**随语言变化重算**）。
+
+        以「含对方最低仰角」的完整控制条为准测量：卫星过境（无对方台站）会隐藏该组
+        控件，若不约束最小宽度，其地图窗口会比通联预测（含该组）窄约 180px，两处打开
+        的地图宽度就不一致；设统一最小宽度后二者保持一致（隐藏那组不会让窗口变窄）。
+
+        英文文案普遍更长，且控件树是窗口 show() 时才翻译的，所以建窗时先测一次、
+        每次切语言后再测一次，否则英文控制条会被挤窄、文字被截断。
+        """
+        try:
+            self._el_b_label.setVisible(True)
+            self._el_b_spin.setVisible(True)
+            i18n.fit_min_width(self, 0)
+        except Exception:
+            pass
+        finally:
+            valid = self._station_b_valid()
+            self._el_b_label.setVisible(valid)
+            self._el_b_spin.setVisible(valid)
+
     def _rebuild_combo(self):
         cur = self._combo.currentText()
         self._combo.blockSignals(True)
@@ -1831,13 +1848,13 @@ class MapWindow(QMainWindow):
         shown = len(self.canvas.entries)
         total = len(self._sats_order)
         end = now + datetime.timedelta(hours=self._track_hours)
-        parts.append('轨迹 %s → %s (%.0f h)' % (
-            now.strftime('%H:%M'), end.strftime('%H:%M'), self._track_hours))
+        parts.append(i18n.tr('轨迹 %s → %s (%.0f h)' % (
+            now.strftime('%H:%M'), end.strftime('%H:%M'), self._track_hours)))
         if hidden > 0:
-            parts.append('显示 %d/%d 颗（还有 %d 颗未显示，可调大「最多显示的卫星」）'
-                         % (shown, total, hidden))
+            parts.append(i18n.tr('显示 %d/%d 颗（还有 %d 颗未显示，可调大「最多显示的卫星」）'
+                                 % (shown, total, hidden)))
         else:
-            parts.append('显示 %d/%d 颗' % (shown, total))
+            parts.append(i18n.tr('显示 %d/%d 颗' % (shown, total)))
 
         cur_entry = None
         for e in self.canvas.entries:
@@ -1846,17 +1863,19 @@ class MapWindow(QMainWindow):
                 break
         if cur_entry is not None and cur_entry['current'] is not None:
             lon, lat, alt, elev_a, elev_b = cur_entry['current']
-            s = '%s: 纬 %.2f° 经 %.2f° 高 %.0f km' % (
-                cur_entry['name'].strip(), lat, lon, alt)
+            s = i18n.tr('%s: 纬 %.2f° 经 %.2f° 高 %.0f km' % (
+                cur_entry['name'].strip(), lat, lon, alt))
             if elev_a is not None:
-                s += '，本台仰角 %.1f°（%s）' % (
-                    elev_a, '可见' if elev_a >= self._min_elev else '不可见')
+                s += i18n.tr('，本台仰角 %.1f°（%s）' % (
+                    elev_a, i18n.tr('可见') if elev_a >= self._min_elev
+                    else i18n.tr('不可见')))
             if elev_b is not None:
-                s += '，对方仰角 %.1f°（%s）' % (
-                    elev_b, '可见' if elev_b >= self._min_elev_b else '不可见')
+                s += i18n.tr('，对方仰角 %.1f°（%s）' % (
+                    elev_b, i18n.tr('可见') if elev_b >= self._min_elev_b
+                    else i18n.tr('不可见')))
             parts.append(s)
         elif not self._sats_order:
-            parts.append('未选择卫星（请在来源窗口刷新星历或选择卫星）')
+            parts.append(i18n.tr('未选择卫星（请在来源窗口刷新星历或选择卫星）'))
         self._info.setText('  |  '.join(parts))
 
     def _tick(self):
@@ -1915,12 +1934,16 @@ def open_map(parent, sats, home=None, station_b=None, selected_name=None,
                     on_min_elev_change=on_min_elev_change)
     _open_windows.append(win)
     win.show()
+    # show() 之后控件树才翻成当前语言，此时重测控制条最小宽度（英文更长）
+    win._refit_min_width()
+    i18n.watch_language(win, win._refit_min_width)
     return win
 
 
 if __name__ == '__main__':
     from PySide6.QtWidgets import QApplication
     app = QApplication([])
+    i18n.install(app)
     sats = sp.load_amateur_satellites()
     sel = sats[0][0] if sats else None
     open_map(None, sats, home=(39.9, 116.4, 50.0), selected_name=sel, min_elev=10.0)

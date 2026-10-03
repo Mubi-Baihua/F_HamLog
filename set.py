@@ -1,6 +1,7 @@
 from PySide6.QtWidgets import *
 import call_upper
 import theme
+import i18n
 from dialog_defaults import desktop_dir
 
 # 「星历数据源」独立窗口的引用（防止被回收；非模态，可重复打开）
@@ -67,7 +68,8 @@ def main(window):
         import os
         import shutil
         print("从其他版本导入数据")  # 保持引用，防止被回收
-        folder = QFileDialog.getExistingDirectory(window, "选择之前版本 F HamLog.exe 所在的文件夹", desktop_dir())
+        folder = QFileDialog.getExistingDirectory(
+            window, i18n.tr("选择之前版本 F HamLog.exe 所在的文件夹"), desktop_dir())
         if folder:
             print(f"选择的文件夹: {folder}")
             file_path = os.path.join(folder, 'file')
@@ -80,36 +82,36 @@ def main(window):
                     data[i] = data_old[i]
                 with open('file/m_xml.txt', 'w', encoding='utf-8') as f:
                     f.write(str(data))
-                back_item = '用户设置'
+                back_item = i18n.tr('用户设置')
 
                 if os.path.exists(os.path.join(file_path, 'main.fhl')):
                     os.remove('file/main.fhl')  # 删除旧的 main.fhl 文件
                     shutil.copyfile(os.path.join(file_path, 'main.fhl'), 'file/main.fhl')
-                    back_item += '、通联日志文件'
+                    back_item += i18n.tr('、通联日志文件')
 
                 if os.path.exists(os.path.join(file_path, 'sat_radio_dict.txt')):
                     shutil.copyfile(os.path.join(file_path, 'sat_radio_dict.txt'), 'file/sat_radio_dict.txt')
-                    back_item += '、卫星转发器表'
+                    back_item += i18n.tr('、卫星转发器表')
 
                 if os.path.exists(os.path.join(file_path, 'tqsl_dict.txt')):
                     shutil.copyfile(os.path.join(file_path, 'tqsl_dict.txt'), 'file/tqsl_dict.txt')
-                    back_item += '、TQSL映射表'
+                    back_item += i18n.tr('、TQSL映射表')
 
                 if os.path.exists(os.path.join(file_path, 'sat_map_markers.txt')):
                     shutil.copyfile(os.path.join(file_path, 'sat_map_markers.txt'), 'file/sat_map_markers.txt')
-                    back_item += '、卫星地图标记点'
+                    back_item += i18n.tr('、卫星地图标记点')
 
                 if os.path.exists(os.path.join(file_path, 'tle_sources.txt')):
                     shutil.copyfile(os.path.join(file_path, 'tle_sources.txt'), 'file/tle_sources.txt')
-                    back_item += '、星历数据源'
+                    back_item += i18n.tr('、星历数据源')
 
                 if os.path.exists(os.path.join(file_path, 'amateur.tle')):
                     shutil.copyfile(os.path.join(file_path, 'amateur.tle'), 'file/amateur.tle')
-                    back_item += '、卫星数据缓存'
+                    back_item += i18n.tr('、卫星数据缓存')
 
                 if os.path.exists(os.path.join(file_path, 'known_server_keys.txt')):
                     shutil.copyfile(os.path.join(file_path, 'known_server_keys.txt'), 'file/known_server_keys.txt')
-                    back_item += '、多人日志缓存'
+                    back_item += i18n.tr('、多人日志缓存')
     
 
                 # 旧版本的数据以「卫星名」为键，这里立即按当前星历升级为卫星编号
@@ -119,15 +121,20 @@ def main(window):
                 except Exception:
                     pass
 
-                QMessageBox.information(window, "从其他版本导入数据", f"成功导入{back_item}\n（目前不支持从之前版本中导入插件）")
+                QMessageBox.information(
+                    window, "从其他版本导入数据",
+                    i18n.tr('成功导入{}\n（目前不支持从之前版本中导入插件）').format(back_item))
                 window.close()
             else:
-                QMessageBox.warning(window, "从其他版本导入数据", "请选择之前版本 F HamLog.exe 所在的文件夹！")
+                QMessageBox.warning(window, "从其他版本导入数据",
+                                    i18n.tr("请选择之前版本 F HamLog.exe 所在的文件夹！"))
                 back_set()
 
-    # 颜色模式与自动保存合并成一行后，内容高度减少约 30px，窗口高度同步收回
-    window.resize(770, 475)
-    window.setFixedSize(770, 475)
+    # 颜色模式与自动保存合并成一行后，内容高度减少约 30px，窗口高度同步收回。
+    # 固定尺寸在窗口建完后由 _fit_window() 统一设定（中文下即 770×475，与历史版本一致；
+    # 英文文案更长时按内容放宽，避免被截断）。
+    BASE_W, BASE_H = 770, 475
+    window.resize(BASE_W, BASE_H)
     window.setWindowTitle('设置')
     central_widget = QWidget()
     window.setCentralWidget(central_widget)
@@ -191,6 +198,24 @@ def main(window):
 
     theme_mode_box.currentIndexChanged.connect(on_theme_mode_changed)
 
+    # ---------- 界面语言（同样即改即生效并落盘） ----------
+    lang_label = QLabel('语言 Language:', central_widget)
+    lang_box = QComboBox(central_widget)
+    for _value, _label in i18n.LANG_LABELS:
+        lang_box.addItem(_label, _value)
+    _lidx = lang_box.findData(i18n.current_language())
+    if _lidx >= 0:
+        lang_box.setCurrentIndex(_lidx)
+
+    def on_language_changed(_index=None):
+        lang = lang_box.currentData()
+        i18n.set_language(lang)     # 立即生效：所有已打开窗口原地重译
+        i18n.save_language(lang)    # 立即落盘（不必点「保存更改」）
+        _fit_window()               # 英文文案更长，按需放宽窗口，避免被截断
+        print('语言:', lang)
+
+    lang_box.currentIndexChanged.connect(on_language_changed)
+
     # 开关型选项与颜色模式并作一行，省下一行高度留给窗口整体（770px 下合计约 660px）
     h_layout = QHBoxLayout()
     h_layout.addWidget(aouto_save)
@@ -199,9 +224,6 @@ def main(window):
     h_layout.addWidget(sat_auto_update)
     h_layout.addWidget(sat_update_label)
     h_layout.addWidget(sat_update_hours_spin)
-    h_layout.addSpacing(15)
-    h_layout.addWidget(theme_mode_label)
-    h_layout.addWidget(theme_mode_box)
 
     # ---------- 星历数据源：按钮与「插件设置」同一行（数据源配置在独立窗口） ----------
     src_set_btn = QPushButton("设置星历数据源", central_widget)
@@ -227,6 +249,7 @@ def main(window):
     src_set_btn.clicked.connect(lambda: set_sources())
 
     sett_button = QPushButton("保存更改", central_widget)
+    sett_button.setMinimumWidth(170)   # 加宽：默认宽度偏窄，与同行控件不协调
     sett_button.clicked.connect(lambda: set())
     layout.addWidget(m_call_label)
     layout.addWidget(m_call_input)
@@ -272,7 +295,19 @@ def main(window):
     lon_input.editingFinished.connect(on_coord_to_grid)
     grid_input.editingFinished.connect(on_grid_to_coord)
     layout.addLayout(h_layout)
-    layout.addWidget(sett_button)
+
+    # 「颜色模式」+「语言」并作一行，右侧靠边放「保存更改」按钮，中间用 stretch 撑开
+    # （先选颜色/语言、再保存，符合操作顺序）。这两项都是「即改即生效并落盘」的设置，
+    # 放同一行风格一致；上方那行只留开关与星历间隔，不再挤在一起。
+    lang_layout = QHBoxLayout()
+    lang_layout.addWidget(theme_mode_label)
+    lang_layout.addWidget(theme_mode_box)
+    lang_layout.addSpacing(15)
+    lang_layout.addWidget(lang_label)
+    lang_layout.addWidget(lang_box)
+    lang_layout.addStretch(1)
+    lang_layout.addWidget(sett_button)
+    layout.addLayout(lang_layout)
     
     line = QFrame(central_widget)
     line.setFrameShape(QFrame.HLine)
@@ -305,17 +340,23 @@ def main(window):
                         color: %s;}
                 .t {margin-top: 5px;}</style>
                 </head><body>
-                <div class="t">问题反馈到：BI8SQL@outlook.com</div>
-                <div class="t">版本更新请访问：<a href="https://mubi-baihua.github.io/f_hamlog.html">https://mubi-baihua.github.io/f_hamlog.html</a></div>
-                <div class="t">Github项目：<a href="https://github.com/Mubi-Baihua/F_HamLog/">https://github.com/Mubi-Baihua/F_HamLog/</a></div>
-                </body></html>''' % theme.link_color().name()
+                <div class="t">%s</div>
+                <div class="t">%s<a href="https://mubi-baihua.github.io/f_hamlog.html">https://mubi-baihua.github.io/f_hamlog.html</a></div>
+                <div class="t">%s<a href="https://github.com/Mubi-Baihua/F_HamLog/">https://github.com/Mubi-Baihua/F_HamLog/</a></div>
+                </body></html>''' % (
+            theme.link_color().name(),
+            i18n.tr('问题反馈到：BI8SQL@outlook.com'),
+            i18n.tr('版本更新请访问：'),
+            i18n.tr('Github项目：'),
+        )
 
     fk_l = QLabel()
     fk_l.setText(_link_html())
     fk_l.setOpenExternalLinks(True)
     layout.addWidget(fk_l)
-    # 颜色模式切换后重刷链接色
+    # 颜色模式切换后重刷链接色；语言切换后重刷文案
     theme.watch_theme(window, lambda: fk_l.setText(_link_html()))
+    i18n.watch_language(window, lambda: fk_l.setText(_link_html()))
 
     line = QFrame(central_widget)
     line.setFrameShape(QFrame.HLine)
@@ -323,7 +364,7 @@ def main(window):
     line.setLineWidth(1)  # 设置线宽
     layout.addWidget(line)
 
-    fk_v = QLabel("F HamLog 版本：2.5.0", central_widget)
+    fk_v = QLabel("F HamLog 版本：2.6.0", central_widget)
     layout.addWidget(fk_v)
 
     line = QFrame(central_widget)
@@ -335,11 +376,24 @@ def main(window):
     cc_l = QLabel("Coded by BI8SQL", central_widget)
     layout.addWidget(cc_l)
 
+    def _fit_window():
+        """把窗口固定为「参考尺寸」与「当前语言下内容所需尺寸」中的较大者。
+
+        中文下内容本来就放进 770×475，尺寸与历史版本**完全一致**；
+        英文文案普遍比中文长，按内容放宽，避免控件文字被挤掉/截断。
+        """
+        i18n.fit_window(window, BASE_W, BASE_H)
+
+    # 先 show()：顶层窗口的 Show 事件会触发 i18n 把控件树翻成当前语言，
+    # 之后 _fit_window() 量到的尺寸才是「该语言下真正的」文案宽度。
+    # （反过来先量后翻，英文界面会按中文尺寸定死窗口而截断文字。）
     window.show()
+    _fit_window()
 
 if __name__ == '__main__':
     app = QApplication()
     theme.init_app(app)
+    i18n.install(app)
     window=QMainWindow()
     main(window)
     app.exec()

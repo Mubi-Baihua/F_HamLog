@@ -49,8 +49,25 @@ sat_dur(1~240) / sat_sats / mu_sats / **theme_mode**。
 - `satellite_window.py`：过境预测 GUI，由 `project.py`「卫星」菜单或 `main.py`「卫星过境」按钮打开；每行「记录」按钮经 `quick_log_callback`→`project.new` 预填；工具栏「编辑转发器」(`sat_radio_dict.txt`)/「TQSL映射」(`tqsl_dict.txt`)/「星历自动更新」复选框。
 - `satellite_auto_update.py`：`main.py` 启动时 `AutoTleUpdater(window).start()` 常驻，QTimer 每小时巡检 `should_update_now()`，到间隔由后台线程 `_FetchThread` 调 `fetch_amateur_tle(force=True)` 刷新 `file/amateur.tle`。
 - 星历数据源（TLE 下载来源）：独立文件 `file/tle_sources.txt`（`TLE_SOURCES_PATH`，每行一个地址、`#` 注释），独立窗口 `tle_source_window.py`（`main(window=None, on_save=None)`；列表双击就地编辑、非法/重复地址回滚、改动即时落盘）。`parse_tle_sources_text`/`load_tle_source_file`/`save_tle_sources`/`drop_legacy_tle_sources`/`is_valid_tle_source` 均在 `satellite_pred.py`；`load_tle_sources()` 读取顺序 = 独立文件 → 旧设置键 `sat_tle_sources`（`m_xml.txt`，仅兼容读）→ `DEFAULT_TLE_SOURCES`。`fetch_amateur_tle(sources=[...])` 按序下载，同编号取靠前源。
+  - **决策要点（已定稿，别再改回去）**：「添加」= 直接插入空行并进入**内联编辑**（不弹 `QInputDialog`），
+    已有空行时只聚焦、不重复创建；启用/禁用**写在同一个文件**（地址前加 `#` 即禁用），
+    **全部被禁用时返回空列表**（不偷偷回落到默认源）。
+  - **数据源一视同仁，无 URL 特判**（celestrak 也只是普通条目）；**延迟探测自动进行**
+    （打开窗口 / 改完 / 新增 / 恢复默认都自动测），**没有「测试延迟」按钮**；
+    延迟结果只存进 `_ROLE_DELAY` 供 delegate 自绘，**绝不写进 `item.text()`**。
+  - 默认源顺序（越靠前优先级越高）：live.ariss.org/iss.txt → r4uab.ru/satonline.txt →
+    amsat.org/tle/current/nasabare.txt → celestrak.org/…GROUP=active&FORMAT=csv → db.satnogs.org/api/tle/?format=3le。
+  - 下载/导入一律**按 NORAD 编号增量更新**：同编号替换、新编号追加、**旧的一律保留**。
+  - `iter_tle_records()` 兼容 **3LE / 2LE / Celestrak OMM CSV**（CSV 按列**重建** TLE 两行）。
 - 通联预测算法：`visibility_windows()`（按最低仰角的连续可见窗口）+ `predict_mutual_passes()`（两站窗口交集，交集内采样得两站最大仰角/方位/最佳时刻）+ `great_circle_km()`。
 - 地图：`open_map(parent, sats, home, station_b, selected_name, source, min_elev=0.0)`；纯 QPainter 等距圆柱投影（不引 matplotlib）；陆地 `file/world_land.json`；海洋/陆地/网格缓存成 QPixmap，动态层（轨迹/当前位置/覆盖区/台站/图例）每帧叠加。已修：多圈轨迹重合、南极洲接缝、极地覆盖区绘制。
+- **地图与来源单向同步**（地图窗改参数不回写来源窗），`sat_map_hours`（1~24，默认 3）与 `sat_dur` 独立落盘并广播；画布已主题化（深浅两套）。
+- 打包：**必带 `--include-package-data=skyfield` + `--include-data-dir=file=file`**；所有数据路径走 `satellite_pred.app_path()`（否则打包后找不到 TLE/字典/地图数据）。
+- 入口：`project.py`「卫星」菜单 →「通联预测」(Ctrl+Shift+E)；`main.py` 启动器「卫星过境」「通联预测」。
+- **卫星名匹配规则两处必须同步改**：① 选择框搜索；② `lookup_transponder()` 第 6 层兜底
+  （`normalize_sat_name`/`sat_name_match`/`parse_sat_keywords`）。
+- 选择对话框另两条硬约束：**隐藏行必须用 `QListWidget.setRowHidden(row, hide)`**（`setHidden()` 不触发重排）；
+  **超限时 `accept()` 不关闭**（`reset_requested=True` + `reject()`，调用方 `while True:` 重开）。
 
 ## 多人日志加密协议细节
 - 需求原话：「密码输入只负责身份验证。密钥由程序自主生成，之后加密（非对称加密）分发密钥，之后再用密钥传输日志内容（对称加密）」+「全帧加密」+「X25519 ECDH」+「首次连接核对指纹」。
@@ -78,6 +95,10 @@ sat_dur(1~240) / sat_sats / mu_sats / **theme_mode**。
 - 呼号大写委托：挂完 `setItemDelegateForRow` 必须 `table._upper_call_delegate = delegate` 保留引用，否则 Python 端 delegate 被回收导致编辑异常。核心 `_upper_in_place` 用 `setText`+`setCursorPosition` 保光标；`text.upper()` 幂等。
 - 呼号大写接入点：① `project.main()` 打开项目时遍历 `file` 把每条 `m_call`/`o_call` 转大写（仅当 `file` 为 list）；② `new()`/`project_others()` 行2(己方)/行3(对方) 挂委托；③ `research_call()` 搜索关键词；④ `find_replace()` 查找/替换框（按字段联动）；⑤ `set.py`「我的呼号」；⑥ `batch_project.py` 模板表与翻页表（行2/3），且 `app_list['m_call']` 取自设置即转大写。
 
+## 历史：已移除的功能
+- **通联录音**：当前分支（含 `develop`/`develop-English`）**无此功能**，`qso_rec.py` 不存在。
+  历史：`f84864f` 加入、`b6a9162` 删除；若需重建，从 `f84864f` 取回再适配当前主表格委托架构。
+
 ## 验证环境（离屏 GUI 冒烟）
 - venv 已装 PySide6-Essentials+cryptography+skyfield+numpy，可 `QT_QPA_PLATFORM=offscreen` 做真实 GUI 冒烟（建窗/后台线程/读表/点按钮）。
 - **`project.py` 主窗口也可以离屏跑**（旧记录的“硬崩溃”不成立，实测 exit 0）：`project.main(QMainWindow(), 数据, 路径, key_=…, recovered=…)` 同步跑完建表 / `table_update` 自动保存 / close guard 关闭分支。做法是 patch 掉全部模态与 IO：`QMessageBox.exec`+`clickedButton`（在 exec 里按按钮文本记下 `_fake_clicked` 再返回）、`QMessageBox.information/warning`、`QFileDialog.getSaveFileName`（返回预定路径并计数）、`fhl_rw.write_fhl_file`（记录 `(path, data)` 以统计落盘次数）。样例见 `test_recover_save_smoke.py`。
@@ -102,17 +123,29 @@ sat_dur(1~240) / sat_sats / mu_sats / **theme_mode**。
 - 客户端「多人日志管理」窗：可最小化的非模态 `QDialog`（`project.open_multiplayer_manager`，640×640），`window._mp_dialog` 单例复用。
 
 ## 发布流程细节（GitHub Actions）
-- 三个文件：`main.yml`（手动发布）、`preview.yml`（提交即预览）、`.github/inno/F HamLog 2.iss`（CI 专用 Inno 脚本）。
+- 仓库 `github.com/Mubi-Baihua/F_HamLog`，**默认分支 `main`**。
+- **只有三个文件**：`main.yml`（手动发布，**唯一能发 Release**，填 `version`）、
+  `preview.yml`（cron `0 20 * * *` 定时预览打包→Artifact，**无 push**）、
+  `.github/inno/F HamLog 2.iss`（CI 专用 Inno 脚本）。
+  **没有** `releases.yml` / `preview-cleanup.yml`（已被否）。
 - **产物保存位置（回写分支用）**：安装包 → `F HamLog 2 Inno Setup/F HamLog <display> setup.exe`；
   兼容版 → `兼容版/F HamLog <display>兼容版.zip`。提交信息 `打包 <version> [skip ci]`。
+  ⚠️ **历史产物在 `main` 上直接躺仓库根**（`F HamLog 2.4兼容版.zip`，无 `兼容版/` 目录，
+  该目录只在 `develop`）→ **取产物脚本必须双位置回退**（先 `兼容版/` 再仓库根）。
 - **`main.yml`** 手动 `workflow_dispatch`，一次跑完：Nuitka 打包 → Inno 6 安装包 → 兼容版 zip
   → **回写运行分支** → 发 Releases（**默认草稿**）。
-- **`preview.yml`** `push`(main/develop) + `workflow_dispatch`；`paths-ignore`
-  `F HamLog 2 Inno Setup/**`、`兼容版/**`、`**/*.md`、`.workbuddy/**`（防自动提交自触发）；
-  `concurrency.cancel-in-progress: true`；`permissions: contents:read + actions:write`；
-  版本号 = `UTC-yyyyMMdd-HHmm`(UTC)；主程序 exe 与 AppName = `F HamLog 2 Preview`；
-  AppId 独立 GUID；上传 Artifact 前删同名旧 Artifact（`gh api …/actions/artifacts?name=` +
-  `--method DELETE`，删除失败只 warning）；**不建 Release、不回写分支**。
+- **`preview.yml`（2026-09-27 定稿）** = `schedule: cron '0 20 * * *'`（北京 04:00）+ `workflow_dispatch`，
+  **无 push**；`concurrency: preview` 且 `cancel-in-progress: false`；提交检测**只看 `develop`**
+  （比本工作流上条 run 的 `createdAt` 之后 `origin/develop` 的提交数）。
+  两条分支：`SHOULD_BUILD=true` 正常打包；`=false` **下载上次 Artifact 当本次产物**
+  （download → 删旧 Artifact → 上传；查不到可复用则回退正常打包）→ **每次运行都有 Artifact**。
+  清理（无门控）：① 按 `name` 删同名旧 Artifact 只留最新；② 删「上次未真正打包」的 run
+  （判 `Nuitka 独立打包` step conclusion=`skipped`，`success` 保留），全程 `continue-on-error`；
+  DELETE 只对 **completed** run 生效且**必须排除 `SELF_RUN_ID`**。
+  版本号 = `UTC-yyyyMMdd-HHmm`；AppName/主程序 exe = `F Ham Log 2 Preview`（AppId 独立 GUID，
+  可与正式版共存）；**不建 Release、不回写分支**。
+  ⚠️ `workflow_dispatch`/`schedule` **只认默认分支上的工作流** → `preview.yml` 必须存在于 `main`。
+- 本机**无 `gh` CLI、无 token**（凭据由 `git-credential-manager` 托管）→ 查/删 run 只能在 CI 内用 `GITHUB_TOKEN`。
 - 命名推导（`-replace '\.0$',''` 得 display）：安装包 `F HamLog 2.4 setup.exe`、兼容版
   `F HamLog 2.4兼容版.zip`；Release 附件沿用点号 `F.HamLog.2.4.setup.exe` / `F.HamLog.2.4.zip`，
   外加仓库内已打包的 `F_HamLog_Remote_Log_Server_2.0.0.exe`（不重打包）。安装包内部 AppVersion 用完整版本。
@@ -165,3 +198,110 @@ sat_dur(1~240) / sat_sats / mu_sats / **theme_mode**。
   冒烟脚本**不要真去点「更多」列做 GUI 断言**，改为断言委托已挂载 + `_click_cb` 非空。
 - **输出经管道（`| tail`/`head`）时的 SIGPIPE/SIGTERM 假象**：脚本其实跑完了，
   只是被管道提前关闭杀掉；判定结果请用 `grep` 抓 `RESULT=`/`通过` 行，别只看退出码。
+
+## 多语言（i18n）实现细节
+
+文件：`i18n.py`（机制）、`i18n_zh_en.py`（词表 `TRANSLATIONS`，约 600 条）。
+思路：**中文是源语言**，不做 `tr()` 侵入式改造，界面文字在**显示时**查词表翻译。
+
+- 三层：词表 dict → `translate_widget()`（识别 QLabel/QAbstractButton/QGroupBox/
+  QMenu/QAction/占位符/windowTitle/QComboBox/QListWidget/QTabWidget/QTreeWidget/
+  QTableView 横+纵表头）→ `install(app)` 装的 `_LanguageFilter` 事件过滤器
+  （`QEvent.Show` 翻顶层窗、`QEvent.LanguageChange` 重译）。
+- 模板匹配：值里写 `{}`（如 `'已删除 {} 条日志。': 'Deleted {} log(s).'`），
+  把 f-string / `%` 格式化后的动态文案反查模板再翻。模板需中文侧 ≥ `_MIN_TEMPLATE_CJK=2`
+  个汉字；按 pattern 长度降序匹配；**占位符捕获到的片段会递归再翻**（`_translate_inner`，
+  深度上限 `_MAX_TEMPLATE_DEPTH=4`）——状态栏那种「几段拼起来」的文案靠这个。
+  递归**不能**按「是否含汉字」短路：反方向英文→中文时片段是英文，也要再翻。
+- `en2zh` 用 `setdefault` 只登记首个译法；`translate()` 幂等，中英来回切能还原。
+- Qt 自带翻译：`install`/`set_language` 里 `_apply_qt_translator()` 加载
+  `PySide6/translations/qtbase_zh_CN.qm` / `qtbase_en.qm`（先 remove 再 install 并保引用）。
+- `_send_language_change(app)` 显式给所有顶层窗 `sendEvent(LanguageChange)`
+  （Qt 只在装/卸翻译器时自动派发，且**对象上的过滤器先于 app 上的过滤器**，
+  所以 `watch_language` 的回调里先自己 `translate_tree(obj)` 再回调）。
+- 持久化：`file/m_xml.txt` 键 `language`，值 `zh`/`en`（`read_settings/save_language/
+  load_language`，只改自己这个键）。`LANG_LABELS=(('zh','简体中文'),('en','English'))`
+  ——语言名一律用**母语写法**，故意不进词表。
+- `install(app)` 调用点：`main.py` / `set.py` / `project.py` / `batch_project.py` /
+  `pack_set.py` / `satellite_window.py` / `mutual_window.py` / `satellite_map_window.py` /
+  `tle_source_window.py` 的 `__main__`（紧跟 `theme.init_app(app)`）。
+- **动态文案漏斗**：卫星过境/通联预测里 `_status_set(text)=status.setText(i18n.tr(text))`；
+  `tle_source_window` 的 `_set_status`/`_set_item_delay` 开头 `text = i18n.tr(text)`；
+  `project.MoreButtonDelegate.paint` 里 `btn_opt.text = i18n.tr(self._text)`；
+  `project._set_title`、批量记录列头、地图信息栏都显式 `i18n.tr(...)`。
+- **文件对话框必须调用处翻**：原生静态 `QFileDialog.getOpen/SaveFileName`、
+  `getExistingDirectory` 的标题与过滤器不走控件树。
+- **整条拼完再翻会漏翻**：多段中文抢同一模板，长的先匹配、把后面的中文吞进 `{}`。
+  所以计数标签与状态栏改成**逐段 `i18n.tr` 后再拼**（`satellite_window._refresh_selected_count`、
+  `on_done` 的 `obs_info`/`sel_info`）。
+- **写在「单元格」里的固定文案**（不是表头）`translate_widget` 翻不到——它只翻 model 表头，
+  而主日志表上万单元格逐个扫会拖慢重建。这类用
+  `i18n.bind_cell_texts(window, table, texts, col=0)`：按**中文原文**重设 + `watch_language` 跟随，
+  中英来回切**幂等还原**。接入点：`project.new()`（新建日志）与 `project.project_others()`
+  （更多信息），传 `list(translation_dict.values())`（与行序一致）。**新增同类窗口照此接入。**
+- **冻结列（`batch_project.FrozenTableWidget`）x = 竖向表头宽度**，而竖向表头宽度随**行标签
+  文字**变化（切语言时 中→英 76→124）。**只在 `resizeEvent` 里重算不够**：窗口够宽时切语言
+  不触发 resize，x 停在旧值 → 整列错位正好一个表头宽度。已改为监听
+  `verticalHeader().geometriesChanged` / `horizontalHeader().geometriesChanged` /
+  `model().headerDataChanged`，**`QTimer.singleShot(0)` 延后一轮**再 `updateFrozenGeometry()`
+  （表头宽度要到本轮布局结束才更新，立刻量是旧值），`_frozen_geom_pending` 合并多次请求。
+  复现/验证：`test/__batch_frozen_i18n_probe2.py`（窄窗 resize / 宽窗不 resize 两种都要 dx=0）。
+- ⚠️ **路径隐患**：`set.py`（13/43/57/77/83 行）与 `project.py`/`batch_project.py` 读设置用的是
+  **硬编码相对路径 `file/m_xml.txt`**，**绕过 `theme.settings_path()`（= `sp.SETTINGS_PATH`）**；
+  而 `i18n.save_language` 走 `theme.settings_path()`。→ **冒烟只 patch `sp.SETTINGS_PATH` 不够**，
+  必须同时 `os.chdir(临时目录)` 或**备份字节后还原**（`file/m_xml.txt` 曾被污染出 `language` 键）。
+- 窗口尺寸：`i18n.fit_window(win, base_w, base_h)`（中文严格用基准尺寸＝历史尺寸；
+  英文取「基准」与 `minimumSizeHint+24/+8` 的较大者，`setFixedSize`）、
+  `i18n.fit_min_width(win, minimum)`（可自由缩放的地图窗只抬最小宽度）。
+  **必须在 `show()` 之后调用**——Show 事件才会触发翻译，先量后翻会按中文尺寸定死。
+  - `启动器 main.py`：英文下另算按钮宽度（`sizeHint()`）并按需放大 grid 与窗口，
+    中文完全不改（575×375、105/220px）。
+  - `星历数据源`：中文 660×430，英文按内容放宽（约 830）。
+  - `设置 set.py`：中文 770×475；**语言下拉与「保存更改」并作一行**
+    （左「语言:」+下拉、中间 `addStretch(1)`、右侧靠边放按钮；冒烟 12 项见
+    `test/__set_lang_row_smoke.py`）。**不要**把语言下拉塞进上方那行
+    （开关+星历间隔+颜色模式已占满 770px，会挤压控件）。英文约 1059×475。
+- 词表工具（`test/`）：
+  - `__i18n_extract.py`：AST 抽源码中文字符串 → `__i18n_ui_out.txt`
+  - `__i18n_check.py`：查重复键 / 残留 `%` / 词表有源码没有 / 源码未收录
+  - `__i18n_apply.py`：幂等批量套用（`add(f, old, new, n)` 逐条校验命中次数）
+  - `__i18n_smoke.py`：离屏冒烟（引擎单测 + 9 个窗口三阶段扫描 + 尺寸打印）
+  - `__i18n_fit_probe.py`：单窗尺寸/最宽控件探针
+- **写这类冒烟脚本的坑**：
+  - 静态 `QFileDialog.getOpen/SaveFileName`、`QMessageBox.information/warning/question`
+    内部自带模态循环，**替换 `QDialog.exec` 拦不住**，必须替换静态方法本身
+    （`project.main` 会在 `save_path==''` 时弹原生「新建文件」→ 直接传一个临时路径跳过）。
+  - `os._exit()` 跳过缓冲区 flush → 日志要**逐行写文件并 flush**；
+    并挂 `faulthandler.dump_traceback_later(90, exit=True)` 看门狗定位卡点。
+  - `satellite_window.main(None)` / `mutual_window.main(None)` **无视传入窗口、自建
+    QMainWindow** → 要按「新出现的顶层窗口」定位再扫描。
+  - 扫描只统计**可见**控件（未显示的对话框/隐藏标签页由 Show 事件补翻），
+    并分别按方向判定：英文阶段找「仍为中文」，切回中文阶段找「仍是英文」（`text in en2zh`）。
+  - `test/__theme_mode_smoke.py` 的 `boxes` = 设置窗里**所有** QComboBox 且被当作
+    「同一行」控件；新增语言下拉后要改成 `boxes[:1]`（只取颜色模式那个）。
+
+## toast_tip.py 宽度自适应（2026-10-02 定稿）
+
+- `need_w = QFontMetrics.horizontalAdvance(text) + _PAD_X*2 + _SLACK_X`（单行完整显示所需）
+  → `w = min(max(need_w, _MIN_W), _max_toast_width())`：**比当前窄就保持当前宽度，
+  比当前宽就加宽**；超过上限（`clamp(屏幕宽×0.8, 440, 900)`）才折行。
+- 高度 = `label.heightForWidth(w) + _H_EXTRA`（该 API 的高度**含 QSS padding**：
+  单行 24 = 文字 12 + 上下 12）。
+- **改宽度只改 `toast_tip.py` 顶部常量区**（`_MIN_W`/`_MAX_W`/`_MAX_ABS`/`_SLACK_X`/`_PAD_X`）。
+- **别再退回 `label.width()` 口径**：`wordWrap=True` 时它给的是折行后的宽度，
+  长文案会被压成窄卡片而不是加宽。
+
+## 多人日志：退出顺序与线程（细节）
+
+- **退出必走 `RemoteConnection.shutdown()`，顺序不可换**：
+  ① `sync.stop()` → ② `_close_socket()`（QUIT + shutdown/close）→ ③ `sync.wait(3000)`。
+- `_SyncThread.run()` emit「断开」前必须判 `self._running`。
+- 服务端启动后禁用密码输入（含显示/隐藏），停止后恢复；
+  发送按客户端加锁（`entry['_lock']` + `_send_entry`）。
+- 默认端口 8000，被占回退 `port=0`。**Windows 端口探测**：① 绝不设 `SO_REUSEADDR`；
+  ② 试探与 holder 用完全相同地址（`0.0.0.0`）；③ **不要用 `connect_ex`**。
+- `.gitignore` 必忽略：`file/keys/`、`keys/`、`*.fhlkey`、`file/known_server_keys.txt`、
+  `F_HamLog_Remote_Log_Server_2.0.0/{keys/,main.fhl,password_xml.txt}`、`file/_key_backup_*/`。
+
+## 发布流程：`.iss` 与 PowerShell 补充
+- `.iss` 用 `DefaultDirName={autopf}\{#MyAppName}` + **显式 `PrivilegesRequired=admin`**。

@@ -1,6 +1,7 @@
 def main(file):
     from PySide6.QtWidgets import QFileDialog, QMessageBox, QApplication
     from dialog_defaults import desktop_dir
+    import i18n
     import os
     from openpyxl import Workbook
     from openpyxl.utils import get_column_letter
@@ -61,9 +62,9 @@ def main(file):
     # 弹出保存对话框
     save_path, _ = QFileDialog.getSaveFileName(
         parent_window,
-        "导出为Excel文件",
+        i18n.tr("导出为Excel文件"),
         desktop_dir(),
-        "Excel文件 (*.xlsx);;所有文件 (*)"
+        i18n.tr("Excel文件 (*.xlsx);;所有文件 (*)")
     )
     if not save_path:
         return False

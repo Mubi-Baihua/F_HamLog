@@ -1,5 +1,6 @@
 from PySide6.QtWidgets import QFileDialog, QMessageBox
 from dialog_defaults import desktop_dir
+import i18n
 import re
 import os
 import json
@@ -152,7 +153,7 @@ def _map_record(rec):
 
 def main(file_list):
     # 弹出文件选择对话框以选择 .adi 文件
-    path, _ = QFileDialog.getOpenFileName(None, '选择 ADI/ADIF 文件', desktop_dir(), 'ADI 文件 (*.adi);;All Files (*)')
+    path, _ = QFileDialog.getOpenFileName(None, i18n.tr('选择 ADI/ADIF 文件'), desktop_dir(), i18n.tr('ADI 文件 (*.adi);;All Files (*)'))
     if not path:
         return file_list
     try:

@@ -25,6 +25,7 @@ from PySide6.QtWidgets import *
 
 import satellite_pred as sp
 import theme
+import i18n
 
 WINDOW_W, WINDOW_H = 660, 430
 
@@ -226,6 +227,7 @@ def main(window=None, on_save=None):
 
     def _set_status(text, warn=False):
         """统一设置状态文字与颜色（记住状态，便于主题切换时重刷）。"""
+        text = i18n.tr(text)
         _status['text'], _status['warn'] = text, warn
         status.setText(text)
         status.setStyleSheet(_warn_css() if warn else _hint_css())
@@ -285,6 +287,7 @@ def main(window=None, on_save=None):
             Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked))
 
     def _set_item_delay(item, text):
+        text = i18n.tr(text)
         _guarded(lambda: item.setData(_ROLE_DELAY, text))
         _refresh_item_tooltip(item)
 
@@ -469,7 +472,7 @@ def main(window=None, on_save=None):
         """界面已改动但尚未写文件：置脏标记并提示。"""
         _dirty['flag'] = True
         _refresh_buttons()
-        _set_status('%s（未保存，点「保存」写入文件）' % note)
+        _set_status(i18n.tr('%s（未保存，点「保存」写入文件）' % note))
 
     def on_item_changed(item):
         """itemChanged 同时覆盖「改地址」与「勾选/取消启用」，这里一并处理。"""
@@ -523,7 +526,7 @@ def main(window=None, on_save=None):
 
     def _revert(item, old, why):
         _set_item_text(item, old)
-        _set_status('未修改：%s' % why, True)
+        _set_status(i18n.tr('未修改：%s' % why), True)
         _beep()
 
     def add_source():
@@ -617,10 +620,19 @@ def main(window=None, on_save=None):
     _probe_all()
 
     win.show()
+
+    # 窗口尺寸跟随语言：show() 之后控件树才翻成当前语言（英文按钮如
+    # 'Restore defaults' 明显更长），此时按内容放宽窗口，避免按钮文字被截断。
+    def _fit_lang_window():
+        i18n.fit_window(win, WINDOW_W, WINDOW_H)
+
+    _fit_lang_window()
+    i18n.watch_language(win, _fit_lang_window)
     return win
 
 
 if __name__ == '__main__':
     app = QApplication()
+    i18n.install(app)
     main(QMainWindow())
     app.exec()

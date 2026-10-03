@@ -7,6 +7,7 @@ BAND 命名、STATION_CALLSIGN 等）。这里保留原入口，供 project.py �
 """
 from PySide6.QtWidgets import QFileDialog, QMessageBox
 from dialog_defaults import desktop_dir
+import i18n
 
 
 def main(file):
@@ -14,8 +15,8 @@ def main(file):
         QMessageBox.warning(None, '提示', '当前没有可导出的日志。')
         return False
     path, _ = QFileDialog.getSaveFileName(
-        None, "导出 ADIF 文件 (TQSL/LoTW)", desktop_dir(),
-        "ADIF 文件 (*.adi);;All Files (*)")
+        None, i18n.tr("导出 ADIF 文件 (TQSL/LoTW)"), desktop_dir(),
+        i18n.tr("ADIF 文件 (*.adi);;All Files (*)"))
     if not path:
         return False
     if not path.lower().endswith('.adi'):

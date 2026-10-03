@@ -9,6 +9,7 @@ import json
 import fhl_rw
 import backup
 import theme
+import i18n
 from dialog_defaults import desktop_dir
 
 # 各窗口的强引用必须声明在模块级：
@@ -111,9 +112,9 @@ def main():
         import project
         save_path, _ = QFileDialog.getOpenFileName(
             window,  # 父窗口
-            "打开项目",  # 对话框标题
+            i18n.tr("打开项目"),  # 对话框标题
             desktop_dir(),  # 初始目录：桌面
-            "F HamLog项目 (*.fhl)"  # 文件过滤器
+            i18n.tr("F HamLog项目 (*.fhl)")  # 文件过滤器
         )
         if save_path == '':
             return
@@ -232,6 +233,8 @@ def main():
     app.setWindowIcon(QIcon("file/F_HamLog.ico"))
     # 颜色模式：跟随系统／浅色／深色（保存在设置文件，见 theme.py）
     theme.init_app(app)
+    # 界面语言：中文／英文（词表见 i18n_zh_en.py；窗口文字在显示时自动翻译）
+    i18n.install(app)
 
     global window
     window = QMainWindow()
@@ -345,6 +348,33 @@ def main():
     main_layout.addStretch(1)
 
     window.show()
+
+    # 窗口尺寸跟随语言：中文下严格 575×375、按钮 105/220px（与历史版本逐像素一致）；
+    # 英文按钮文字更长（'Join online log' 等），按文字自然宽度放大按钮与窗口，
+    # 否则固定宽度会把英文截断。
+    _grid_btns = (button_batch, button_join_grid, button_start, button_open)
+    _full_btns = (button_quick, button_sat)
+
+    def _fit_launcher():
+        if not i18n.is_english():
+            grid_box.setFixedWidth(220)
+            for b in _grid_btns:
+                b.setFixedSize(105, BTN_H)
+            button_quick.setFixedSize(220, 46)
+            button_sat.setFixedSize(220, BTN_H)
+            window.setFixedSize(575, 375)
+            return
+        half = max([105] + [b.sizeHint().width() for b in _grid_btns])
+        full = max([220, 2 * half + 6] + [b.sizeHint().width() for b in _full_btns])
+        for b in _grid_btns:
+            b.setFixedSize(half, BTN_H)
+        button_quick.setFixedSize(full, 46)
+        button_sat.setFixedSize(full, BTN_H)
+        grid_box.setFixedWidth(full)
+        window.setFixedSize(max(575, full + 48), 375)   # 48 = 主布局左右边距 24+24
+
+    _fit_launcher()
+    i18n.watch_language(window, _fit_launcher)
 
     # 启动卫星星历（TLE）自动定时更新：按“设置”中的开关与间隔，在后台周期性刷新缓存
     import satellite_auto_update

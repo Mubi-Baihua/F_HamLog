@@ -3,6 +3,7 @@ from PySide6.QtGui import QUndoStack, QUndoCommand
 from PySide6.QtCore import Qt, QTimer, QObject, QEvent, qInstallMessageHandler
 import call_upper
 from dialog_defaults import desktop_dir
+import i18n
 import time as time_
 import sys
 import re
@@ -96,10 +97,38 @@ class FrozenTableWidget(QTableWidget):
         # 第 0 列宽度双向同步：主表和冻结层都能拖拽/调整，且避免递归循环
         self.horizontalHeader().sectionResized.connect(self._sync_frozen_from_main)
         self._frozen.horizontalHeader().sectionResized.connect(self._sync_main_from_frozen)
+        # 冻结层 x = 竖向表头宽度，而竖向表头宽度会随**行标签文字**变化
+        # （切语言时字段名由中文变英文 → 表头变宽 48px）。只在 resizeEvent 里
+        # 重算的话，窗口不缩放时 x 会停在旧值 → 冻结列整体偏移一个表头宽度。
+        # 这里监听表头几何 / 表头文字变化，延后一轮再同步（等 Qt 重算完表头宽度）。
+        self._frozen_geom_pending = False
+        self.verticalHeader().geometriesChanged.connect(self._schedule_frozen_geometry)
+        self.horizontalHeader().geometriesChanged.connect(self._schedule_frozen_geometry)
+        self.model().headerDataChanged.connect(self._schedule_frozen_geometry)
         self.sync_frozen_columns()
         # 垂直滚动同步（双向，带防抖）
         self.verticalScrollBar().valueChanged.connect(self._sync_from_main)
         self._frozen.verticalScrollBar().valueChanged.connect(self._sync_from_frozen)
+
+    def _schedule_frozen_geometry(self, *args):
+        """延后到事件循环下一轮再同步冻结层几何。
+
+        表头文字变化 → 竖向表头宽度在本轮布局**结束之后**才更新，立刻量会拿到旧值
+        （这正是「切语言后冻结列错位」的成因）。合并多次请求，只跑一次。
+        """
+        if self._frozen_geom_pending:
+            return
+        self._frozen_geom_pending = True
+
+        def _run():
+            try:
+                self._frozen_geom_pending = False
+                self.updateFrozenGeometry()
+            except Exception:
+                # 窗口可能已销毁；几何同步是纯视觉修正，失败不影响功能
+                pass
+
+        QTimer.singleShot(0, _run)
 
     def _apply_frozen_theme(self):
         """冻结层底色跟随主题取色。
@@ -355,8 +384,9 @@ def main(window, preset=None, on_saved=None, preset_records=None, recovered=Fals
         now_local = datetime.datetime.now()
         tz = now_local.astimezone().strftime('%z')  # 形如 '+0800'
         tz_disp = ('UTC%s:%s' % (tz[:3], tz[3:])) if tz else 'UTC'
-        clock_label.setText('UTC %s   |   本地 %s (%s)'
-                            % (now_utc.strftime(fmt), now_local.strftime(fmt), tz_disp))
+        clock_label.setText(i18n.tr('UTC %s   |   本地 %s (%s)'
+                                    % (now_utc.strftime(fmt),
+                                       now_local.strftime(fmt), tz_disp)))
 
     update_clock()  # 立即填充一次，避免首秒空白
     # 定时器挂到 window 下，防止 main() 返回后被回收
@@ -388,7 +418,8 @@ def main(window, preset=None, on_saved=None, preset_records=None, recovered=Fals
     cb_freeze.toggled.connect(table.set_frozen)
 
     def refresh_headers():
-        headers = ['模板'] + [f'第{i}条' for i in range(1, table.columnCount())]
+        headers = [i18n.tr('模板')] + [i18n.tr(f'第{i}条')
+                                      for i in range(1, table.columnCount())]
         table.setHorizontalHeaderLabels(headers)
 
     # 初始填充：仅模板列（默认值）；若日期/时间为空字符串则自动回填本地时间/日期
@@ -767,9 +798,9 @@ def main(window, preset=None, on_saved=None, preset_records=None, recovered=Fals
         def add_to_project():
             project_path, _ = QFileDialog.getOpenFileName(
                 finish_dialog,
-                '添加到 F HamLog项目',
+                i18n.tr('添加到 F HamLog项目'),
                 desktop_dir(),
-                'F HamLog项目 (*.fhl)'
+                i18n.tr('F HamLog项目 (*.fhl)')
             )
             if project_path == '':
                 return
@@ -782,9 +813,9 @@ def main(window, preset=None, on_saved=None, preset_records=None, recovered=Fals
         def save_as_project():
             save_path, _ = QFileDialog.getSaveFileName(
                 finish_dialog,
-                '另存为 F HamLog项目',
+                i18n.tr('另存为 F HamLog项目'),
                 desktop_dir(),
-                'F HamLog项目 (*.fhl)'
+                i18n.tr('F HamLog项目 (*.fhl)')
             )
             if save_path == '':
                 return
@@ -967,6 +998,7 @@ def main(window, preset=None, on_saved=None, preset_records=None, recovered=Fals
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
+    i18n.install(app)
     win = QMainWindow()
     main(win)
     app.exec()

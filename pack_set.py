@@ -4,6 +4,7 @@ from PySide6.QtWidgets import *
 import os
 import ast
 from dialog_defaults import desktop_dir
+import i18n
 import shutil
 
 def is_python_installed():
@@ -232,7 +233,7 @@ def main(window):
         populate_table()
 
     def install_plugin():
-        file_path, _ = QFileDialog.getOpenFileName(window, '选择插件包', desktop_dir(), 'F HamLog插件包 (*.fhlpypack *.txt);;All Files (*)')
+        file_path, _ = QFileDialog.getOpenFileName(window, i18n.tr('选择插件包'), desktop_dir(), i18n.tr('F HamLog插件包 (*.fhlpypack *.txt);;All Files (*)'))
         if not file_path:
             return
         try:
@@ -277,8 +278,8 @@ def main(window):
             # 如果包含版本字段，检查兼容性（可选）
             try:
                 avail = list(xml_data.get('available fhl version')) 
-                if not ('2.5.0' in avail):
-                    QMessageBox.warning(window, '版本不匹配', f"该插件与当前F HamLog版本不兼容\n当前F HamLog版本：2.5.0\n插件适配版本：{avail}")
+                if not ('2.6.0' in avail):
+                    QMessageBox.warning(window, '版本不匹配', f"该插件与当前F HamLog版本不兼容\n当前F HamLog版本：2.6.0\n插件适配版本：{avail}")
                     shutil.rmtree(target)
                     return
             except Exception:
@@ -306,6 +307,7 @@ def main(window):
     window.show()
 if __name__ == '__main__':
     app = QApplication()
+    i18n.install(app)
     window=QMainWindow()
     main(window)
     app.exec()

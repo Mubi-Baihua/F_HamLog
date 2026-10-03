@@ -1,6 +1,7 @@
 from openpyxl import load_workbook
 from PySide6.QtWidgets import QFileDialog
 from dialog_defaults import desktop_dir
+import i18n
 from PySide6.QtWidgets import *
 from datetime import datetime, timedelta, timezone
 import re
@@ -52,7 +53,7 @@ def _utc_cell_to_local(date_time_cell):
 def main(file):
     print("导入HAM_tolls")
 
-    file_path, _ = QFileDialog.getOpenFileName(None, "选择Excel文件", desktop_dir(), "Excel文件 (*.xlsx *.xls)")
+    file_path, _ = QFileDialog.getOpenFileName(None, i18n.tr("选择Excel文件"), desktop_dir(), i18n.tr("Excel文件 (*.xlsx *.xls)"))
 
     if not file_path:
         return file

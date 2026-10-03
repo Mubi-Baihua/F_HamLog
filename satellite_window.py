@@ -23,6 +23,7 @@ from PySide6.QtCore import Qt, QThread, Signal, QTimer
 
 import satellite_pred as sp
 import theme
+import i18n
 from dialog_defaults import desktop_dir
 
 SETTINGS_PATH = sp.app_path('file/m_xml.txt')
@@ -405,10 +406,12 @@ class SatelliteSelectDialog(QDialog):
         """
         n = len(self.get_selected())
         limit = sp.MAX_SELECTED_SATELLITES
-        base = getattr(self, '_count_base', '')
-        text = f'{base}　已选 {n} 颗'
+        # 逐段翻译后再拼：整条拼完再翻会因模板相互抢匹配而漏翻某一截
+        # （基数文本 + "已选 N 颗" + 超限提示各自的模板长短不一）。
+        base = i18n.tr(getattr(self, '_count_base', ''))
+        text = i18n.tr('{}　已选 {} 颗').format(base, n)
         if n > limit:
-            text += f'，超过上限 {limit} 颗'
+            text += i18n.tr('，超过上限 {} 颗').format(limit)
             # 警告文字：深色主题下写死的红色偏暗，改用随主题提亮的 warn 色
             self.count_label.setStyleSheet(theme.warn_css())
         elif getattr(self, '_count_base_red', False):
@@ -959,12 +962,16 @@ def main(parent_window, quick_log_callback=None, title='卫星过境'):
     status.setStyleSheet(theme.hint_css())
     layout.addWidget(status)
 
+    def _status_set(text):
+        """设置状态文字：动态文案按当前语言翻译后再显示。"""
+        status.setText(i18n.tr(text))
+
     # 卫星星历下载进度条 + 取消按钮：仅在「刷新星历」下载期间显示，平时隐藏
     prog_layout = QHBoxLayout()
     progress_bar = QProgressBar()
     progress_bar.setRange(0, 100)
     progress_bar.setTextVisible(True)
-    progress_bar.setFormat('下载星历 %p%')
+    progress_bar.setFormat(i18n.tr('下载星历 %p%'))
     progress_bar.setVisible(False)
     prog_layout.addWidget(progress_bar, 1)
     cancel_dl_btn = QPushButton('取消下载')
@@ -1094,16 +1101,16 @@ def main(parent_window, quick_log_callback=None, title='卫星过境'):
     def run_prediction():
         nonlocal sats, selected_numbers
         if not sats:
-            status.setText('没有可用的卫星数据，请先“刷新星历”。')
+            _status_set('没有可用的卫星数据，请先“刷新星历”。')
             return
         active_sats = active_sats_list()
         if not selected_numbers:
-            status.setText('尚未选择卫星，请点击“选择卫星…”勾选要跟踪的卫星。')
+            _status_set('尚未选择卫星，请点击“选择卫星…”勾选要跟踪的卫星。')
             table.setRowCount(0)
             _push_sats_to_map()
             return
         observer = (lat, lon, alt)
-        status.setText('正在计算过境（%d 颗卫星）…' % len(active_sats))
+        _status_set('正在计算过境（%d 颗卫星）…' % len(active_sats))
         refresh_btn.setEnabled(False)
         # 若上一次预测仍在跑，先中断它，避免重复线程与“destroyed while running”
         old = getattr(win, '_worker', None)
@@ -1113,7 +1120,7 @@ def main(parent_window, quick_log_callback=None, title='卫星过境'):
         # 开始时间取自文本框（系统本地时间），先校验格式，再按系统本地时区转 UTC 供 SGP4 使用
         start_local, err = _parse_start()
         if err:
-            status.setText('开始时间无效：' + err)
+            _status_set('开始时间无效：' + err)
             table.setRowCount(0)
             refresh_btn.setEnabled(True)
             return
@@ -1125,7 +1132,7 @@ def main(parent_window, quick_log_callback=None, title='卫星过境'):
             dur_spin.setValue(int(hours))
             dur_spin.blockSignals(False)
         if hours > 72:
-            status.setText('正在计算过境（%d 颗卫星，跨度 %d 小时，可能较慢）…'
+            _status_set('正在计算过境（%d 颗卫星，跨度 %d 小时，可能较慢）…'
                            % (len(active_sats), int(hours)))
         worker = PredictWorker(
             active_sats, observer, start,
@@ -1135,17 +1142,20 @@ def main(parent_window, quick_log_callback=None, title='卫星过境'):
         win._worker = worker  # 防止被回收
 
         def on_progress(v):
-            status.setText('正在计算过境… %d%%' % v)
+            _status_set('正在计算过境… %d%%' % v)
 
         def on_done(rows):
             if getattr(win, '_worker', None) is worker:
                 win._worker = None  # 线程即将被 deleteLater，避免关闭时访问已删除对象
             populate(rows)
             refresh_btn.setEnabled(True)
-            obs_info = f'观测站: 纬{lat:.3f}° 经{lon:.3f}° 海拔{alt:.0f}m'
-            sel_info = f' ｜ 已选 {len(selected_numbers)} 颗'
+            # 逐段翻译后再拼（整条一起翻会因多段中文抢同一模板而漏翻部分）。
+            obs_info = i18n.tr(
+                f'观测站: 纬{lat:.3f}° 经{lon:.3f}° 海拔{alt:.0f}m')
+            sel_info = i18n.tr(f' ｜ 已选 {len(selected_numbers)} 颗')
             status.setText(
-                f'{obs_info}{sel_info} ｜ 卫星 {len(active_sats)} 颗 ｜ 可见过境 {len(rows)} 次')
+                i18n.tr('{} ｜ 卫星 {} 颗 ｜ 可见过境 {} 次').format(
+                    obs_info + sel_info, len(active_sats), len(rows)))
 
         worker.finished.connect(worker.deleteLater)
         worker.progress.connect(on_progress)
@@ -1204,12 +1214,12 @@ def main(parent_window, quick_log_callback=None, title='卫星过境'):
     def refresh_tle(force=False):
         nonlocal sats
         update_tle_tooltip()   # 反映「星历数据源」窗口里的最新改动
-        status.setText('正在获取全部活动卫星星历…')
+        _status_set('正在获取全部活动卫星星历…')
         # 显示下载进度条（默认确定进度；若服务器未返回大小则转忙碌动画）
         progress_bar.setVisible(True)
         progress_bar.setRange(0, 100)
         progress_bar.setValue(0)
-        progress_bar.setFormat('下载星历 %p%')
+        progress_bar.setFormat(i18n.tr('下载星历 %p%'))
         cancel_dl_btn.setVisible(True)  # 下载期间显示「取消下载」
         refresh_btn.setEnabled(False)
         # 若上一次获取仍在跑，先中断
@@ -1235,7 +1245,7 @@ def main(parent_window, quick_log_callback=None, title='卫星过境'):
             sats, _n_upd, _n_add = sp.merge_update_satellites(s, sats)
             _kept = len(sats) - len(s)
             _extra = f'（另保留 {_kept} 颗本次未取得的旧卫星）' if _kept > 0 else ''
-            status.setText(
+            _status_set(
                 f'已更新星历：本次取得 {len(s)} 颗，共 {len(sats)} 颗卫星{_extra}。')
             # 手动「刷新星历」成功同样算一次星历更新：写入时间戳。
             # sat_last_update 原本只有后台自动更新会写；「清空星历」删除该键后，
@@ -1261,7 +1271,7 @@ def main(parent_window, quick_log_callback=None, title='卫星过境'):
             cancel_dl_btn.setVisible(False)
             cancel_dl_btn.setEnabled(True)
             cancel_dl_btn.setText('取消下载')
-            status.setText(w)
+            _status_set(w)
             _show_tle_time()
 
         def on_error(e):
@@ -1284,7 +1294,7 @@ def main(parent_window, quick_log_callback=None, title='卫星过境'):
             cancel_dl_btn.setEnabled(True)
             cancel_dl_btn.setText('取消下载')
             refresh_btn.setEnabled(True)
-            status.setText('已取消星历下载。')
+            _status_set('已取消星历下载。')
 
         def on_progress_pct(pct):
             # pct < 0：服务器未返回 Content-Length，进度条显示忙碌动画
@@ -1296,7 +1306,7 @@ def main(parent_window, quick_log_callback=None, title='卫星过境'):
                 progress_bar.setValue(pct)
 
         worker.fetched.connect(on_fetched)
-        worker.progress.connect(status.setText)
+        worker.progress.connect(_status_set)
         worker.progress_pct.connect(on_progress_pct)
         worker.warning.connect(on_warning)
         worker.error.connect(on_error)
@@ -1339,7 +1349,7 @@ def main(parent_window, quick_log_callback=None, title='卫星过境'):
         if s.pop('sat_last_update', None) is not None:
             _save_settings(s)
         _show_tle_time()
-        status.setText('星历已清空，自选卫星的选择已保留；点击「刷新星历」重新下载。')
+        _status_set('星历已清空，自选卫星的选择已保留；点击「刷新星历」重新下载。')
         _push_sats_to_map()
 
     def edit_observer():
@@ -1407,9 +1417,9 @@ def main(parent_window, quick_log_callback=None, title='卫星过境'):
         **不自动勾选自选卫星**。导入结果写回星历缓存，重启后仍然可用。
         """
         path, _ = QFileDialog.getOpenFileName(
-            win, '导入卫星星历数据', desktop_dir(),
-            '星历文件 (*.tle *.txt *.csv);;TLE 文件 (*.tle);;'
-            'CSV 文件 (*.csv);;文本文件 (*.txt)')
+            win, i18n.tr('导入卫星星历数据'), desktop_dir(),
+            i18n.tr('星历文件 (*.tle *.txt *.csv);;TLE 文件 (*.tle);;'
+                    'CSV 文件 (*.csv);;文本文件 (*.txt)'))
         if not path:
             return
         try:
@@ -1581,7 +1591,7 @@ def main(parent_window, quick_log_callback=None, title='卫星过境'):
     def _on_start_text(_txt):
         _, err = _parse_start()
         if err and sats:
-            status.setText('开始时间格式无效：' + err)
+            _status_set('开始时间格式无效：' + err)
     start_edit.textChanged.connect(_on_start_text)
     start_edit.editingFinished.connect(lambda: run_prediction() if sats else None)
 
@@ -1653,4 +1663,5 @@ def main(parent_window, quick_log_callback=None, title='卫星过境'):
 if __name__ == '__main__':
     from PySide6.QtWidgets import QApplication
     app = QApplication([])
+    i18n.install(app)
     main(None)
