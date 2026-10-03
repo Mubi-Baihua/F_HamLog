@@ -5,7 +5,7 @@
 #define MyAppName "F HamLog 2"
 #define MyAppVersion "2.4.0"
 #define MyAppPublisher "木比白桦 BI8SQL"
-#define MyAppURL "https://mubi-baihua.github.io/f_hamlog.html"
+#define MyAppURL "https://mubi-baihua.pages.dev/f_hamlog.html"
 #define MyAppExeName "F HamLog 2.exe"
 
 [Setup]

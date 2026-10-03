@@ -67,7 +67,7 @@
 
 ; ---- 固定信息（与 F HamLog 2.iss 保持一致）---------------------------------
 #define MyAppPublisher "木比白桦 BI8SQL"
-#define MyAppURL "https://mubi-baihua.github.io/f_hamlog.html"
+#define MyAppURL "https://mubi-baihua.pages.dev/f_hamlog.html"
 
 [Setup]
 ; AppId 与参考脚本相同 —— 安装包之间的升级关系依赖它，切勿修改

@@ -341,7 +341,7 @@ def main(window):
                 .t {margin-top: 5px;}</style>
                 </head><body>
                 <div class="t">%s</div>
-                <div class="t">%s<a href="https://mubi-baihua.github.io/f_hamlog.html">https://mubi-baihua.github.io/f_hamlog.html</a></div>
+                <div class="t">%s<a href="https://mubi-baihua.pages.dev/f_hamlog.html">https://mubi-baihua.pages.dev/f_hamlog.html</a></div>
                 <div class="t">%s<a href="https://github.com/Mubi-Baihua/F_HamLog/">https://github.com/Mubi-Baihua/F_HamLog/</a></div>
                 </body></html>''' % (
             theme.link_color().name(),

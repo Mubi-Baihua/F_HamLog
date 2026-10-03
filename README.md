@@ -177,7 +177,7 @@ FHL 文件格式为 json 文件。编码使用 utf-8。
 }
 ```
 
-##### Coded by [BI8SQL](https://mubi-baihua.github.io/)
+##### Coded by [BI8SQL](https://mubi-baihua.pages.dev/)
 
 ---
 
@@ -360,4 +360,4 @@ Chinese meanings of the dictionary fields:
 }
 ```
 
-##### Coded by [BI8SQL](https://mubi-baihua.github.io/)
+##### Coded by [BI8SQL](https://mubi-baihua.pages.dev/)
