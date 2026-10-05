@@ -4,7 +4,12 @@
 > 逐次改动见 `YYYY-MM-DD.md`。本文件只留**约定、决策与踩坑**，新增细节写进 `DETAILS.md`。
 
 ## 基本约定
-- PySide6 桌面应用（当前 2.6.0），Nuitka 打包独立 exe。
+- PySide6 桌面应用，Nuitka 打包独立 exe；**现代 src 结构**（包 `src/f_hamlog/`，入口 `__main__.py`）。
+  `__main__.py` 需兼容 `python -m f_hamlog` 与 `python src/f_hamlog/__main__.py`（后者把 `src/` 入 `sys.path` 后 `from f_hamlog.main import main` 取**函数**；`f_hamlog.main` 仍是模块，勿在包根改语义）。
+- **版本单一来源 = `src/f_hamlog/__init__.py.__version__`**：`pyproject.toml` 用 `dynamic=["version"]`+`attr`；
+  界面/插件等一切版本号一律取它，**禁止硬编码**（i18n 模板用 `{}` 占位）。
+- **应用退出前必须停掉所有后台 `QThread`**（否则退出时线程被 GC → Qt 崩溃，Windows 表现「Python 停止运行」）；
+  `main.py` 用 `app.aboutToQuit.connect(satellite_auto_updater.stop)`，`stop()` 内 `requestInterruption→wait→terminate` 兜底。
 - 本机 shell 部分可用（shim 缺 `dirname`/`cat`）：`ls/head/tail/wc/rm/git` 可用。
 - 文件读写优先 Glob/Grep/Read/Edit；项目 venv：`D:\F-Dev\BIG\F_HamLog\.venv\Scripts\python.exe`（绝对路径）。
 - **不主动 git commit/push**，除非用户明确要求。

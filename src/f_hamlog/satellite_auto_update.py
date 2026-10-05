@@ -141,7 +141,27 @@ class AutoTleUpdater:
         self._tick()
 
     def stop(self):
+        """停止定时器与后台下载线程，并等待线程真正退出。
+
+        必须在应用退出前调用：QThread 若在运行中被销毁会直接崩溃
+        （'QThread: Destroyed while thread is still running' → Windows 上表现为
+        "Python 停止运行"）。参见 satellite_window._on_close / project.stop_sync。
+        """
         self._timer.stop()
+        t = self._thread
+        if t is None:
+            return
+        try:
+            if t.isRunning():
+                t.requestInterruption()
+                # 给即将完成的下载一点收尾时间；仍不退出则兜底强制终止（此时进程即将退出）
+                if not t.wait(1000):
+                    t.terminate()
+                    t.wait()
+        except Exception:
+            pass
+        finally:
+            self._thread = None
 
     def _tick(self):
         if self._busy:

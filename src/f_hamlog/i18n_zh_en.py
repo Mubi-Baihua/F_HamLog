@@ -134,7 +134,7 @@ TRANSLATIONS = {
     #  主窗口 / 设置窗口
     # ------------------------------------------------------------------
     '业余无线电通联日志': 'Amateur Radio QSO Log',
-    'F HamLog 版本：2.6.0': 'F HamLog version: 2.6.0',
+    'F HamLog 版本：': 'F HamLog version: ',
     '我的呼号:': 'My call:',
     '我的QTH:': 'My QTH:',
     '我的设备:': 'My rig:',
@@ -628,9 +628,9 @@ TRANSLATIONS = {
         'Installer finished successfully!\nPlease reopen Plugin settings.',
     '安装失败：{}': 'Installation failed: {}',
     '插件 {} 未正确生成输出文件！': 'Plugin {} did not produce an output file!',
-    '该插件与当前F HamLog版本不兼容\n当前F HamLog版本：2.6.0\n插件适配版本：{}':
+    '该插件与当前F HamLog版本不兼容\n当前F HamLog版本：{}\n插件适配版本：{}':
         'This plugin is incompatible with the current F HamLog version\n'
-        'Current F HamLog version: 2.6.0\nPlugin targets: {}',
+        'Current F HamLog version: {}\nPlugin targets: {}',
     'F HamLog 将使用AES加密项目，\n请牢记你的密钥！若密钥丢失则无法恢复日志数据。':
         'F HamLog will encrypt the project with AES.\nRemember your key! A lost key means '
         'unrecoverable log data.',

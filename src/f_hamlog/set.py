@@ -2,6 +2,7 @@ from PySide6.QtWidgets import *
 from f_hamlog import call_upper
 from f_hamlog import theme
 from f_hamlog import i18n
+from f_hamlog import __version__
 from f_hamlog.dialog_defaults import desktop_dir
 from f_hamlog.paths import app_path
 
@@ -365,8 +366,14 @@ def main(window):
     line.setLineWidth(1)  # 设置线宽
     layout.addWidget(line)
 
-    fk_v = QLabel("F HamLog 版本：2.6.0", central_widget)
+    def _ver_text():
+        # 版本号来自 f_hamlog.__version__（单一来源，见 __init__.py）
+        return i18n.tr('F HamLog 版本：') + __version__
+
+    fk_v = QLabel(_ver_text(), central_widget)
     layout.addWidget(fk_v)
+    # 语言切换后重刷文案（前缀走词表，版本号动态拼接）
+    i18n.watch_language(window, lambda: fk_v.setText(_ver_text()))
 
     line = QFrame(central_widget)
     line.setFrameShape(QFrame.HLine)

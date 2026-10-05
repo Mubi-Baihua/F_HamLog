@@ -5,6 +5,7 @@ import os
 import ast
 from f_hamlog.dialog_defaults import desktop_dir
 from f_hamlog import i18n
+from f_hamlog import __version__
 import shutil
 from f_hamlog.paths import app_path
 
@@ -279,8 +280,11 @@ def main(window):
             # 如果包含版本字段，检查兼容性（可选）
             try:
                 avail = list(xml_data.get('available fhl version')) 
-                if not ('2.6.0' in avail):
-                    QMessageBox.warning(window, '版本不匹配', f"该插件与当前F HamLog版本不兼容\n当前F HamLog版本：2.6.0\n插件适配版本：{avail}")
+                if not (__version__ in avail):
+                    msg = i18n.tr(
+                        '该插件与当前F HamLog版本不兼容\n当前F HamLog版本：{}\n插件适配版本：{}'
+                    ).format(__version__, avail)
+                    QMessageBox.warning(window, '版本不匹配', msg)
                     shutil.rmtree(target)
                     return
             except Exception:

@@ -381,6 +381,9 @@ def main():
     from f_hamlog import satellite_auto_update
     satellite_auto_updater = satellite_auto_update.AutoTleUpdater(window)
     satellite_auto_updater.start()
+    # 退出前必须停掉后台下载线程，否则 App 结束时 QThread 仍在运行会被析构 → 崩溃
+    # （Windows 上表现为“Python 停止运行”）。见 AutoTleUpdater.stop()。
+    app.aboutToQuit.connect(satellite_auto_updater.stop)
 
     # ---------- 启动时静默升级旧版数据（卫星名 → 卫星编号） ----------
     # 自选卫星、卫星转发器表、TQSL 映射表在旧版本里都以「卫星名」为键，而卫星名会
