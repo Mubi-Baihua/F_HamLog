@@ -134,7 +134,7 @@ TRANSLATIONS = {
     #  主窗口 / 设置窗口
     # ------------------------------------------------------------------
     '业余无线电通联日志': 'Amateur Radio QSO Log',
-    'F HamLog 版本：2.6.0': 'F HamLog version: 2.6.0',
+    'F HamLog 版本：': 'F HamLog version: ',
     '我的呼号:': 'My call:',
     '我的QTH:': 'My QTH:',
     '我的设备:': 'My rig:',
