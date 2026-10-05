@@ -1,0 +1,1667 @@
+# -*- coding: utf-8 -*-
+"""
+satellite_window.py —— 业余卫星过境预测界面（PySide6）
+
+由 project.py 的“记录”菜单调用。提供：
+  - 业余卫星未来过境列表（升起/落下时间、最大仰角、方位、时长）
+  - 刷新星历（从「设置 → 星历数据源…」中配置的数据源下载并本地缓存）
+  - 设置观测站位置（纬度/经度/海拔）
+  - 每行“快速记录”按钮：打开预填好的新建日志
+"""
+
+import os
+import datetime
+from PySide6.QtWidgets import (
+    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
+    QTableWidget, QTableWidgetItem, QSpinBox, QDialog, QLineEdit,
+    QDialogButtonBox, QMessageBox, QFrame, QCheckBox, QApplication,
+    QAbstractItemView, QHeaderView, QScrollArea, QGroupBox, QFileDialog,
+    QSizePolicy, QListWidget, QListWidgetItem, QGridLayout, QProgressBar,
+    QStyledItemDelegate, QCompleter,
+)
+from PySide6.QtCore import Qt, QThread, Signal, QTimer
+
+from f_hamlog import satellite_pred as sp
+from f_hamlog import theme
+from f_hamlog import i18n
+from f_hamlog.dialog_defaults import desktop_dir
+
+SETTINGS_PATH = sp.app_path('file/m_xml.txt')
+TLE_CACHE = sp.app_path('file/amateur.tle')
+
+# 防止预测窗口（局部 QMainWindow）在 main() 返回后被 Python 回收
+_open_windows = []
+
+
+def _load_settings():
+    try:
+        with open(SETTINGS_PATH, 'r', encoding='utf-8') as f:
+            return eval(f.read())
+    except Exception:
+        return {}
+
+
+def _save_settings(d):
+    with open(SETTINGS_PATH, 'w', encoding='utf-8') as f:
+        f.write(str(d))
+
+
+# 本地时间统一使用「系统本地时区」显示/输入，避免按经度近似时区导致
+# 与 Heavens-Above、手机卫星 APP 等其他应用显示不一致（例如经度被推算成
+# 比真实时区快 1 小时）。物理轨道解算（SGP4）仍使用 observer 的真实经纬度，不受影响。
+LOCAL_TZ = datetime.datetime.now().astimezone().tzinfo
+
+
+def _local_fmt(dt, tz, fmt):
+    """把（带 UTC 时区的）datetime 按本地时区格式化。dt 为空时返回 '--'。"""
+    if dt is None:
+        return '--'
+    local = dt.astimezone(tz) if tz is not None else dt.astimezone()
+    return local.strftime(fmt)
+
+
+def _utc_to_local_str(dt, tz=None):
+    """把（带 UTC 时区的）datetime 转为本地时间字符串（显示用，精确到秒）。
+    tz 缺省用系统本地时区。"""
+    return _local_fmt(dt, tz, '%m-%d %H:%M:%S')
+
+
+def _log_date_str(dt, tz=None):
+    """“记录”预填用的日期（%Y-%m-%d）。"""
+    return _local_fmt(dt, tz, '%Y-%m-%d')
+
+
+def _log_time_str(dt, tz=None):
+    """“记录”预填用的时间：只精确到分，与日志表 time 字段格式一致。"""
+    return _local_fmt(dt, tz, '%H:%M')
+
+
+def _duration_str(sec):
+    sec = int(sec)
+    h = sec // 3600
+    m = (sec % 3600) // 60
+    s = sec % 60
+    if h > 0:
+        return f'{h}时{m}分'
+    if m > 0:
+        return f'{m}分{s}秒' if s else f'{m}分'
+    return f'{s}秒'
+
+
+def _load_local_tle_names():
+    """读取本地星历中的卫星原名，供字典编辑器搜索补全。"""
+    try:
+        if not os.path.exists(TLE_CACHE):
+            return []
+        with open(TLE_CACHE, 'r', encoding='utf-8-sig') as f:
+            return [name for name, _ in sp.parse_tle_text(f.read())]
+    except Exception:
+        return []
+
+
+class SatelliteNameDelegate(QStyledItemDelegate):
+    """让 TQSL / 转发器编辑器的卫星名可从本地星历中搜索。"""
+
+    def __init__(self, names, parent=None):
+        super().__init__(parent)
+        self._names = names
+
+    def createEditor(self, parent, option, index):
+        editor = QLineEdit(parent)
+        completer = QCompleter(self._names, editor)
+        completer.setCaseSensitivity(Qt.CaseInsensitive)
+        completer.setFilterMode(Qt.MatchContains)
+        completer.setCompletionMode(QCompleter.PopupCompletion)
+        editor.setCompleter(completer)
+        return editor
+
+
+class ObserverDialog(QDialog):
+    """编辑观测站位置（纬度/经度/海拔），支持梅登黑格网格输入。"""
+
+    def __init__(self, parent, lat=0.0, lon=0.0, alt=0.0):
+        super().__init__(parent)
+        self.setWindowTitle('观测站位置')
+        self.resize(340, 175)
+        lay = QVBoxLayout(self)
+        #lay.addWidget(QLabel('设置你的 QTH 位置，用于计算卫星仰角与方位。\n可填经纬度或梅登黑格网格，编辑完成后自动同步。'))
+
+        self.lat_edit = QLineEdit(f'{lat:.5f}')
+        self.lon_edit = QLineEdit(f'{lon:.5f}')
+        self.alt_edit = QLineEdit(f'{alt:.1f}')
+        for lbl, ed in (('纬度(°) 北纬为正:', self.lat_edit),
+                        ('经度(°) 东经为正:', self.lon_edit),
+                        ('海拔(m):', self.alt_edit)):
+            row = QHBoxLayout()
+            row.addWidget(QLabel(lbl))
+            row.addWidget(ed)
+            lay.addLayout(row)
+
+        # 梅登黑格网格
+        grid_row = QHBoxLayout()
+        self.grid_edit = QLineEdit()
+        try:
+            self.grid_edit.setPlaceholderText(
+                '梅登黑格网格，如 %s' % sp.latlon_to_maidenhead(lat, lon))
+            self.grid_edit.setText(sp.latlon_to_maidenhead(lat, lon))
+        except Exception:
+            self.grid_edit.setPlaceholderText('梅登黑格网格，如 PM84')
+        grid_row.addWidget(QLabel('网格:'))
+        grid_row.addWidget(self.grid_edit)
+        lay.addLayout(grid_row)
+
+        self.lat_edit.editingFinished.connect(self._coord_to_grid)
+        self.lon_edit.editingFinished.connect(self._coord_to_grid)
+        self.grid_edit.editingFinished.connect(self._grid_to_coord)
+
+        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        btns.accepted.connect(self.accept)
+        btns.rejected.connect(self.reject)
+        lay.addWidget(btns)
+
+    def _grid_to_coord(self):
+        text = self.grid_edit.text().strip()
+        if not text:
+            return
+        try:
+            glat, glon = sp.maidenhead_to_latlon(text)
+        except ValueError as e:
+            QMessageBox.warning(self, '网格无效', str(e))
+            return
+        self.grid_edit.setText(sp.latlon_to_maidenhead(glat, glon))
+        self.lat_edit.setText(f'{glat:.5f}')
+        self.lon_edit.setText(f'{glon:.5f}')
+
+    def _coord_to_grid(self):
+        try:
+            self.grid_edit.setText(sp.latlon_to_maidenhead(
+                float(self.lat_edit.text()), float(self.lon_edit.text())))
+        except (TypeError, ValueError):
+            return
+
+    def get_values(self):
+        try:
+            lat = float(self.lat_edit.text())
+            lon = float(self.lon_edit.text())
+            alt = float(self.alt_edit.text())
+        except ValueError:
+            return None
+        return lat, lon, alt
+
+
+def prompt_over_limit_selection(parent, n, limit, source_hint=''):
+    """已选卫星数超限时的统一提示框（选择对话框点“确定” / 读取 m_xml 两个入口共用）。
+
+    返回 True 表示用户确认「清除所有选择」（已通过二次确认），调用方应以空选择重开
+    选择窗口；返回 False 表示「重新选择」或「取消」，调用方留在原处或什么都不做。
+
+    :param source_hint: 附在正文后的来源说明（如“设置文件 m_xml.txt 中保存的选择已超限”），
+                        便于用户理解这次提示从何而来。
+    """
+    box = QMessageBox(parent)
+    box.setIcon(QMessageBox.Icon.Warning)
+    box.setWindowTitle('选择的卫星过多')
+    box.setText('选择的卫星过多。')
+    text = (f'已勾选 {n} 颗，单次最多支持 {limit} 颗。\n'
+            f'请减少勾选后再确定，或清除全部已选卫星重新挑选。')
+    if source_hint:
+        text = source_hint + '\n' + text
+    box.setInformativeText(text)
+    keep_btn = box.addButton('重新选择', QMessageBox.ButtonRole.AcceptRole)
+    clear_btn = box.addButton('清除所有选择', QMessageBox.ButtonRole.DestructiveRole)
+    box.addButton('取消', QMessageBox.ButtonRole.RejectRole)
+    box.setDefaultButton(keep_btn)
+    box.exec()
+    if box.clickedButton() is not clear_btn:
+        # 「重新选择」与「取消」都不改变现有选择
+        return False
+    # 破坏性操作：二次确认后才真正清除
+    again = QMessageBox.question(
+        parent, '确认清除',
+        f'将清除全部 {n} 颗已选卫星，回到未选择状态，并重新打开选择窗口。是否继续？',
+        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        QMessageBox.StandardButton.No)
+    return again == QMessageBox.StandardButton.Yes
+
+
+class SatelliteSelectDialog(QDialog):
+    """从已加载卫星中勾选“自选”范围。
+
+    勾选上限为 sp.MAX_SELECTED_SATELLITES（当前 %d 颗）。超过时点“确定”会拦下并提示，
+    可选择「重新选择」留在对话框继续调整，或「清除所有选择」把已勾选的全部清空（需二次确认）；
+    选后者时本对话框直接关闭（`reset_requested=True`），由调用方重建一个全新的选择窗口。
+
+    搜索框默认只匹配卫星名；勾选「使用卫星编号搜索」后，额外按 NORAD 编号匹配
+    （satnums 为「卫星名 → 编号」映射，缺省 None 时编号匹配不可用）。
+
+    **勾选结果一律以卫星编号为键**（satnums 提供时）：编号跨星历改名/换源都稳定，
+    调用方拿到的就是可长期保存的 `get_selected()`。取不到编号的卫星退回用名称作键；
+    完全不传 satnums 时键即名称，与旧调用保持一致。
+    """ % sp.MAX_SELECTED_SATELLITES
+
+    def __init__(self, parent, names, selected, satnums=None):
+        super().__init__(parent)
+        self.setWindowTitle('选择卫星')
+        self.resize(360, 480)
+        # 「清除所有选择」并二次确认后置 True，调用方据此重建全新的选择窗口
+        self.reset_requested = False
+        lay = QVBoxLayout(self)
+        lay.addWidget(QLabel('勾选要参与过境预测的卫星（可搜索筛选）：'))
+
+        top = QHBoxLayout()
+        self.search_edit = QLineEdit()
+        self.search_edit.setPlaceholderText('搜索卫星名…')
+        top.addWidget(self.search_edit)
+        top.addWidget(self._mk_btn('全选', self._select_all))
+        top.addWidget(self._mk_btn('全不选', self._select_none))
+        lay.addLayout(top)
+
+        # 「使用卫星编号搜索」（默认关闭）：勾选后搜索框除卫星名外，还按 NORAD 编号
+        # 匹配。TLE 名称行里通常不带编号（如 ASRTU-1 (RS64S/BJ2CR) 的编号是 61781），
+        # 因此拿编号搜之前必须先打开这个开关。
+        # 单独占一行：与搜索框挤在同一行时，开关文字会把搜索框压到只剩几十像素宽。
+        self.by_number_chk = QCheckBox('使用卫星编号搜索')
+#         self.by_number_chk.setToolTip(
+#             '勾选后，搜索框除卫星名外还会按卫星编号（NORAD ID）匹配。'
+#             '编号里包含搜索词的卫星同样会被列出。')
+        num_row = QHBoxLayout()
+        num_row.addWidget(self.by_number_chk)
+        num_row.addStretch(1)
+        lay.addLayout(num_row)
+
+        self.list_widget = QListWidget()
+        self.list_widget.setUniformItemSizes(True)
+        self.list_widget.setUpdatesEnabled(False)
+        self.checks = {}
+        self.items = {}
+        # 预先算好归一化名，搜索时无需反复处理（卫星数量可达数千）
+        self._norm = {n: sp.normalize_sat_name(n) for n in names}
+        # 归一化编号（NORAD）：同样预先算好。「使用卫星编号搜索」勾选后按此匹配；
+        # 调用方未提供编号表（satnums=None）时全部为空串，编号匹配自然不命中。
+        self._norm_num = {n: sp.norad_key(str((satnums or {}).get(n, '')))
+                          for n in names}
+        # 记录 (行号 → 卫星名)，过滤时按行号隐藏，避免每次反查
+        self._row_names = []
+        # 「卫星名 → 内部键」：有编号表时键用 NORAD 编号（跨星历改名/换源稳定，
+        # 保存到设置文件的就是它）；取不到编号的卫星退回用名称作键。不传 satnums
+        # （satnums=None）时键就是名称，与旧调用完全一致。
+        self._satnums = dict(satnums or {})
+        self._key_of = {}
+        for n in names:
+            raw = str(self._satnums.get(n) or '').strip()
+            self._key_of[n] = (sp.norad_key(raw) or n) if raw else n
+        init = selected if isinstance(selected, set) else None
+        for n in names:
+            item = QListWidgetItem(n, self.list_widget)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(
+                Qt.CheckState.Checked
+                if init is None or self._key_of[n] in init
+                else Qt.CheckState.Unchecked)
+            self.items[n] = item
+            self._row_names.append(n)
+        self.list_widget.setUpdatesEnabled(True)
+        lay.addWidget(self.list_widget)
+
+        # 搜索命中计数（"匹配 N / 共 M 颗"）；已选数量超限时转为醒目的红色提示
+        self.count_label = QLabel('')
+        # 次要提示文字：深色模式下写死的 gray 会看不清，改为随主题取色
+        self.count_label.setStyleSheet(theme.hint_css())
+        lay.addWidget(self.count_label)
+
+        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        btns.accepted.connect(self.accept)
+        btns.rejected.connect(self.reject)
+        lay.addWidget(btns)
+
+        self._keys = []          # 归一化后的搜索关键词（空列表 = 不过滤）
+        self._reordering = False  # 重排守卫，避免 itemChanged 递归触发
+        self._bulk = False        # 批量勾选/清空守卫（全选、全不选期间屏蔽逐项回调）
+        self._visible = []        # 当前搜索条件下可见的卫星名（与 _keys 同步缓存）
+        self._count_base = ''     # 计数标签的基数文本（重新构建时用，避免累加）
+        self._count_base_red = False  # 基数文本本身是否就该显示为红色（搜索无命中）
+        self.search_edit.textChanged.connect(self._filter)
+        self.by_number_chk.toggled.connect(self._on_number_toggled)
+        self.list_widget.itemChanged.connect(self._on_item_changed)
+        self._filter('')         # 初始化计数显示 + 未搜索时置顶已选
+
+    def _on_number_toggled(self, checked):
+        """「使用卫星编号搜索」开关切换：同步搜索框提示语并立即重跑一次过滤。
+
+        仅切换开关、不改搜索词时也要重新过滤，否则用户会以为设置没生效
+        （勾上开关却还停留在上次「按名称搜索」的结果上）。
+        """
+        self.search_edit.setPlaceholderText(
+            '搜索卫星名或编号…' if checked else '搜索卫星名…')
+        self._filter(self.search_edit.text())
+
+    def _mk_btn(self, text, slot):
+        b = QPushButton(text)
+        b.clicked.connect(slot)
+        return b
+
+    def _filter(self, text):
+        """按搜索框内容过滤列表。
+
+        匹配规则与「卫星名补全 / 转发器查表」（sp.lookup_transponder）一致：
+        归一化后比较，忽略大小写、空格、短横线、下划线与括号，
+        多个关键词（空格分隔）之间是「与」关系。
+        例如输入 "so50"、"so 50"、"SO-50" 都能命中 "SO-50" 与
+        "SAUDISAT 1C (SO-50)"。
+
+        再叠加「使用卫星编号搜索」（默认关闭）开关：勾选后，除上面的名称匹配外，
+        还按 NORAD 编号匹配（sp.sat_number_match），二者取「或」——因此
+        输入 "61781" 能命中名称里根本不含编号的 "ASRTU-1 (RS64S/BJ2CR)"，
+        而输入 "asrtu" 依然照常命中，勾选开关不会削减原有的名称搜索能力。
+        """
+        self._keys = sp.parse_sat_keywords(text)
+        lw = self.list_widget
+        lw.setUpdatesEnabled(False)
+        # 只显示匹配项，不匹配的一律隐藏（不占位、不可点选）。
+        # 注意：必须用 QListWidget.setRowHidden()（内部触发 doItemsLayout 重排），
+        # 单纯 QListWidgetItem.setHidden() 只改标志、不会让视图重新布局，
+        # 表现为"过滤没生效、匹配项仍停在原来的位置"。
+        # 匹配结果（可见名列表）就地缓存，供 _visible_names / 全选·全不选复用，
+        # 避免对数千颗卫星重复跑一遍 sat_name_match。
+        keys = self._keys
+        norm = self._norm
+        by_num = self.by_number_chk.isChecked()
+        norm_num = self._norm_num
+        first_hit_row = -1
+        visible = []
+        for row, n in enumerate(self._row_names):
+            matched = sp.sat_name_match(norm[n], keys)
+            if not matched and by_num:
+                matched = sp.sat_number_match(norm_num[n], keys)
+            lw.setRowHidden(row, not matched)
+            if matched:
+                visible.append(n)
+                if first_hit_row < 0:
+                    first_hit_row = row
+        self._visible = visible
+        # 把第一个匹配项滚到视口顶部，避免视口停在已隐藏区域
+        if first_hit_row >= 0:
+            lw.scrollToItem(self.items[self._row_names[first_hit_row]],
+                            QAbstractItemView.PositionAtTop)
+        else:
+            lw.scrollToTop()
+        lw.setUpdatesEnabled(True)
+        total = len(self.items)
+        n_hit = len(visible)
+        if not self._keys:
+            self._count_base = f'共 {total} 颗'
+            self._count_base_red = False
+            # 未搜索时：把已勾选卫星置顶（保持各自原有相对顺序），便于快速查看/调整
+            self._reorder_pin_selected()
+        else:
+            self._count_base = f'匹配 {n_hit} / 共 {total} 颗'
+            # 无命中时用醒目颜色提示，便于用户确认是"没搜到"而非"没过滤"
+            self._count_base_red = not n_hit
+        self._refresh_selected_count()
+
+    def _refresh_selected_count(self):
+        """由缓存的基数文本重建计数标签（**不要读控件当前文字**，否则会不断累加）。
+
+        末尾追加"已选 N 颗"；超过上限时整条转为红色警告。
+        """
+        n = len(self.get_selected())
+        limit = sp.MAX_SELECTED_SATELLITES
+        # 逐段翻译后再拼：整条拼完再翻会因模板相互抢匹配而漏翻某一截
+        # （基数文本 + "已选 N 颗" + 超限提示各自的模板长短不一）。
+        base = i18n.tr(getattr(self, '_count_base', ''))
+        text = i18n.tr('{}　已选 {} 颗').format(base, n)
+        if n > limit:
+            text += i18n.tr('，超过上限 {} 颗').format(limit)
+            # 警告文字：深色主题下写死的红色偏暗，改用随主题提亮的 warn 色
+            self.count_label.setStyleSheet(theme.warn_css())
+        elif getattr(self, '_count_base_red', False):
+            self.count_label.setStyleSheet(theme.warn_css())
+        else:
+            self.count_label.setStyleSheet(theme.hint_css())
+        self.count_label.setText(text)
+
+    def _visible_names(self):
+        """当前搜索条件下可见的卫星名（在 _filter 时就地缓存，避免重复匹配）。"""
+        return self._visible
+
+    def _reorder_pin_selected(self):
+        """未搜索时把已勾选卫星置顶（保持各自原有相对顺序）。
+
+        通过物理重排 QListWidget 的 item 实现；重排后同步 self._row_names，
+        使后续 _filter 的“按行隐藏”逻辑与控件实际行号保持一致。仅在全可见
+        （未搜索）时调用，因此重排后所有项均设为可见。
+        """
+        lw = self.list_widget
+        sel = [n for n in self._row_names
+               if self.items[n].checkState() == Qt.CheckState.Checked]
+        unsel = [n for n in self._row_names
+                 if self.items[n].checkState() != Qt.CheckState.Checked]
+        new_order = sel + unsel
+        if new_order == self._row_names:
+            return  # 顺序未变，避免无谓重排/闪烁
+        self._reordering = True
+        lw.setUpdatesEnabled(False)
+        # 从尾部取出全部 item（每次 O(1)，整体 O(N)）；item 对象仍被 self.items 引用，
+        # 不会被回收。再按新顺序从 0 追加式插回（插到末尾同为 O(1)），整体保持线性，
+        # 避免卫星数量达数千颗时 takeItem(0) 的 O(N²) 卡顿。
+        while lw.count():
+            lw.takeItem(lw.count() - 1)
+        for i, n in enumerate(new_order):
+            lw.insertItem(i, self.items[n])
+            lw.setRowHidden(i, False)  # 未搜索时全部可见
+        lw.setUpdatesEnabled(True)
+        self._reordering = False
+        self._row_names = new_order
+
+    def _on_item_changed(self, item):
+        # 仅在未搜索时，勾选状态变化后把已选卫星重新置顶（搜索结果不打乱顺序）
+        if self._reordering or self._bulk:
+            return
+        if not self._keys:
+            self._reorder_pin_selected()
+        self._refresh_selected_count()
+
+    def _set_all_visible(self, state):
+        """把当前可见卫星一次性设为指定勾选状态（全选 / 全不选共用）。
+
+        逐项 ``setCheckState`` 会各自触发一次 ``itemChanged``；在未搜索状态下，
+        每次都触发一次「已选置顶」重排，整体退化成 O(N²)——实测 500 颗点「全不选」
+        就要 60 秒、数千颗直接未响应。这里用 ``_bulk`` 守卫屏蔽逐项回调，循环结束后
+        只统一重排一次、刷新计数一次，整体回到 O(N)。
+        """
+        self._bulk = True
+        try:
+            for n in self._visible_names():
+                self.items[n].setCheckState(state)
+        finally:
+            self._bulk = False
+        if not self._keys:
+            self._reorder_pin_selected()   # 未搜索：统一把已选置顶一次
+        self._refresh_selected_count()
+
+    def _select_all(self):
+        self._set_all_visible(Qt.CheckState.Checked)
+
+    def _select_none(self):
+        self._set_all_visible(Qt.CheckState.Unchecked)
+
+    def get_selected(self):
+        """返回勾选卫星的内部键：有编号表时为 NORAD 编号，否则为卫星名。"""
+        return {self._key_of[n] for n, item in self.items.items()
+                if item.checkState() == Qt.CheckState.Checked}
+
+    def accept(self):
+        """确定前校验勾选数量：未超限直接通过；超限则弹统一提示框（`prompt_over_limit_selection`）。
+
+        选「清除所有选择」并二次确认后，**不全量重置当前对话框**（对数千项逐个
+        setCheckState + 逐次重排/刷新标签会明显卡顿），而是直接以 Rejected 关闭，
+        由调用方重建一个全新的选择窗口（构造期一次完成，等于把重排成本降到零）。
+        调用方据 `reset_requested` 判断这次关闭是「要重开」还是「用户取消」。
+        """
+        limit = sp.MAX_SELECTED_SATELLITES
+        n = len(self.get_selected())
+        if n <= limit:
+            super().accept()
+            return
+        if prompt_over_limit_selection(self, n, limit):
+            # 请求「清除后重开」：置标志并以 Rejected 关闭，交给调用方重建新窗口
+            self.reset_requested = True
+            super().reject()
+        # 「重新选择」与「取消」都只是留在对话框，让用户继续调整
+
+
+class DictEditorDialog(QDialog):
+    """通用「键值文本文件」编辑器，用于维护 sat_radio_dict.txt（卫星转发器）
+    与 tqsl_dict.txt（TQSL/LoTW 名称映射）。
+
+    列定义：
+      - columns[0] 为键（key，卫星名）；
+      - 其余列为值字段，按 value_delimiter 拼接/拆分（None 表示单列值）。
+    文件中的注释行（# 开头）与空行会被原样保留，仅在末尾重写数据行。
+
+    **键一律以卫星编号（NORAD ID）落盘**：编号跨星历改名/换源都稳定，不会因为
+    数据源换了名字就对不上。界面上仍然显示/输入**卫星名**——打开时按当前星历把
+    编号还原成名称，保存时再把名称解析回编号。解析不出编号的条目（卫星已退役、
+    名称对不上、自定义名称）按原文保存，绝不丢数据。
+
+    本对话框是这两个文件唯一的编辑入口（不再提供用记事本打开的方式）。
+    """
+
+    def __init__(self, parent, title, path, columns, value_delimiter=','):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.resize(640, 480)
+        self._path = path
+        self._columns = list(columns)
+        self._delim = value_delimiter
+        self._comments = []
+        self._rows = []  # 每行: (key, [value, ...])；key 为界面上的卫星名
+
+        lay = QVBoxLayout(self)
+        hint = QLabel(
+            '每行一条记录。点击单元格可直接编辑；用“添加”新增，“删除选中”移除整行；'
+            '完成后点“保存”写回文件。')
+        # 提示行必须自动换行：QLabel 默认不换行，文本越长 minimumSizeHint 越宽，
+        # 会直接把对话框顶宽（实测一段 104 字的说明能把最小宽度从 640 撑到 1270px，
+        # 一打开就比原先宽一倍）。开关编号语义写进 tooltip，不占用正文宽度。
+        hint.setWordWrap(True)
+#         hint.setToolTip(
+#             '第一列填卫星名（可从本地星历中搜索补全），保存时自动转成卫星编号'
+#             '（NORAD ID）写入文件；\n'
+#             '下次打开再按当前星历把编号显示回卫星名。\n'
+#             '编号跨星历改名/换源都稳定，不会因为数据源换了名字就对不上。')
+        lay.addWidget(hint)
+
+        self.table = QTableWidget(0, len(self._columns))
+        self.table.setHorizontalHeaderLabels(self._columns)
+        self.table.setEditTriggers(
+            QAbstractItemView.DoubleClicked | QAbstractItemView.EditKeyPressed |
+            QAbstractItemView.AnyKeyPressed)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+        self.table.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
+        tle_names = _load_local_tle_names()
+        if tle_names:
+            self.table.setItemDelegateForColumn(
+                0, SatelliteNameDelegate(tle_names, self.table))
+        lay.addWidget(self.table, 1)   # 拉伸因子 1：表格纵列填满窗口
+
+        btn_row = QHBoxLayout()
+        add_btn = QPushButton('添加')
+        del_btn = QPushButton('删除选中')
+        save_btn = QPushButton('保存')
+        close_btn = QPushButton('关闭')
+        add_btn.clicked.connect(self._add_row)
+        del_btn.clicked.connect(self._del_row)
+        save_btn.clicked.connect(self._save)
+        close_btn.clicked.connect(self.reject)
+        btn_row.addWidget(add_btn)
+        btn_row.addWidget(del_btn)
+        btn_row.addStretch(1)
+        btn_row.addWidget(save_btn)
+        btn_row.addWidget(close_btn)
+        lay.addLayout(btn_row)
+
+        self._load()
+
+    # ---- 读取 ----
+    def _load(self):
+        self._comments = []
+        self._rows = []
+        if os.path.exists(self._path):
+            try:
+                text = sp._read_text(self._path)
+            except Exception:
+                text = ''
+            for line in text.splitlines():
+                stripped = line.strip()
+                if stripped.startswith('#') or not stripped:
+                    self._comments.append(line.rstrip('\n'))  # 保留原注释/空行
+                    continue
+                if '=' not in line:
+                    continue
+                key, rest = line.split('=', 1)
+                key = key.strip()
+                if not key:
+                    continue
+                # 文件里存的是编号 → 按当前星历显示成卫星名（查不到则原样显示编号）
+                key = sp.sat_display_name(key)
+                rest = rest.strip()
+                if self._delim is not None:
+                    vals = [x.strip() for x in rest.split(self._delim)]
+                else:
+                    vals = [rest]
+                nvals = len(self._columns) - 1
+                if len(vals) < nvals:
+                    vals += [''] * (nvals - len(vals))
+                elif len(vals) > nvals:
+                    # 值字段含分隔符（如模式 “SSB,CW”）时合并多余部分
+                    vals = vals[:nvals - 1] + [self._delim.join(vals[nvals - 1:])]
+                self._rows.append((key, vals))
+        self._render()
+
+    def _render(self):
+        self.table.setRowCount(len(self._rows))
+        for i, (key, vals) in enumerate(self._rows):
+            self.table.setItem(i, 0, QTableWidgetItem(key))
+            for j, v in enumerate(vals):
+                self.table.setItem(i, j + 1, QTableWidgetItem(v))
+
+    # ---- 编辑 ----
+    def _add_row(self):
+        self._rows.append(('', [''] * (len(self._columns) - 1)))
+        self._render()
+        self.table.scrollToBottom()
+        # 选中新行首列并进入编辑，方便直接输入
+        last = self.table.rowCount() - 1
+        if last >= 0:
+            self.table.selectRow(last)
+            self.table.editItem(self.table.item(last, 0))
+
+    def _del_row(self):
+        rows = sorted({idx.row() for idx in self.table.selectedIndexes()}, reverse=True)
+        if not rows:
+            return
+        for r in rows:
+            if 0 <= r < len(self._rows):
+                del self._rows[r]
+        self._render()
+
+    def _collect(self):
+        """从表格（含未保存的修改）读回当前数据。"""
+        self._rows = []
+        for i in range(self.table.rowCount()):
+            key = (self.table.item(i, 0).text() if self.table.item(i, 0) else '').strip()
+            if not key:
+                continue
+            vals = []
+            for j in range(1, len(self._columns)):
+                it = self.table.item(i, j)
+                vals.append(it.text().strip() if it else '')
+            self._rows.append((key, vals))
+
+    # ---- 保存 ----
+    def _save(self):
+        self._collect()
+        if not self._rows:
+            QMessageBox.warning(self, '无可保存数据', '没有任何有效（键不为空）的记录。')
+            return
+        # 卫星名 → 卫星编号：落盘一律用编号，界面上的名称只是「当前星历的写法」。
+        # 解析不出编号的条目（卫星已退役 / 名称对不上 / 自定义名称）按原文保存，
+        # 绝不丢数据——只是在提示里报一下条数。
+        out_rows = []
+        unresolved = 0
+        for key, vals in self._rows:
+            num = sp.sat_number_of(key)
+            if num:
+                out_rows.append((num, vals))
+            else:
+                unresolved += 1
+                out_rows.append((key, vals))
+        try:
+            os.makedirs(os.path.dirname(self._path) or '.', exist_ok=True)
+            with open(self._path, 'w', encoding='utf-8') as f:
+                if self._comments:
+                    f.write('\n'.join(self._comments).rstrip('\n') + '\n')
+                else:
+                    if self._delim is not None:
+                        f.write('# 卫星转发器数据（格式：卫星编号=下行频率,上行频率,模式）\n'
+                                '# 下行频率=接收频率(freq_rx)，上行频率=发射频率(freq)\n'
+                                '# 键为卫星编号(NORAD ID)：跨星历改名/换源都不会失效；\n'
+                                '# 界面按当前星历显示卫星名，可由“卫星通联记录”窗口的'
+                                '“编辑转发器”维护\n')
+                    else:
+                        f.write('# TQSL / LoTW 卫星名称映射表（格式：卫星编号=TQSL认可名）\n'
+                                '# 键为卫星编号(NORAD ID)：跨星历改名/换源都不会失效；\n'
+                                '# 界面按当前星历显示卫星名，可由“卫星通联记录”窗口的'
+                                '“编辑TQSL映射”维护\n')
+                for key, vals in out_rows:
+                    if self._delim is not None:
+                        line = '%s=%s' % (key, self._delim.join(vals))
+                    else:
+                        line = '%s=%s' % (key, vals[0] if vals else '')
+                    f.write(line + '\n')
+            msg = '已保存 %d 条记录。' % len(out_rows)
+            if unresolved:
+                msg += ('\n其中 %d 条未能在当前星历中找到对应卫星，'
+                        '已按输入的名称原文保存（不会丢失）。' % unresolved)
+            QMessageBox.information(self, '已保存', msg)
+            self.accept()
+        except Exception as e:
+            QMessageBox.warning(self, '保存失败', '写入文件出错：%s' % e)
+
+
+class PredictWorker(QThread):
+    progress = Signal(int)
+    done = Signal(list)
+
+    def __init__(self, sats, observer, start_utc, duration_hours, min_elev, step_sec):
+        super().__init__()
+        self.sats = sats
+        self.observer = observer
+        self.start_utc = start_utc
+        self.duration_hours = duration_hours
+        self.min_elev = min_elev
+        self.step_sec = step_sec
+
+    def run(self):
+        rows = []
+        bands = sp.load_sat_radio_dict()  # 卫星转发器数据（来自 sat_radio_dict.txt，回退内置 SATE_BANDS）
+        total = len(self.sats)
+        for idx, (name, sat) in enumerate(self.sats):
+            if self.isInterruptionRequested():
+                return  # 窗口关闭等场景，及时退出，避免线程被强制销毁
+            try:
+                passes = sp.predict_passes(
+                    sat, self.observer, self.start_utc,
+                    duration_hours=self.duration_hours,
+                    min_elevation_deg=self.min_elev,
+                    step_sec=self.step_sec)
+            except Exception:
+                passes = []
+            for p in passes:
+                band = sp.lookup_transponder(bands, p['name'], p.get('satnum'))
+                rows.append(self._build_row(p, band))
+            self.progress.emit(int((idx + 1) / total * 100))
+        rows.sort(key=lambda r: r['aos_jd'])
+        self.done.emit(rows)
+
+    def _build_row(self, p, band):
+        name = p['name']
+        obs_tz = LOCAL_TZ
+        # 快速记录预填内容：卫星名用 TQSL/LoTW 认可的名称
+        # 预填时间只到分钟（ADIF / 日志表 time 字段的精度），
+        # 与界面上显示到秒的过境时刻区分开
+        preset = {
+            'sat_name': sp.tqsl_sat_name(name, number=p.get('satnum')),
+            'prop_mode': 'SAT',
+            'date': _log_date_str(p['aos'], obs_tz),
+            'time': _log_time_str(p['aos'], obs_tz),
+        }
+        if band:
+            # FM 转发器（或线性转发器）的模式与收发频率
+            # 记录时：freq=上行频率(本端发射)，freq_rx=下行频率(本端接收)
+            preset['mode'] = band.get('mode', 'FM')
+            preset['freq'] = band.get('uplink', '')
+            preset['freq_rx'] = band.get('downlink', '')
+        return {
+            'name': name,
+            'satnum': p.get('satnum'),
+            'aos_str': _utc_to_local_str(p['aos'], obs_tz),
+            'los_str': _utc_to_local_str(p['los'], obs_tz),
+            'max_elev': p['max_elevation'],
+            'aos_az': p['aos_azimuth'],
+            'los_az': p['los_azimuth'],
+            'duration': p['duration_sec'],
+            'aos_jd': p['aos_jd'],
+            'preset': preset,
+        }
+
+
+class TleFetchWorker(QThread):
+    """后台下载/解析业余卫星 TLE，避免阻塞主线程（加速界面打开）。"""
+    fetched = Signal(list)
+    progress = Signal(str)
+    progress_pct = Signal(int)
+    warning = Signal(str)
+    error = Signal(str)
+    canceled = Signal()  # 用户主动取消下载（非错误）
+
+    def __init__(self, force):
+        super().__init__()
+        self.force = force
+        self.cancel_requested = False  # 由主线程置 True 触发取消
+
+    def run(self):
+        try:
+            text = sp.fetch_amateur_tle(
+                cache_path=TLE_CACHE, force=self.force, timeout=25,
+                progress=self.progress.emit,
+                progress_pct=self.progress_pct.emit,
+                cancel=lambda: self.cancel_requested)
+            sats = sp.parse_tle_text(text)
+            self.fetched.emit(sats)
+        except sp.TleFetchCanceled:
+            # 用户取消：不发错误，仅通知界面已取消
+            self.canceled.emit()
+            return
+        except Exception as e:
+            if self.force:
+                self.error.emit(f'无法获取全部活动卫星星历：\n{e}')
+                return
+            # 下载失败，回退到本地缓存
+            try:
+                text = sp.fetch_amateur_tle(cache_path=TLE_CACHE, force=False)
+                sats = sp.parse_tle_text(text)
+                self.warning.emit(f'下载失败，使用本地缓存（{len(sats)} 颗）：{e}')
+                self.fetched.emit(sats)
+            except Exception as e2:
+                self.error.emit(f'无法下载 TLE 且没有本地缓存：\n{e2}')
+
+
+def main(parent_window, quick_log_callback=None, title='卫星过境'):
+    settings = _load_settings()
+    lat = float(settings.get('m_lat', 0.0) or 0.0)
+    lon = float(settings.get('m_lon', 0.0) or 0.0)
+    alt = float(settings.get('m_alt', 0.0) or 0.0)
+    observer_unset = (lat == 0.0 and lon == 0.0)
+
+    # 上次保存的预测设置（时长/仰角/范围/自选卫星）
+    # 时长统一钳制到 [1, 240] 小时：历史设置里若存有更大的值，这里自动收敛到 240
+    sat_dur = int(sp.clamp_predict_hours(settings.get('sat_dur', 24) or 24))
+    sat_el = int(settings.get('sat_el', 10) or 10)
+    sat_sats_raw = settings.get('sat_sats', None)  # None=从未保存；[]=曾显式清空；list=已选卫星编号（旧版为名称）
+
+    win = QMainWindow()
+    win.resize(940, 620)
+    win.setWindowTitle(title)
+    win._map_window = None  # 卫星地图窗口引用（由“地图”按钮打开）
+    central = QWidget()
+    win.setCentralWidget(central)
+    layout = QVBoxLayout(central)
+
+    # ---------- 工具栏（两行：上方“数据与设置”，下方“预测参数”） ----------
+    # 第一行：数据 / 设置类操作
+    top_grp = QGroupBox('数据与设置')
+    top_vlay = QVBoxLayout(top_grp)
+    tool_top = QHBoxLayout()
+    top_vlay.addLayout(tool_top)
+    refresh_btn = QPushButton('刷新星历')
+
+    def update_tle_tooltip():
+        """按最新配置生成「刷新星历」的提示。
+
+        「星历数据源」是独立窗口（保存到独立文件 file/tle_sources.txt），
+        改完立即生效；这里每次下载前重建提示，避免显示过期列表。
+        """
+        sources = sp.load_tle_sources()
+#         refresh_btn.setToolTip(
+#             '按下面列出的数据源依次下载卫星星历(TLE)，先列出的优先；'
+#             '同一颗卫星以列表中先出现的数据源为准。\n'
+#             '下载结果只按卫星编号更新，本地已有的卫星不会因为数据源里暂时没有而被删除。\n'
+#             '数据源可在「设置 → 星历数据源…」独立窗口中增删与排序：\n'
+#             + '\n'.join('%d. %s' % (i + 1, u) for i, u in enumerate(sources)))
+
+    update_tle_tooltip()
+    clear_tle_btn = QPushButton('清空星历')
+#     clear_tle_btn.setToolTip(
+#         '删除本地星历缓存并清空当前卫星列表；\n'
+#         '自选卫星的选择保留，之后用「刷新星历」重新下载。')
+    obs_btn = QPushButton('观测站设置')
+    edit_radio_btn = QPushButton('编辑转发器')
+#     edit_radio_btn.setToolTip(
+#         '编辑卫星转发器数据（下行/上行频率与模式）。\n'
+#         '第一列填卫星名即可（可从本地星历搜索补全），保存时自动转成\n'
+#         '卫星编号(NORAD ID)写入文件；下次打开按当前星历显示回卫星名。')
+    edit_tqsl_btn = QPushButton('编辑TQSL映射')
+#     edit_tqsl_btn.setToolTip(
+#         '编辑 TQSL/LoTW 卫星名称映射。\n'
+#         '第一列填卫星名即可（可从本地星历搜索补全），保存时自动转成\n'
+#         '卫星编号(NORAD ID)写入文件；下次打开按当前星历显示回卫星名。')
+    import_tle_btn = QPushButton('导入星历数据')
+#     import_tle_btn.setToolTip(
+#         '从 tle / txt / csv 文件导入卫星星历数据（TLE 或 Celestrak OMM CSV 格式，\n'
+#         'CSV 会自动重建为两行根数）。只按卫星编号增量更新：同编号替换为新数据、\n'
+#         '新编号追加，文件中没有的卫星保持原样；导入不会自动勾选卫星。')
+    # 双站通联预测：从本窗口直接打开，无需再回到主页或菜单
+    mutual_btn = QPushButton('通联预测')
+#     mutual_btn.setToolTip('打开双站通联预测：输入对方台站位置与各自最低仰角，预测两地可通过哪些卫星互相通联')
+    # 卫星地图：打开全球地图窗口，显示选中卫星的地面轨迹 / 当前位置 / 本台站
+    map_btn = QPushButton('卫星地图')
+#     map_btn.setToolTip(
+#         '打开全球卫星地图：显示所有已选卫星（与下方“范围/自选卫星”实时同步）'
+#         '自当前时刻起的地面轨迹与实时位置，以及本台站。\n'
+#         '在结果表中点选一行，该卫星会在地图上聚焦高亮。')
+    # 星历自动更新实时开关（等价于“设置”中的复选框）
+    auto_cb = QCheckBox('星历自动更新')
+    _auto_on = bool(settings.get('sat_auto_update', False))
+    _auto_hours = int(settings.get('sat_update_hours', 24) or 24)
+    auto_cb.setChecked(_auto_on)
+#     auto_cb.setToolTip('开启后按“设置”中的间隔（当前每 %d 小时）自动刷新卫星星历(TLE)。也可在“设置”中修改。' % _auto_hours)
+    tool_top.addWidget(refresh_btn)
+    tool_top.addWidget(clear_tle_btn)
+    tool_top.addWidget(obs_btn)
+    tool_top.addSpacing(12)
+    tool_top.addWidget(edit_radio_btn)
+    tool_top.addWidget(edit_tqsl_btn)
+    tool_top.addWidget(import_tle_btn)
+    tool_top.addSpacing(10)
+    tool_top.addWidget(mutual_btn)
+    tool_top.addWidget(map_btn)
+    tool_top.addStretch(1)
+    tool_top.addWidget(auto_cb)
+    # 星历最近更新时间：取本地缓存文件 file/amateur.tle 的修改时间（手动刷新或后台
+    # 自动更新写入后均会刷新）。放在「数据与设置」框内，窗口打开即显示，获取完成后再次刷新。
+    tle_time_label = QLabel('星历更新时间：—')
+    # 次要提示文字：深色模式下写死的 gray 会看不清，改为随主题取色
+    tle_time_label.setStyleSheet(theme.hint_css())
+    top_vlay.addWidget(tle_time_label)
+    layout.addWidget(top_grp)
+
+    # 分隔线
+    sep = QFrame()
+    sep.setFrameShape(QFrame.HLine)
+    sep.setFrameShadow(QFrame.Sunken)
+    layout.addWidget(sep)
+
+    # 第二行：预测参数
+    bot_grp = QGroupBox('预测参数')
+    tool_bottom = QHBoxLayout(bot_grp)
+    start_label = QLabel('开始时间:')
+    start_edit = QLineEdit()
+    start_edit.setText(datetime.datetime.now(LOCAL_TZ).strftime('%Y-%m-%d %H:%M'))
+    start_edit.setPlaceholderText('YYYY-MM-DD HH:MM（如 2026-07-27 17:45）')
+    start_edit.setMinimumWidth(150)
+#     start_edit.setToolTip('预测起始时刻（系统本地时间），默认当前时间，支持 YYYY-MM-DD HH:MM 或带秒。')
+    dur_label = QLabel('预测时长(小时):')
+    dur_spin = QSpinBox()
+    dur_spin.setRange(sp.MIN_PREDICT_HOURS, sp.MAX_PREDICT_HOURS)  # 最长 240 小时（10 天）
+    dur_spin.setToolTip('预测时长：最长 %d 小时（10 天）' % sp.MAX_PREDICT_HOURS)
+    dur_spin.setValue(sat_dur)  # 自动读取上次的值（已钳制到 240 以内）
+    el_label = QLabel('最低仰角(°):')
+    el_spin = QSpinBox()
+    el_spin.setRange(0, 90)
+    el_spin.setValue(sat_el)
+#     el_spin.setToolTip('本站（观测站）的最低可用仰角：低于该仰角认为天线被遮挡 / 信号不可用，不计入可见过境。')
+    sel_btn = QPushButton('选择卫星…')
+    sel_btn.setToolTip('选择卫星：最多 %d 颗' % sp.MAX_SELECTED_SATELLITES)
+    tool_bottom.addWidget(start_label)
+    tool_bottom.addWidget(start_edit)
+    tool_bottom.addSpacing(12)
+    tool_bottom.addWidget(dur_label)
+    tool_bottom.addWidget(dur_spin)
+    tool_bottom.addWidget(el_label)
+    tool_bottom.addWidget(el_spin)
+    tool_bottom.addSpacing(12)
+    tool_bottom.addWidget(sel_btn)
+    tool_bottom.addStretch(1)
+    layout.addWidget(bot_grp)
+
+    status = QLabel('准备中…')
+    # 次要提示文字：深色模式下写死的 gray 会看不清，改为随主题取色
+    status.setStyleSheet(theme.hint_css())
+    layout.addWidget(status)
+
+    def _status_set(text):
+        """设置状态文字：动态文案按当前语言翻译后再显示。"""
+        status.setText(i18n.tr(text))
+
+    # 卫星星历下载进度条 + 取消按钮：仅在「刷新星历」下载期间显示，平时隐藏
+    prog_layout = QHBoxLayout()
+    progress_bar = QProgressBar()
+    progress_bar.setRange(0, 100)
+    progress_bar.setTextVisible(True)
+    progress_bar.setFormat(i18n.tr('下载星历 %p%'))
+    progress_bar.setVisible(False)
+    prog_layout.addWidget(progress_bar, 1)
+    cancel_dl_btn = QPushButton('取消下载')
+    cancel_dl_btn.setVisible(False)
+#     cancel_dl_btn.setToolTip('取消当前正在进行的星历下载')
+
+    def cancel_download():
+        # 置取消标志；后台线程在分块读时检测到后会抛出 TleFetchCanceled
+        cur = getattr(win, '_tle_worker', None)
+        if cur is not None and cur.isRunning():
+            cur.cancel_requested = True
+        cancel_dl_btn.setEnabled(False)
+        cancel_dl_btn.setText('取消中…')
+
+    cancel_dl_btn.clicked.connect(cancel_download)
+    prog_layout.addWidget(cancel_dl_btn)
+    layout.addLayout(prog_layout)
+
+    # ---------- 表格 ----------
+    table = QTableWidget(0, 8)
+    table.setHorizontalHeaderLabels(
+        ['卫星', '升起(本地)', '落下(本地)', '最大仰角', '方位(升起→落下)', '时长', '记录', ''])
+    table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+    table.setSelectionBehavior(QAbstractItemView.SelectRows)
+    table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+    table.setColumnWidth(0, 170)
+    table.setColumnWidth(1, 140)  # 升起：MM-DD HH:MM:SS
+    table.setColumnWidth(2, 140)  # 落下：同上
+    table.setColumnWidth(3, 80)
+    table.setColumnWidth(4, 150)
+    table.setColumnWidth(5, 90)
+    table.setColumnWidth(6, 70)
+    table.setColumnWidth(7, 0)
+    layout.addWidget(table)
+
+    sats = []
+    last_rows = []  # 保存最近一次预测结果，供单行"记录"按钮读取预填数据
+    # 自选卫星一律以**卫星编号（NORAD ID）**保存：编号跨星历改名/换源都稳定，
+    # 不会因为数据源换了名字就丢失选择。旧版设置里存的是卫星名，这里即时升级。
+    # 默认「全不选」：没有任何已保存的选择时，初始为空集合；
+    # 这样选择对话框里所有卫星都保持未勾选状态（符合需求：选择卫星默认全不选）。
+    selected_numbers = set(sp.normalize_sat_keys(sat_sats_raw)
+                           if isinstance(sat_sats_raw, list) else [])
+    # 超量选择兜底：设置文件 m_xml.txt 里可能留有历史的大规模选择（旧版本无上限），
+    # 先裁到上限，避免一打开窗口就因数千颗卫星的预测而长时间卡住。
+    # 但**不静默裁剪**：记下超限状态，等窗口显示、用户处理完首次引导之后再弹提示，
+    # 给出与「选择卫星」对话框完全一致的三条出路（重新选择 / 清除所有选择 / 取消）。
+    selected_numbers, _trimmed_selected = sp.clamp_selected_count(selected_numbers)
+    _oversized_from_settings = len(selected_numbers) + _trimmed_selected
+    # 窗口打开后首次获取 TLE 时：若尚未选择任何卫星（包括曾显式清空的情况），
+    # 自动弹出选择框引导用户；用户关闭对话框后本窗口会话内不再自动弹窗，
+    # 避免每次刷新都打扰。
+    auto_prompt_pending = True
+
+    def set_observer(lat_, lon_, alt_):
+        nonlocal lat, lon, alt
+        lat, lon, alt = lat_, lon_, alt_
+
+    def _persist():
+        """把当前的预测设置写入 file/m_xml.txt，便于下次启动恢复。"""
+        s = _load_settings()
+        s['sat_dur'] = int(sp.clamp_predict_hours(dur_spin.value()))
+        s['sat_el'] = el_spin.value()
+        s['sat_filter'] = '自选卫星'
+        s['sat_sats'] = sorted(selected_numbers)
+        _save_settings(s)
+
+    def _parse_start():
+        """解析“开始时间”文本框；返回 (datetime_local, error_msg)。"""
+        txt = start_edit.text().strip()
+        for fmt in ('%Y-%m-%d %H:%M', '%Y-%m-%d %H:%M:%S',
+                    '%Y-%m-%d %H:%M:%S.%f'):
+            try:
+                return datetime.datetime.strptime(txt, fmt), None
+            except ValueError:
+                continue
+        return None, ('格式应为 YYYY-MM-DD HH:MM（例如 2026-07-27 17:45），'
+                     '可带秒；当前输入：' + (txt or '（空）'))
+
+    def _sat_number(sat):
+        """取一颗卫星的 NORAD 编号（取不到时返回空串）。
+
+        编号是自选卫星列表的唯一标识；极少数取不到编号的手工数据退回用名称匹配。
+        """
+        try:
+            return sp.norad_key(str(getattr(sat, 'satnum', '') or ''))
+        except Exception:
+            return ''
+
+    def active_sats_list():
+        """返回当前自选卫星列表，预测与地图共用同一份。"""
+        # selected_numbers 恒为 set（默认空集合 = 全不选），空集合时返回空列表，
+        # 预测会提示“尚未选择卫星”。卫星按编号匹配；无编号的退回按名称匹配。
+        return [(n, s) for (n, s) in sats
+                if (_sat_number(s) or n) in selected_numbers]
+
+    def _push_sats_to_map():
+        """把当前「已选卫星」与最低仰角同步给已打开的地图窗口。"""
+        mw = getattr(win, '_map_window', None)
+        if mw is None:
+            return
+        mw.set_sats(active_sats_list())
+        mw.set_min_elev(el_spin.value())
+
+    def _show_tle_time():
+        """在窗口中显示星历（TLE）最近更新时间——取自设置 file/m_xml.txt 的 sat_last_update（epoch 秒）。"""
+        s = _load_settings()
+        epoch = s.get('sat_last_update')
+        if epoch:
+            try:
+                dt = datetime.datetime.fromtimestamp(float(epoch), LOCAL_TZ)
+                tle_time_label.setText(
+                    '星历更新时间：' + dt.strftime('%Y-%m-%d %H:%M:%S'))
+                return
+            except (ValueError, OSError, TypeError):
+                pass
+        tle_time_label.setText('星历更新时间：尚未获取')
+
+    _show_tle_time()  # 窗口打开即显示（若本地已有缓存，则为其修改时间）
+
+    # 后台自动更新会定期刷新本地星历缓存；用定时器让窗口中的更新时间保持最新
+    _tle_time_timer = QTimer(win)
+    _tle_time_timer.setInterval(60000)  # 每 60 秒刷新一次
+    _tle_time_timer.timeout.connect(_show_tle_time)
+    _tle_time_timer.start()
+
+    def run_prediction():
+        nonlocal sats, selected_numbers
+        if not sats:
+            _status_set('没有可用的卫星数据，请先“刷新星历”。')
+            return
+        active_sats = active_sats_list()
+        if not selected_numbers:
+            _status_set('尚未选择卫星，请点击“选择卫星…”勾选要跟踪的卫星。')
+            table.setRowCount(0)
+            _push_sats_to_map()
+            return
+        observer = (lat, lon, alt)
+        _status_set('正在计算过境（%d 颗卫星）…' % len(active_sats))
+        refresh_btn.setEnabled(False)
+        # 若上一次预测仍在跑，先中断它，避免重复线程与“destroyed while running”
+        old = getattr(win, '_worker', None)
+        if old is not None and old.isRunning():
+            old.requestInterruption()
+            old.wait(3000)
+        # 开始时间取自文本框（系统本地时间），先校验格式，再按系统本地时区转 UTC 供 SGP4 使用
+        start_local, err = _parse_start()
+        if err:
+            _status_set('开始时间无效：' + err)
+            table.setRowCount(0)
+            refresh_btn.setEnabled(True)
+            return
+        start = start_local.replace(tzinfo=LOCAL_TZ).astimezone(datetime.timezone.utc)
+        # 时长兜底钳制：任何来源（手输/历史设置）超过 240 小时都按 240 小时算
+        hours = sp.clamp_predict_hours(dur_spin.value())
+        if dur_spin.value() != int(hours):
+            dur_spin.blockSignals(True)
+            dur_spin.setValue(int(hours))
+            dur_spin.blockSignals(False)
+        if hours > 72:
+            _status_set('正在计算过境（%d 颗卫星，跨度 %d 小时，可能较慢）…'
+                           % (len(active_sats), int(hours)))
+        worker = PredictWorker(
+            active_sats, observer, start,
+            duration_hours=hours,
+            min_elev=el_spin.value(),
+            step_sec=60)
+        win._worker = worker  # 防止被回收
+
+        def on_progress(v):
+            _status_set('正在计算过境… %d%%' % v)
+
+        def on_done(rows):
+            if getattr(win, '_worker', None) is worker:
+                win._worker = None  # 线程即将被 deleteLater，避免关闭时访问已删除对象
+            populate(rows)
+            refresh_btn.setEnabled(True)
+            # 逐段翻译后再拼（整条一起翻会因多段中文抢同一模板而漏翻部分）。
+            obs_info = i18n.tr(
+                f'观测站: 纬{lat:.3f}° 经{lon:.3f}° 海拔{alt:.0f}m')
+            sel_info = i18n.tr(f' ｜ 已选 {len(selected_numbers)} 颗')
+            status.setText(
+                i18n.tr('{} ｜ 卫星 {} 颗 ｜ 可见过境 {} 次').format(
+                    obs_info + sel_info, len(active_sats), len(rows)))
+
+        worker.finished.connect(worker.deleteLater)
+        worker.progress.connect(on_progress)
+        worker.done.connect(on_done)
+        worker.start()
+
+    # 预测结果可能多达数千行；一次性填充会在主线程上长时间阻塞，期间本窗口与
+    # 同时打开的其他窗口都无法重绘（表现为白屏）。改为分批填充、每批之间让出
+    # 事件循环，把单次阻塞切碎到几乎无感。
+    _FILL_BATCH = 300
+    _fill_gen = [0]   # 填充代次：被新的 populate 取代后，旧的批次回调自动作废
+
+    def populate(rows):
+        last_rows[:] = rows
+        _fill_gen[0] += 1
+        gen = _fill_gen[0]
+        # 填表期间关闭重绘与信号，整表填完再一次性打开（避免边填边重绘造成闪烁）。
+        table.setUpdatesEnabled(False)
+        table.blockSignals(True)
+        table.setRowCount(len(rows))
+        _fill_rows(rows, 0, gen)
+
+    def _fill_rows(rows, start, gen):
+        if gen != _fill_gen[0]:
+            return  # 已被新的预测结果取代，放弃本次填充
+        try:
+            end = min(start + _FILL_BATCH, len(rows))
+            sel_col = 7
+            for i in range(start, end):
+                r = rows[i]
+                table.setItem(i, 0, QTableWidgetItem(r['name']))
+                table.setItem(i, 1, QTableWidgetItem(r['aos_str']))
+                table.setItem(i, 2, QTableWidgetItem(r['los_str']))
+                table.setItem(i, 3, QTableWidgetItem(f"{r['max_elev']:.1f}°"))
+                table.setItem(i, 4, QTableWidgetItem(
+                    f"{r['aos_az']:.0f}°→{r['los_az']:.0f}°"))
+                table.setItem(i, 5, QTableWidgetItem(_duration_str(r['duration'])))
+                rec_btn = QPushButton('记录')
+#                 rec_btn.setToolTip('打开批量记录窗口并预填该卫星的卫星名/传播模式/收发频率等信息')
+                rec_btn.clicked.connect(
+                    lambda _checked=False, i=i: log_row(i))
+                table.setCellWidget(i, 6, rec_btn)
+                # 第7列隐藏，仅占位（保持与其它记录窗口列风格一致）
+                table.setItem(i, sel_col, QTableWidgetItem(''))
+
+            if end < len(rows):
+                QTimer.singleShot(
+                    0, lambda end=end, gen=gen: _fill_rows(rows, end, gen))
+            else:
+                table.blockSignals(False)
+                table.setUpdatesEnabled(True)
+                table.scrollToTop()
+        except RuntimeError:
+            return  # 窗口已关闭、控件已销毁
+
+    def refresh_tle(force=False):
+        nonlocal sats
+        update_tle_tooltip()   # 反映「星历数据源」窗口里的最新改动
+        _status_set('正在获取全部活动卫星星历…')
+        # 显示下载进度条（默认确定进度；若服务器未返回大小则转忙碌动画）
+        progress_bar.setVisible(True)
+        progress_bar.setRange(0, 100)
+        progress_bar.setValue(0)
+        progress_bar.setFormat(i18n.tr('下载星历 %p%'))
+        cancel_dl_btn.setVisible(True)  # 下载期间显示「取消下载」
+        refresh_btn.setEnabled(False)
+        # 若上一次获取仍在跑，先中断
+        old = getattr(win, '_tle_worker', None)
+        if old is not None and old.isRunning():
+            old.requestInterruption()
+            old.wait(3000)
+        worker = TleFetchWorker(force)
+        win._tle_worker = worker
+
+        def on_fetched(s):
+            nonlocal sats, selected_numbers, auto_prompt_pending
+            if getattr(win, '_tle_worker', None) is worker:
+                win._tle_worker = None
+            progress_bar.setVisible(False)
+            cancel_dl_btn.setVisible(False)
+            cancel_dl_btn.setEnabled(True)
+            cancel_dl_btn.setText('取消下载')
+            sats = s
+            # 按 NORAD 编号增量并入：本次数据源里没有的旧卫星继续保留（不删除）。
+            # fetch_amateur_tle 已与磁盘缓存做过同口径合并，这里再兜一次，
+            # 覆盖「导入星历」后缓存未落盘等边界情况。
+            sats, _n_upd, _n_add = sp.merge_update_satellites(s, sats)
+            _kept = len(sats) - len(s)
+            _extra = f'（另保留 {_kept} 颗本次未取得的旧卫星）' if _kept > 0 else ''
+            _status_set(
+                f'已更新星历：本次取得 {len(s)} 颗，共 {len(sats)} 颗卫星{_extra}。')
+            # 手动「刷新星历」成功同样算一次星历更新：写入时间戳。
+            # sat_last_update 原本只有后台自动更新会写；「清空星历」删除该键后，
+            # 若手动刷新不回写，「星历更新时间」会一直显示「尚未获取」。
+            _st = _load_settings()
+            _st['sat_last_update'] = datetime.datetime.now().timestamp()
+            _save_settings(_st)
+            _show_tle_time()
+            refresh_btn.setEnabled(True)
+            # 窗口打开后首次获取 TLE：若尚未选择任何卫星，自动弹出选择框引导；
+            # 用户关闭对话框后（auto_prompt_pending 置 False）本会话不再自动弹窗。
+            if auto_prompt_pending:
+                auto_prompt_pending = False
+                if not selected_numbers:
+                    open_select()
+            if selected_numbers:
+                run_prediction()
+            # 若地图窗口已打开，同步最新的「已选卫星」列表（名称/轨道根数）
+            _push_sats_to_map()
+
+        def on_warning(w):
+            progress_bar.setVisible(False)
+            cancel_dl_btn.setVisible(False)
+            cancel_dl_btn.setEnabled(True)
+            cancel_dl_btn.setText('取消下载')
+            _status_set(w)
+            _show_tle_time()
+
+        def on_error(e):
+            if getattr(win, '_tle_worker', None) is worker:
+                win._tle_worker = None
+            progress_bar.setVisible(False)
+            cancel_dl_btn.setVisible(False)
+            cancel_dl_btn.setEnabled(True)
+            cancel_dl_btn.setText('取消下载')
+            refresh_btn.setEnabled(True)
+            table.setRowCount(0)
+            QMessageBox.warning(win, '星历获取失败', e)
+
+        def on_canceled():
+            # 用户主动取消：清理状态，不弹错误框
+            if getattr(win, '_tle_worker', None) is worker:
+                win._tle_worker = None
+            progress_bar.setVisible(False)
+            cancel_dl_btn.setVisible(False)
+            cancel_dl_btn.setEnabled(True)
+            cancel_dl_btn.setText('取消下载')
+            refresh_btn.setEnabled(True)
+            _status_set('已取消星历下载。')
+
+        def on_progress_pct(pct):
+            # pct < 0：服务器未返回 Content-Length，进度条显示忙碌动画
+            if pct < 0:
+                progress_bar.setRange(0, 0)
+                progress_bar.setFormat('下载星历…')
+            else:
+                progress_bar.setRange(0, 100)
+                progress_bar.setValue(pct)
+
+        worker.fetched.connect(on_fetched)
+        worker.progress.connect(_status_set)
+        worker.progress_pct.connect(on_progress_pct)
+        worker.warning.connect(on_warning)
+        worker.error.connect(on_error)
+        worker.canceled.connect(on_canceled)
+        worker.finished.connect(worker.deleteLater)
+        worker.start()
+
+    def clear_tle():
+        """「清空星历」：删除本地星历缓存并清空当前卫星列表。
+
+        确认后先停掉仍在跑的下载线程（避免清空后被旧结果覆盖），再删除
+        缓存文件 file/amateur.tle、清空内存卫星列表与结果表，并复位
+        「星历更新时间」标签（旧时间戳随缓存一起失效）。自选卫星的选择
+        不动，之后用「刷新星历」重新下载即可。
+        """
+        if QMessageBox.question(
+                win, '清空星历',
+                '确定清空本地星历吗？\n\n'
+                '将删除本地星历缓存并清空当前卫星列表；\n'
+                '自选卫星的选择保留，之后可用「刷新星历」重新下载。'
+        ) != QMessageBox.Yes:
+            return
+        # 若星历获取线程仍在跑，先中断，避免清空后被旧结果覆盖
+        old = getattr(win, '_tle_worker', None)
+        if old is not None and old.isRunning():
+            old.requestInterruption()
+            old.wait(3000)
+        try:
+            if os.path.exists(TLE_CACHE):
+                os.remove(TLE_CACHE)
+        except Exception as e:
+            QMessageBox.warning(win, '清空失败', '无法删除星历缓存文件：%s' % e)
+            return
+        nonlocal sats
+        sats = []
+        last_rows.clear()
+        table.setRowCount(0)
+        # 复位「星历更新时间」：缓存已删除，旧时间戳不再有意义
+        s = _load_settings()
+        if s.pop('sat_last_update', None) is not None:
+            _save_settings(s)
+        _show_tle_time()
+        _status_set('星历已清空，自选卫星的选择已保留；点击「刷新星历」重新下载。')
+        _push_sats_to_map()
+
+    def edit_observer():
+        dlg = ObserverDialog(win, lat, lon, alt)
+        if dlg.exec() == QDialog.Accepted:
+            vals = dlg.get_values()
+            if vals is None:
+                QMessageBox.warning(win, '输入错误', '请输入有效的数字。')
+                return
+            lat_, lon_, alt_ = vals
+            set_observer(lat_, lon_, alt_)
+            s = _load_settings()
+            s['m_lat'] = lat_
+            s['m_lon'] = lon_
+            s['m_alt'] = alt_
+            _save_settings(s)
+            run_prediction()
+            # 本台站位置变化，同步到已打开的地图窗口
+            mw = getattr(win, '_map_window', None)
+            if mw is not None:
+                mw.set_stations(home=(lat_, lon_, alt_))
+
+    def _push_selection_to_mutual():
+        """把本窗口当前的 范围/自选卫星 反向同步到所有已打开的「通联预测」窗口。"""
+        try:
+            from f_hamlog import mutual_window
+        except Exception:
+            return
+        for w in list(getattr(mutual_window, '_open_windows', [])):
+            fn = getattr(w, 'apply_remote_selection', None)
+            if callable(fn):
+                fn('自选卫星', selected_numbers)
+
+    def open_select():
+        nonlocal selected_numbers
+        if not sats:
+            QMessageBox.information(win, '暂无卫星', '请先刷新星历。')
+            return
+        names = [n for (n, s) in sats]
+        # 卫星名 → NORAD 编号，供选择窗口的「使用卫星编号搜索」使用
+        satnums = sp.satellite_number_map(sats)
+        # 「清除所有选择」后直接重建一个全新的选择窗口（而非在原窗口逐项重置，
+        # 数千颗时后者会因反复重排/刷新而明显卡顿）。循环直到用户确定或取消为止。
+        while True:
+            dlg = SatelliteSelectDialog(win, names, selected_numbers, satnums)
+            if dlg.exec() == QDialog.Accepted:
+                # 对话框已在 accept() 里拦住超量选择，这里再裁一次作兜底
+                selected_numbers, _ = sp.clamp_selected_count(dlg.get_selected())
+                break
+            if not dlg.reset_requested:
+                return   # 用户取消：什么都不做
+            selected_numbers = set()   # 已确认清除 → 以空选择重开新窗口
+        _persist()
+        run_prediction()
+        _push_selection_to_mutual()
+        _push_sats_to_map()   # 自选卫星变化 → 地图同步显示新的一批卫星
+
+    def import_tle():
+        nonlocal sats
+        """从用户选择的 tle / txt / csv 文件导入卫星星历数据。
+
+        支持 TLE 文本与 Celestrak OMM 风格 CSV（解析统一走 sp.parse_tle_text，
+        CSV 自动重建为两行根数）。导入只做「按卫星编号增量更新」：同一编号用
+        文件里的新数据替换、新编号追加，文件中没有的编号保持原样（不删除）；
+        **不自动勾选自选卫星**。导入结果写回星历缓存，重启后仍然可用。
+        """
+        path, _ = QFileDialog.getOpenFileName(
+            win, i18n.tr('导入卫星星历数据'), desktop_dir(),
+            i18n.tr('星历文件 (*.tle *.txt *.csv);;TLE 文件 (*.tle);;'
+                    'CSV 文件 (*.csv);;文本文件 (*.txt)'))
+        if not path:
+            return
+        try:
+            text = sp._read_text(path)
+        except Exception as e:
+            QMessageBox.warning(win, '读取失败', '无法读取文件：%s' % e)
+            return
+        imported = sp.parse_tle_text(text)
+        if not imported:
+            QMessageBox.warning(win, '导入失败', '未从文件中解析到有效的 TLE 数据。')
+            return
+        merged, n_updated, n_added = sp.merge_update_satellites(sats, imported)
+        sats = merged
+        # 写回星历缓存：导入的数据在重启后依然存在（依然只按编号更新，不动其它卫星）
+        sp.write_tle_cache(sats, TLE_CACHE)
+        msg = ('已导入 %d 颗卫星：更新 %d 颗、新增 %d 颗，当前共 %d 颗。'
+               % (len(imported), n_updated, n_added, len(sats)))
+        # 需求：导入不自动选择。保持用户原有勾选不变，新导入的卫星需自行勾选。
+        #msg += '\n\n导入不会自动勾选卫星，如需跟踪请在「选择卫星」中勾选。'
+        #if sats and not selected_numbers:
+            #msg += '\n当前尚未勾选任何卫星。'
+        QMessageBox.information(win, '导入完成', msg)
+        run_prediction()
+        _push_sats_to_map()
+
+    def edit_radio_dict():
+        dlg = DictEditorDialog(
+            win, '编辑卫星转发器', sp.SAT_RADIO_DICT_PATH,
+            ['卫星名', '下行频率', '上行频率', '模式'], value_delimiter=',')
+        if dlg.exec() == QDialog.Accepted and sats:
+            run_prediction()
+
+    def edit_tqsl_dict():
+        dlg = DictEditorDialog(
+            win, '编辑 TQSL/LoTW 映射', sp.TQSL_DICT_PATH,
+            ['卫星显示名', 'LoTW 认可名'], value_delimiter=None)
+        if dlg.exec() == QDialog.Accepted and sats:
+            run_prediction()
+
+    def open_mutual():
+        """从卫星过境预测窗口内打开双站通联预测（入口统一收归此处）。"""
+        from f_hamlog import mutual_window
+
+        def on_sel_change(filter_mode, sel):
+            """通联预测里改了自选卫星 / 范围，实时同步回本窗口。"""
+            nonlocal selected_numbers
+            selected_numbers = sel
+            _persist()
+            if sats:
+                run_prediction()
+            _push_sats_to_map()   # 通联预测改了自选卫星 → 地图同步
+
+        mutual_window.main(
+            win, quick_log_callback=quick_log_callback,
+            on_selection_change=on_sel_change)
+
+    def open_map():
+        """打开卫星地图窗口：显示「所有已选卫星」的地面轨迹 / 实时位置 / 本台站。
+
+        - 卫星范围与本窗口的「范围 / 自选卫星」实时同步；
+        - 在表格里点选某颗卫星，该星在地图上聚焦高亮；
+        - 地图的「轨迹时长」会记住上次的设置，并与通联预测打开的地图共用。"""
+        from f_hamlog import satellite_map_window
+
+        name = None
+        rows = table.selectedIndexes()
+        if rows:
+            name = table.item(rows[0].row(), 0).text()
+        if not name and last_rows:
+            name = last_rows[0]['name']
+        # 已经开过就直接激活，避免堆出多个地图窗口
+        mw = getattr(win, '_map_window', None)
+        if mw is not None and mw.isVisible():
+            _push_sats_to_map()
+            if name:
+                mw.set_satellite(name)
+            mw.raise_()
+            mw.activateWindow()
+            return
+        def on_el_change(a, b):
+            """地图内调整最低仰角后，回写到本窗口并重新预测 / 落盘。"""
+            el_spin.blockSignals(True)
+            el_spin.setValue(int(round(a)))
+            el_spin.blockSignals(False)
+            _persist()
+            if sats:
+                run_prediction()
+
+        mw = satellite_map_window.open_map(
+            win, active_sats_list(), home=(lat, lon, alt),
+            selected_name=name, source=win, min_elev=el_spin.value(),
+            on_min_elev_change=on_el_change)
+        win._map_window = mw
+
+    def _sync_map_if_open():
+        """地图已打开时，把选中的卫星名实时同步到地图（聚焦该卫星）。
+
+        注意：此函数**不会**主动打开地图——打开动作只由「单击非记录列」
+        （_focus_or_open_map）触发，避免点击「记录」按钮时因行选择变化而误开地图。
+        """
+        rows = table.selectedIndexes()
+        if not rows:
+            return
+        mw = getattr(win, '_map_window', None)
+        if mw is not None and mw.isVisible():
+            mw.set_satellite(table.item(rows[0].row(), 0).text())
+
+    def _focus_or_open_map():
+        """单击「非记录列」单元格时调用：地图未打开则打开并聚焦该卫星，已打开则仅聚焦。
+
+        覆盖「点击已选中的同一行」这种 itemSelectionChanged 不触发的情况——
+        因为单击一定会触发 cellClicked。"""
+        rows = table.selectedIndexes()
+        if not rows:
+            return
+        mw = getattr(win, '_map_window', None)
+        if mw is None or not mw.isVisible():
+            open_map()          # open_map 会读取当前选中行作为初始聚焦卫星
+            return
+        mw.set_satellite(table.item(rows[0].row(), 0).text())
+
+    def on_auto_toggled(checked):
+        """实时开关星历自动更新（与“设置”中的复选框等价）。"""
+        s = _load_settings()
+        s['sat_auto_update'] = bool(checked)
+        _save_settings(s)
+
+    def log_row(row_index):
+        """对指定行的卫星，直接把预填记录追加到当前项目（通过 quick_log_callback）。"""
+        if row_index < 0 or row_index >= len(last_rows):
+            QMessageBox.information(
+                win, '记录',
+                '请先在表格里点击选中一颗卫星所在的行。')
+            return
+        r = last_rows[row_index]
+        preset = r.get('preset')
+        # 提示：该卫星显示名未配置 TQSL/LoTW 映射，记录后名称可能不被 LoTW/TQSL 识别
+        if preset and not sp.has_tqsl_mapping(r['name'], number=r.get('satnum')):
+            QMessageBox.warning(
+                win, 'TQSL 映射提醒',
+                f'卫星「{r["name"]}」未找到 TQSL / LoTW 名称映射，\n'
+                f'记录将以原始名称「{preset.get("sat_name", r["name"])}」保存，'
+                f'可能不会被 LoTW / TQSL 正确识别。\n'
+                f'可点击工具栏「编辑TQSL映射」补充该卫星的映射。')
+        if quick_log_callback is not None:
+            quick_log_callback(preset)
+        else:
+            QMessageBox.information(
+                win, '记录',
+                '未设置记录回调，无法自动添加到项目。')
+
+    refresh_btn.clicked.connect(lambda: refresh_tle(force=True))
+    clear_tle_btn.clicked.connect(clear_tle)
+    obs_btn.clicked.connect(edit_observer)
+    sel_btn.clicked.connect(open_select)
+    import_tle_btn.clicked.connect(import_tle)
+    edit_radio_btn.clicked.connect(edit_radio_dict)
+    edit_tqsl_btn.clicked.connect(edit_tqsl_dict)
+    mutual_btn.clicked.connect(open_mutual)
+    map_btn.clicked.connect(open_map)
+    # 行选择变化：仅同步已打开的地图（不开图）；点记录按钮导致行选中也不会误开地图
+    table.itemSelectionChanged.connect(_sync_map_if_open)
+    # 点击「非记录列」单元格：打开/聚焦地图；第 6 列是「记录」按钮，点它只记录、不开地图
+    table.cellClicked.connect(lambda r, c: _focus_or_open_map() if c != 6 else None)
+    auto_cb.toggled.connect(on_auto_toggled)
+    dur_spin.valueChanged.connect(lambda: (run_prediction() if sats else None, _persist()))
+    el_spin.valueChanged.connect(
+        lambda: (run_prediction() if sats else None, _persist(), _push_sats_to_map()))
+    def _on_start_text(_txt):
+        _, err = _parse_start()
+        if err and sats:
+            _status_set('开始时间格式无效：' + err)
+    start_edit.textChanged.connect(_on_start_text)
+    start_edit.editingFinished.connect(lambda: run_prediction() if sats else None)
+
+    # 关闭窗口时：先停止后台线程（避免 QThread destroyed while running），再保存设置
+    def _on_close(event):
+        _persist()
+        for attr in ('_worker', '_tle_worker'):
+            w = getattr(win, attr, None)
+            if w is not None and w.isRunning():
+                w.requestInterruption()
+                if not w.wait(3000):
+                    w.terminate()
+                    w.wait()
+            setattr(win, attr, None)  # 断开引用，避免后续访问已停止/已删除的线程
+        QMainWindow.closeEvent(win, event)
+    win.closeEvent = _on_close
+
+    # 主题（跟随系统/浅色/深色）变化时重刷本窗口的次要文字色
+    def _refresh_theme():
+        tle_time_label.setStyleSheet(theme.hint_css())
+        status.setStyleSheet(theme.hint_css())
+    theme.watch_theme(win, _refresh_theme)
+
+    # ---------- 先显示界面，再后台获取 TLE（加速打开） ----------
+    win.show()
+
+    def _post_show_init():
+        """窗口首次绘制之后再做的初始化（弹框引导 + 拉取 TLE）。
+
+        必须在 show() 之后、且**推迟到事件循环真正开始**执行：`win.show()` 只是
+        投递显示事件，窗口要到控制权交回事件循环后才会首次绘制。若在 main() 内
+        紧接着执行耗时逻辑（尤其是 exec() 模态框），窗口在这段时间里只会显示成
+        白底（仅标题栏可见）——这正是"打开窗口先白屏一下"的成因。用
+        QTimer.singleShot(0) 让 main() 先返回、窗口先画出来，再做这些后续工作。
+        """
+        # 首次打开：若未设置观测站则引导
+        if observer_unset:
+            QMessageBox.information(
+                win, '设置观测站',
+                '尚未设置观测站位置。\n请在弹出的对话框中填写你的 QTH 经纬度与海拔，'
+                '否则过境预测不准确。')
+            dlg = ObserverDialog(win, 0.0, 0.0, 0.0)  # 默认 0,0
+            if dlg.exec() == QDialog.Accepted:
+                vals = dlg.get_values()
+                if vals:
+                    lat_, lon_, alt_ = vals
+                    set_observer(lat_, lon_, alt_)
+                    s = _load_settings()
+                    s['m_lat'] = lat_
+                    s['m_lon'] = lon_
+                    s['m_alt'] = alt_
+                    _save_settings(s)
+
+        # 设置文件里保存的自选卫星超限：同样给出提示（而非静默裁剪），
+        # 三条出路与「选择卫星」对话框一致。选「清除所有选择」则清空后落盘。
+        if _oversized_from_settings > sp.MAX_SELECTED_SATELLITES:
+            if prompt_over_limit_selection(
+                    win, _oversized_from_settings, sp.MAX_SELECTED_SATELLITES,
+                    source_hint='设置中保存的自选卫星已超过上限。'):
+                selected_numbers.clear()
+                _persist()
+
+        refresh_tle(force=False)  # 后台获取 TLE 并预测（界面已先显示）
+
+    QTimer.singleShot(0, _post_show_init)
+    _open_windows.append(win)  # 保持引用，防止被回收
+
+
+if __name__ == '__main__':
+    from PySide6.QtWidgets import QApplication
+    app = QApplication([])
+    i18n.install(app)
+    main(None)

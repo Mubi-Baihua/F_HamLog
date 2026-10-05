@@ -93,7 +93,7 @@ DisableProgramGroupPage=yes
 PrivilegesRequired=admin
 OutputDir={#OutputDirPath}
 OutputBaseFilename={#OutputBaseFilename}
-SetupIconFile={#RepoRoot}\file\F_HamLog.ico
+SetupIconFile={#RepoRoot}\src\f_hamlog\file\F_HamLog.ico
 SolidCompression=yes
 WizardStyle=modern dynamic windows11
 

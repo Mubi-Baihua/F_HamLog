@@ -339,6 +339,8 @@ jobs:
             & $venvPy -m pip install --upgrade pip
             & $venvPy -m pip install pyside6 pandas openpyxl nuitka skyfield numpy cryptography matplotlib
             if ($LASTEXITCODE -ne 0) { throw '安装依赖失败' }
+            & $venvPy -m pip install -e .
+            if ($LASTEXITCODE -ne 0) { throw '以可编辑模式安装 f-hamlog 失败' }
           }
 
           [System.IO.File]::AppendAllLines($env:GITHUB_ENV, [string[]]@("PYTHON_VENV=$venvPy"), (New-Object System.Text.UTF8Encoding $false))
@@ -359,7 +361,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: main.build
-          key: ${{ runner.os }}-nuitka-build-${{ env.PYTHON_VERSION }}-${{ env.APP_EXE_NAME }}-${{ hashFiles('*.py') }}
+          key: ${{ runner.os }}-nuitka-build-${{ env.PYTHON_VERSION }}-${{ env.APP_EXE_NAME }}-${{ hashFiles('src/**/*.py') }}
           restore-keys: |
             ${{ runner.os }}-nuitka-build-${{ env.PYTHON_VERSION }}-${{ env.APP_EXE_NAME }}-
 
@@ -370,8 +372,8 @@ jobs:
           & $env:PYTHON_VENV -m nuitka --standalone `
             --assume-yes-for-downloads `
             --output-filename="$env:APP_EXE_NAME" `
-            --main=main.py `
-            --windows-icon-from-ico=file\F_HamLog.ico `
+            --main=src/f_hamlog/__main__.py `
+            --windows-icon-from-ico=src/f_hamlog/file/F_HamLog.ico `
             --msvc=latest `
             --windows-console-mode=disable `
             --enable-plugin=pyside6 `
@@ -380,7 +382,7 @@ jobs:
             --include-package=numpy `
             --include-module=remote_crypto `
             --windows-uac-admin `
-            --include-data-dir=file=file/
+            --include-data-dir=src/f_hamlog/file=file/
           if ($LASTEXITCODE -ne 0) { throw "Nuitka 打包失败（退出码 $LASTEXITCODE）" }
 
       - name: 校验打包产物

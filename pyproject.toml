@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "f-hamlog"
+version = "2.1.0"
+description = "F HamLog —— 业余无线电日志管理工具（PySide6 桌面应用）"
+readme = "README.md"
+requires-python = ">=3.13"
+license = { text = "GPL-3.0-or-later" }
+dependencies = [
+    "PySide6",
+    "pandas",
+    "openpyxl",
+    "skyfield",
+    "numpy",
+    "cryptography",
+    "matplotlib",
+]
+
+[project.scripts]
+f-hamlog = "f_hamlog.__main__:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
