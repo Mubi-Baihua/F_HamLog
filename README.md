@@ -50,6 +50,38 @@
 
 ---
 
+## 从源码运行（开发）
+
+源码采用 src 布局：包在 `src/f_hamlog/`（入口 `src/f_hamlog/__main__.py`）。开发时先把项目以**可编辑方式**装进虚拟环境：
+
+```powershell
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+pip install -e .            # 依赖已装好时可加 --no-deps 只装项目本体
+```
+
+`pip install -e .` 会往虚拟环境里写一条路径记录（`__editable__.f_hamlog-*.pth`，内容就是 `src` 的绝对路径），效果等同于常驻的 `PYTHONPATH=src`。因此：
+
+- 任何工作目录下都能 `import f_hamlog`，也能用 `python -m f_hamlog` 启动；
+- 可以直接运行包内文件来调试，例如 `python src/f_hamlog/project.py`；
+- **换环境（新建 venv、换机器、别人 clone 之后）需要重新执行一次 `pip install -e .`**，这一步不会自动发生。
+
+安装后三种启动方式等价：
+
+```powershell
+f-hamlog                          # pip 注册的命令行入口
+python -m f_hamlog
+python src/f_hamlog/__main__.py
+```
+
+几点说明：
+
+- 安装会在源码树里生成 `src/f_hamlog.egg-info/`（元数据），已在 `.gitignore` 中忽略，**不要提交**。
+- 运行产生的数据（`src/f_hamlog/file/` 下的设置、日志、密钥等）仍在源码目录中，不受安装影响。
+- 发布不通过 pip 分发：正式版用根目录 `打包.txt` 里的 Nuitka 命令构建独立 exe，见仓库的 GitHub Actions 工作流。
+
+---
+
 ## 相关技术文档
 
 ### 插件开发
@@ -230,6 +262,38 @@ Preview and stable builds keep separate data. You can sync data via Settings > I
 
 > [!WARNING]
 > Some features in preview builds are unstable and may corrupt certain files. Please back up your data when using a preview build.
+
+---
+
+## Running from Source (Development)
+
+The source uses a src layout: the package lives in `src/f_hamlog/` (entry point `src/f_hamlog/__main__.py`). Install it into a virtual environment in **editable** mode first:
+
+```powershell
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+pip install -e .            # add --no-deps if the dependencies are already installed
+```
+
+`pip install -e .` writes a path entry into the environment (`__editable__.f_hamlog-*.pth`, containing the absolute path of `src`), which is equivalent to a permanent `PYTHONPATH=src`. As a result:
+
+- `import f_hamlog` works from any working directory, and `python -m f_hamlog` launches the app;
+- individual modules can be run directly for debugging, e.g. `python src/f_hamlog/project.py`;
+- **after switching environments (a new venv, another machine, a fresh clone) you must run `pip install -e .` again** — it is not automatic.
+
+Once installed, these three are equivalent:
+
+```powershell
+f-hamlog                          # console script registered by pip
+python -m f_hamlog
+python src/f_hamlog/__main__.py
+```
+
+Notes:
+
+- The install creates `src/f_hamlog.egg-info/` metadata in the source tree; it is already covered by `.gitignore` and must not be committed.
+- Runtime data (settings, logs, keys under `src/f_hamlog/file/`) stays in the source directory and is unaffected by the install.
+- Releases are not distributed as pip packages: official builds use the Nuitka command in `打包.txt` to produce a standalone exe (see the GitHub Actions workflows).
 
 ---
 

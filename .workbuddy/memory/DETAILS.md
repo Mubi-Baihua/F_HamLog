@@ -36,6 +36,48 @@
 - 不纳入主题化（勿误改）：`#remote_project.py`（历史备份、无引用）、
   `F_HamLog_Remote_Log_Server_2.0.0/main.py`（独立服务端，改后须重打包）。
 
+## 包结构：开发安装与「直跑」（2026-10-06 定稿）
+- **定稿：开发环境用 `pip install -e .`，模块里不加任何 sys.path 守卫。** 2026-10-05 加过的
+  23 处守卫已于 10-06 **全部撤销**（`git checkout`），只留 `__main__.py` 自身那一处——
+  Nuitka 打包是 `--main=src/f_hamlog/__main__.py`，本身就是直跑路径。下方「守卫方案」保留为历史记录，**勿再照做**。
+- 症状：`python src/f_hamlog/backup.py` → `ModuleNotFoundError: No module named 'f_hamlog'`。
+  根因 = src 布局下**直跑文件时 `sys.path[0]` 是 `src/f_hamlog/`**，包本身不在 `sys.path` 上；
+  `python -m f_hamlog`、打包后的 exe、`python src/f_hamlog/__main__.py` 都不受影响（后者自带守卫）。
+- 历史方案（**已否决，勿再走**）：凡「**任意位置**（含函数体内延迟导入）存在对 `f_hamlog` / `f_hamlog.*` 的绝对导入」的模块，
+  在文件顶部 docstring 之后、首个 import 之前插入同款守卫（与 `__main__.py` 一致）::
+
+      # 直跑支持：`python src/f_hamlog/xxx.py`（把 src/ 加入 sys.path；正常导入 / 打包时为无操作）
+      if __package__ in (None, ""):
+          import os, sys
+          sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+  已加 **23 个**：backup / batch_project / export_adi / fhl_rw / fhla_rw / i18n / input_HAM_tolls /
+  input_adi / input_fhl / main / mutual_window / output_adi / output_excel / pack_set / project /
+  remote_server / satellite_auto_update / satellite_map_window / satellite_window / set / theme /
+  tle_source_window / toast_tip。`__main__.py` 早有守卫。
+- **无需守卫的 9 个叶子模块**：`__init__ / call_upper / data_factory / dialog_defaults / fhl_aes /
+  i18n_zh_en / paths / remote_crypto / satellite_pred`（不 import 包内模块，直跑本来就正常）。
+- 判定要用 **AST**（`ast.walk` 找 Import/ImportFrom），**别用字符串搜索**：`call_upper.py`、
+  `i18n.py`、`toast_tip.py`、`theme.py` 的 docstring 里有 `from f_hamlog import ...` 的**使用示例**。
+- 改这批文件时的两个坑：① **沿用文件自身换行风格**（工作区是 CRLF；插入时写 `'\n'` 会造成混合换行，
+  虽然 git blob 是 LF、`git diff` 只显示新增行，但工作区得干净）；② `fhla_rw.py` 曾残留旧式
+  `import fhl_rw`（平级导入，直跑时能过、被 import 时反而炸）→ 已统一为 `from f_hamlog import fhl_rw`。
+- **定稿做法（2026-10-06）**：`pip install -e . --no-deps` → pip 26 生成的
+  `__editable__.f_hamlog-<ver>.pth` **内容只有一行 `D:\F-Dev\BIG\F_HamLog\src`**
+  （path-based，无 import hook）≡ 把 `src` 持久化进该 venv 的 `sys.path`（等价 `PYTHONPATH=src`）。
+  只对该 venv 生效 → **换 venv / 换机器 / 别人 clone 之后必须重装一次**（README 已写明「从源码运行」）。
+  会在源码树留 `src/f_hamlog.egg-info/`（已加进 `.gitignore`）；项目 venv 无 setuptools →
+  需联网（build isolation）或先装 `setuptools wheel` 再 `--no-build-isolation`。
+- `pyproject.toml` 打包配置**显式声明**（不再 `packages.find`）：`packages = ["f_hamlog"]`
+  + `[tool.setuptools.package-data]` 白名单（F_HamLog.ico / amateur.tle / sat_radio_dict.txt /
+  tqsl_dict.txt / world_land.json / python-3.13.11-amd64.exe）。**刻意排除**个人与运行时数据：
+  m_xml.txt、main.fhl 与 *_backup.fhl、keys/、known_server_keys.txt、remote_rooms/、pack_list.txt、
+  sat_map_markers.txt、tle_sources.txt。**新增子包**（带 `__init__.py` 的目录）时要在 `packages` 里补一项；
+  包内 .py 模块无需登记，随包自动包含。配置里另附一份模块清单注释（备查阅）。
+- 校验口径（2026-10-06）：`pip wheel` 产物含 **33 个模块 + 6 个资源**；`pip install -e .` 后
+  直跑 `backup/theme/i18n` 退出码 0、任意 cwd `import f_hamlog` 成功；包内除 `__main__.py` 外
+  已无 `__package__ in (None, "")`；全部模块 `py_compile` 通过。
+
 ## 设置键（file/m_xml.txt）
 m_call / m_qth / m_dig / aouto_save / aouto_list / m_lat / m_lon / m_alt /
 sat_auto_update / sat_update_hours(1–168) / sat_last_update / sat_b_lat / sat_b_lon / sat_b_alt /

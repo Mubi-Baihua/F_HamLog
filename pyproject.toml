@@ -22,11 +22,48 @@ dependencies = [
 [project.scripts]
 f-hamlog = "f_hamlog.__main__:main"
 
+# ---------------------------------------------------------------------------
+# setuptools 打包 / 开发安装配置
+#
+# 开发用（等价于常驻 PYTHONPATH=src，见 README「从源码运行」）：
+#     pip install -e .
+#
+# 包内模块清单（仅备查阅——包内 .py 全部随包包含，**不需要**逐个登记；
+# 新增子包即「带 __init__.py 的目录」时，才要在下面的 packages 里补一项）：
+#   入口 / 主窗   __main__.py（启动入口，CLI 与 Nuitka 打包都用它）、main.py（应用装配与托盘）、
+#                 project.py（主日志窗）、set.py（设置窗）、batch_project.py（批量记录窗）
+#   日志文件      fhl_rw.py（.fhl 读写）、fhla_rw.py（.fhla 扩展格式）、fhl_aes.py（AES-GCM 加解密）、
+#                 backup.py（未保存内容备份与恢复）
+#   导入导出      input_fhl.py、input_adi.py、input_HAM_tolls.py、output_adi.py、
+#                 output_excel.py、export_adi.py（ADIF 字段映射，供 TQSL / LoTW）
+#   卫星          satellite_pred.py（轨道预测，skyfield+numpy）、satellite_window.py（过境预测）、
+#                 satellite_map_window.py（地图）、mutual_window.py（双站通联预测）、
+#                 satellite_auto_update.py（TLE 自动更新）、tle_source_window.py（数据源设置）
+#   多人日志      remote_server.py（日志服务端引擎）、remote_crypto.py（密码学唯一出处）
+#   界面基础设施  theme.py（主题取色）、i18n.py / i18n_zh_en.py（多语言与词表）、toast_tip.py（悬浮提示）、
+#                 call_upper.py（呼号转大写）、dialog_defaults.py（文件对话框默认值）、
+#                 paths.py（数据目录解析）、pack_set.py（插件）、data_factory.py（测试数据生成）、
+#                 __init__.py（版本号唯一来源 __version__）
+# ---------------------------------------------------------------------------
 [tool.setuptools]
 package-dir = {"" = "src"}
+# 显式声明包，替代原先的 packages.find 自动发现
+packages = ["f_hamlog"]
 
-[tool.setuptools.packages.find]
-where = ["src"]
+# 运行时需要的静态资源。
+# 其余 file/ 内容属于「个人设置 / 日志 / 私密材料」，刻意不入包：
+#   m_xml.txt（本机设置）、main.fhl 与 *_backup.fhl（日志与未保存备份）、
+#   keys/ 与 known_server_keys.txt（私钥与信任库）、remote_rooms/（房间会话记录）、
+#   pack_list.txt、sat_map_markers.txt（运行时生成）、tle_sources.txt（用户自维护的数据源表）。
+[tool.setuptools.package-data]
+f_hamlog = [
+    "file/F_HamLog.ico",
+    "file/amateur.tle",
+    "file/sat_radio_dict.txt",
+    "file/tqsl_dict.txt",
+    "file/world_land.json",
+    "file/python-3.13.11-amd64.exe",
+]
 
 [tool.setuptools.dynamic]
 version = { attr = "f_hamlog.__version__" }

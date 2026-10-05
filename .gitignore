@@ -13,6 +13,10 @@ F HamLog 2.1/F HamLog 2.1 setup.exe
 __pycache__/
 *.pyc
 
+# pip install -e . / 构建 wheel 在源码树里生成的元数据与中间产物（开发环境产物）
+*.egg-info/
+/build/
+
 # 多人日志加密：运行时密钥与信任记录（绝不可入库）
 # 服务端长期私钥（每端口一份，泄露即可被冒名顶替）
 #   内嵌服务端（「开放多人日志」）→ src/f_hamlog/file/keys/

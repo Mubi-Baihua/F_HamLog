@@ -6,6 +6,11 @@
 ## 基本约定
 - PySide6 桌面应用，Nuitka 打包独立 exe；**现代 src 结构**（包 `src/f_hamlog/`，入口 `__main__.py`）。
   `__main__.py` 需兼容 `python -m f_hamlog` 与 `python src/f_hamlog/__main__.py`（后者把 `src/` 入 `sys.path` 后 `from f_hamlog.main import main` 取**函数**；`f_hamlog.main` 仍是模块，勿在包根改语义）。
+- **开发环境用 `pip install -e .`（定稿 2026-10-06）**：包内模块**不加** sys.path 守卫
+  （2026-10-05 加过的 23 处已于 10-06 全撤；只留 `__main__.py` 那一处——Nuitka `--main=` 走直跑路径）。
+  直跑 `python src/f_hamlog/xxx.py` 依赖已装好的 editable 包，**换 venv / 换机器 / 别人 clone 后要重装**。
+  `pyproject.toml` 用**显式** `packages` + `package-data` 白名单（不再 `packages.find`），README「从源码运行」有说明；
+  细节与坑见 `DETAILS.md`。
 - **版本单一来源 = `src/f_hamlog/__init__.py.__version__`**：`pyproject.toml` 用 `dynamic=["version"]`+`attr`；
   界面/插件等一切版本号一律取它，**禁止硬编码**（i18n 模板用 `{}` 占位）。
 - **应用退出前必须停掉所有后台 `QThread`**（否则退出时线程被 GC → Qt 崩溃，Windows 表现「Python 停止运行」）；
