@@ -36,6 +36,141 @@
 - 不纳入主题化（勿误改）：`#remote_project.py`（历史备份、无引用）、
   `F_HamLog_Remote_Log_Server_2.0.0/main.py`（独立服务端，改后须重打包）。
 
+## .fhla 扩展格式（2026-10-16）——**已内嵌进 `project.py`**（原独立模块 `fhla_rw.py`）
+
+- **2026-10-16 晚：实现从 `fhla_rw.py` 整体搬进 `project.py`**（文件已删）。接口名一律没变，
+  只是命名空间从 `fhla_rw.*` 变成 `project.*`：`read_project_file` / `save_project_file` /
+  `is_fhla_path` / `write_fhla_file` / `read_fhla_file` / `describe_meta` / `normalize_meta` /
+  `empty_meta` / `current_editor` / `current_version` / `fhla_project` / `detect_encrypted` /
+  `standard_field_labels`。位置 = `FIELD_LABELS` 定义之后、`file/key` 全局之前（紧挨着它依赖的常量）。
+  **`standard_field_labels()` 现在直接 `dict(FIELD_LABELS)`**（同文件，循环依赖不复存在）。
+  `current_editor()` 里的 `app_path` 已在 `project.py` 顶部导入；`now_str()` 用本文件的 `time_` 别名。
+  自检入口由 `python -m f_hamlog.fhla_rw` 改为 `project._fhla_selftest()`（**不带 `__main__` 守卫**，
+  因为 `project.py` 的 `__main__` 守卫是启动 GUI，不能占用）。
+  `main.py` / `batch_project.py` / `input_fhl.py` 三处调用点均已改成 `project.xxx`；后两者用
+  **函数内延迟导入**（`project` 本身也以延迟方式引用它们，避免互相 import 时机纠缠）。
+  打包注释同步（`pyproject.toml` 的模块清单不再列 `fhla_rw.py`）。
+
+- 磁盘结构：`{"xml": 属性块, "project": 记录列表}`；未加密 = 普通 UTF-8 JSON（indent=4），
+  加密 = `fhl_aes`（AES-256-GCM，与 `.fhl` 同一套）。`project` **就是** `.fhl` 的 list[dict]，
+  老代码拿到的结构不变。
+- 属性块键（顺序固定，未知键保留在末尾，前向兼容）：
+  `format="fhla"` / `format_version=1` / `other_item` / `creator` / `last_editor` /
+  `created_time` / `last_edit_time` / `last_version` / `encrypted`。
+  时间格式 `%Y-%m-%d %H:%M:%S`；`last_version` 取 `f_hamlog.__version__`（**不硬编码**）。
+- `other_item` = 自定义记录项目 `{字段键: 显示标签}`（等价于扩展一份 FIELD_LABELS）；
+  `fhla_project.field_labels()` = 本文件 `FIELD_LABELS`（同文件直接取）+ 自定义项。
+  **标准字段不被它覆盖**；记录里 FIELD_LABELS 之外的键**原样保留**（表格只显示固定 14 列，
+  自定义字段留在数据里，往返不丢）。
+- `encrypted` 只是**声明**：读取时以「文件字节能否 UTF-8 解出」为**准**（`detect_encrypted`），
+  以磁盘实际状态覆盖声明值。加密文件无密钥时 `read_fhla_file(..., ask_key=False)` 返回 `(None, None)`。
+- 「创建者」语义 = 第一次落盘的操作者；`mark_created` 幂等（已有创建者不覆盖）。
+  操作者取 `file/m_xml.txt` 的 `m_call`，空则系统用户名（`project.current_editor`）。
+- **「打开即自动保存」不算一次编辑**：`project.main` 记「打开时的内容快照」`_fhla['open_json']`，
+  写盘时 `touch=(当前快照 != open_json)` —— 一致则只刷 `last_version` + `encrypted`，
+  真改过才算编辑、才刷 `last_editor` / `last_edit_time`。`write_fhla_file(touch=False)` 即该分支。
+- 分派：`read_project_file` / `save_project_file` 按扩展名走（`.fhla` 走内嵌实现，其余 `fhl_rw`），
+  `read_project_file` 返回三元组 `(records, key, meta)`——**`.fhl` 的 meta 恒为 None**（格式没变）。
+- 接入点：`main.py open_project`（过滤器 + 分派 + 传 `fhla_meta`）；`project.py`
+  另存为 / 恢复另存 / 导出选中 / 搜索结果导出 / 新建文件对话框（过滤器均含 `*.fhla`）、
+  文件菜单「项目属性」（**`Alt+Enter`**，QMessageBox 展示 `describe_meta` 的行）、
+  文件菜单「自定义日志字段」；`batch_project.py`
+  的 `save_records_to_path/load_records_from_path` 改为按扩展名分派（返回三元组，回写带 meta）；
+  `input_fhl.py`（导入日志吃 `.fhla`）。
+- 容错：`project.main` 若收到 `.fhla` 整块 dict（带 `project`/`xml`），自动拆包收下记录+属性；
+  否则会当空项目打开、随后自动保存把项目覆盖成空文件。
+- **不在写盘时去读目标文件继承属性**：另存到别人建的 `.fhla` 上会抄走对方的创建者身份；
+  属性只随「本项目自己的 meta」走。
+- 验证：`tests/__fhla_smoke.py`（A 格式层 / B 主窗口 / C 另存为 / D 整块直传 / E 保存格式自选
+  + 扩展名补全 / F 数据目录解析 / G 缺文件容错 / H 属性快捷键+自定义字段（含 `.fhl` 拒绝），
+  **118 项**，离屏，全过）。
+  自定义字段示例用 `wx`（天气）/ `rx_pwr`（接收功率）。词表补 15 条（2 条过滤器 + 13 条属性文案，
+  见 `i18n_zh_en.py` 末节）+ 自定义字段一节。
+
+- **「项目属性」快捷键 = `Alt+Enter`**（2026-10-16 追加）：`props_action.setShortcuts([
+  QKeySequence('Alt+Return'), QKeySequence('Alt+Enter')])` —— Qt 里**Return（主键盘）与 Enter
+  （小键盘区）是两个不同的键**（`matches()` 两向都是 NoMatch），两个都挂才能「按哪个都开」。
+  原先的 `Ctrl+I` 让给「反选」（主窗口/搜索窗口的选择菜单本来也用 `Ctrl+I`，之前是重复占用）。
+  ⚠️ **描述按键一律写 `Return` / `Enter`，不写「回车」**（用户 2026-10-16 明确要求）。
+  **`.fhl` 项目直接提示「不支持的格式」**（不再展示内存状态 + 提示保存为 .fhla）：
+  `.fhl` 没有属性块，半展示会让人把内存状态当成文件属性。文案**逐段 `i18n.tr` 后再拼**。
+
+- **自定义日志字段（other_item）的界面**（2026-10-16 追加）：
+  - 「文件 → 自定义日志字段」= `project.manage_custom_fields()`：QTableWidget 两列
+    （字段键 / 显示名称）内联编辑，「添加字段」= **插入空行直接编辑**（与 TLE 数据源窗口同一风格），
+    「删除选中」按选中行倒序删，「保存更改」整体替换。
+  - 字段键校验：`^[A-Za-z_][A-Za-z0-9_]*$`（要写进记录 JSON 当键）、不与 `FIELD_LABELS` 重名、
+    不重复、显示名称非空；任一不合格 → `QMessageBox.warning` + **整体放弃**（不写盘）。
+    整行空白（点了添加又没填）→ 静默忽略。
+  - `project.custom_fields()` / `set_custom_fields(fields)`（`main()` 内闭包，另暴露在 `_perf_api`）：
+    改完**立即落盘**（经 `_write_project_file`，顺带刷属性），因为属性只存在 `.fhla` 里。
+  - **`.fhl` = 不受支持的格式，自定义字段一律不给**（2026-10-16 用户定稿，取消早先的「内存生效」半支持）：
+    ① `manage_custom_fields()` 开头 `if not is_fhla_path(save_path)` → `QMessageBox.information`
+    提示「不支持的格式」（与「项目属性」同一套口径，三段文案逐段 `i18n.tr` 后再拼）并 `return`，
+    **不建窗口**；② `custom_fields()` 加同样的格式闸（`meta is None or not is_fhla_path(save_path)`
+    → `{}`），否则「另存为 .fhl」之后录入窗口还会冒出一批无处保存的字段行；
+    ③ 由此 **`.fhl` 下「新建日志 / 更多信息」恒为标准 20 行**。原有的「只在本次会话有效」提示
+    QLabel 与 `.fhl` 分支 toast 一并删除，对应词表键也删（别再写回半支持）。
+  - `_fhla['dirty']`：**属性块被用户改过**的标记。记录快照 `open_json` 只看记录，
+    改字段定义不碰记录 → 必须单独记一笔，否则 `touch` 判不出版本/编辑时间该不该刷。
+  - 「新建日志 / 更多信息」两个窗口：行顺序常量 `DIALOG_FIELDS`（20 行，取自 FIELD_LABELS，
+    **顺序与旧版逐项一致**——行 2/3 挂呼号大写委托，自定义字段一律**追加在末尾**，不动行号）。
+    自定义值留空 → `write_back_field(..., is_custom=True)` **把该键整个移除**（不往记录里塞空字段）；
+    写入用 `cell_text(v)`（缺字段/None → 空串，避免 `str(None)='None'` 或直接 KeyError）。
+  - `i18n.bind_cell_texts` 的文本序列要 **标准标签 + 自定义标签** 一起给（自定义标签是用户数据，
+    翻不到就原样，正好）。
+  - ⚠️ **批量记录窗口（`batch_project.py`）没接自定义字段**：它的 `translation_dict`/`KEYS` 是
+    模块级全局（冻结列、i18n、写回都按 `KEYS` 索引行），且该窗口可以从主界面单独打开、
+    **没有项目上下文**（可能没有 meta）。要接得先把 `KEYS` 变成"每窗口一份"，属单独改动。
+- **保存时由用户当场选格式**（2026-10-16 追加）：
+  `project.project_save_filters()` 返回**两条**过滤器（`F HamLog项目 (*.fhl)` +
+  `F HamLog项目（带属性） (*.fhla)`，**逐段 i18n.tr 后再拼**），
+  `project.complete_project_suffix(path, sel)` 按所选过滤器补扩展名
+  （Qt 静态保存对话框**不会**替用户补后缀；已有 .fhl/.fhla 时原样返回）。
+  ⚠️ 合并成一条 `(*.fhl *.fhla)` 时用户拿不到格式选择权，且输入不带扩展名的名字会落盘成
+  **无扩展名文件**，再打开按 .fhl 处理、属性全丢 —— 所以必须两条。
+  改动 5 处保存对话框：另存为 / 恢复另存 / 导出选中 / 导出搜索结果 / 新建文件；
+  `batch_project` 的「另存为 F HamLog项目」同样两条。
+  **「打开」类对话框仍用合并的一条**（一次就能看到两种文件，更好用）。
+  默认选中第一条 → **默认格式仍是 `.fhl`**（要改默认就先放 .fhla；排序即默认）。
+
+## 数据目录解析（paths.py）与「假 file/」劫持（2026-10-16 崩溃复盘）
+
+- **症状**：主窗打不开。点「通联日志」→ `FileNotFoundError: <仓库根>\file\main.fhl`；
+  新建项目 → `<仓库根>\file\pack_list.txt` 同样找不到（两个都指向**仓库根**而非 `src/f_hamlog`）。
+- **根因链**：`backup.py` 的 `PROJECT_BACKUP/BATCH_BACKUP` 原本是 **cwd 相对**路径
+  `file/project_backup.fhl`。在仓库根（或任何别的目录）跑一次应用、触发一次自动备份，
+  就 `makedirs('file')` **凭空造出一个空的假 `file/`**。而 `paths._app_base_dir()` 的候选顺序
+  是「cwd → exe 目录 → 模块目录」，**只要 cwd 下有 `file/` 就认**，于是此后从仓库根启动
+  DATA_DIR 恒为仓库根，`file/` 里的真数据文件集体找不到。← 一次误写，永久生效。
+- **修复（两处，缺一不可）**：
+  1) **不再往 cwd 相对路径写任何数据**：`backup.py` 改 `app_path('file/...')` 绝对路径；
+     `batch_project.add_to_default_log` 的 `os.path.join('file','main.fhl')` 同样改 `app_path`
+     （它会把批量记录**写进错目录的 main.fhl**，属数据正确性问题）；
+     `i18n.settings_path` / `theme.settings_path` 的兜底也改 `paths.app_path`（原来兜底是
+     cwd 相对路径，同样能造出假 `file/`）。
+  2) `paths._app_base_dir()` 加**身份标记** `_DATA_MARKERS = ('m_xml.txt', 'main.fhl',
+     'amateur.tle', 'pack_list.txt')`：先在「`file/` 里至少有一个标记文件」的候选里挑，
+     一个都不满足才退回旧的「有 `file/` 就认」（保留历史行为）。假 `file/`（只有
+     `project_backup.fhl`）因此被挡掉。
+- 容错：`project.main` 读 `file/pack_list.txt` 加 try/except（缺失/内容坏 → 按「无插件」）；
+  `main.load_quick_project_data(path)`（新抽出的函数）在 `file/main.fhl` 不存在时返回 `([], None)`
+  → 按空项目打开、首次保存时创建，不再抛 FileNotFoundError。
+- **第二次加固（同日 23:25 复发）：候选顺序改成「exe 目录 → 模块目录 → cwd」，cwd 垫底。**
+  复发经过：跑了一个「src 布局迁移前」的遗留测试（`tests/__req3_smoke.py`，它按**相对路径**
+  写 `file/m_xml.txt`、`file/amateur.tle`），那个假 `file/` **长出了标记文件**，于是标记法失效、
+  又被当成数据目录 → `list_time` 读到 `{'m_call': 'BA1ABC', ...}` 缺 `aouto_list` → KeyError。
+  **教训：标记文件挡不住「会写标记的邻居」，可信来源只能是应用自己的目录**；
+  要指定数据目录请用 `F_HAMLOG_DATA_DIR`（测试也可 monkeypatch `sp.SETTINGS_PATH` 等常量）。
+  实测：从仓库根 / `src/f_hamlog` / 用户主目录启动，DATA_DIR 均为 `src/f_hamlog`；env 覆盖仍生效。
+- **本机残留**：`D:\F-Dev\BIG\F_HamLog\file\`（2026-10-16 23:00 由该 bug 生成 + 23:25 被遗留测试
+  写入 mock 数据）已于 23:28 **整个移到** `%TEMP%\fhl_stray_file_backup_20261016_232848\`
+  （move 即备份，无删除；仓库根干净了）。里面只有：0 字节 `project_backup.fhl`、
+  mock `m_xml.txt`（BA1ABC）、mock `amateur.tle`（MOCK-SAT-B），**不含真实用户数据**。
+- 回归：`tests/__fhla_smoke.py` F 段（子进程分别以**仓库根**、一个**合成假 file/**、
+  一个**带标记的合成假 file/** 为 cwd 回显 `paths.DATA_DIR`，须等于 `src/f_hamlog`）
+  + G 段（缺 main.fhl / pack_list.txt 的容错）。
+
 ## 包结构：开发安装与「直跑」（2026-10-06 定稿）
 - **定稿：开发环境用 `pip install -e .`，模块里不加任何 sys.path 守卫。** 2026-10-05 加过的
   23 处守卫已于 10-06 **全部撤销**（`git checkout`），只留 `__main__.py` 自身那一处——
@@ -51,7 +186,8 @@
           import os, sys
           sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-  已加 **23 个**：backup / batch_project / export_adi / fhl_rw / fhla_rw / i18n / input_HAM_tolls /
+  已加 **23 个**：backup / batch_project / export_adi / fhl_rw / fhla_rw /
+  （`fhla_rw.py` 已于 2026-10-16 并入 `project.py`，该文件不复存在）i18n / input_HAM_tolls /
   input_adi / input_fhl / main / mutual_window / output_adi / output_excel / pack_set / project /
   remote_server / satellite_auto_update / satellite_map_window / satellite_window / set / theme /
   tle_source_window / toast_tip。`__main__.py` 早有守卫。

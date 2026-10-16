@@ -32,8 +32,10 @@ f-hamlog = "f_hamlog.__main__:main"
 # 新增子包即「带 __init__.py 的目录」时，才要在下面的 packages 里补一项）：
 #   入口 / 主窗   __main__.py（启动入口，CLI 与 Nuitka 打包都用它）、main.py（应用装配与托盘）、
 #                 project.py（主日志窗）、set.py（设置窗）、batch_project.py（批量记录窗）
-#   日志文件      fhl_rw.py（.fhl 读写）、fhla_rw.py（.fhla 扩展格式）、fhl_aes.py（AES-GCM 加解密）、
-#                 backup.py（未保存内容备份与恢复）
+#   日志文件      fhl_rw.py（.fhl 读写）、fhl_aes.py（AES-GCM 加解密）、
+#                 backup.py（未保存内容备份与恢复）；
+#                 .fhla（.fhl 的带属性扩展格式）已内嵌在 project.py 开头的
+#                 「.fhla 文件格式」一节，不再单独成模块
 #   导入导出      input_fhl.py、input_adi.py、input_HAM_tolls.py、output_adi.py、
 #                 output_excel.py、export_adi.py（ADIF 字段映射，供 TQSL / LoTW）
 #   卫星          satellite_pred.py（轨道预测，skyfield+numpy）、satellite_window.py（过境预测）、

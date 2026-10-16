@@ -765,14 +765,18 @@ def main(window, preset=None, on_saved=None, preset_records=None, recovered=Fals
             QMessageBox.warning(window, "提示", "没有可保存的记录。")
             return False
 
-        def save_records_to_path(records, save_path, key=None):
-            fhl_rw.write_fhl_file(save_path, records, key)
+        def save_records_to_path(records, save_path, key=None, meta=None):
+            # 按扩展名分派：.fhla 连同属性块（创建者/编辑者/时间/版本/加密状态）一起写，
+            # 其余（.fhl 等）与旧版完全一致。实现见 project.py「.fhla 文件格式」一节。
+            from f_hamlog import project   # 延迟导入：project 亦以延迟方式引用本模块
+            project.save_project_file(save_path, records, key, meta=meta)
 
         def load_records_from_path(load_path):
+            """读项目文件 → (records, key, meta)；meta 只有 .fhla 才有，回写时原样带回。"""
             if not os.path.exists(load_path):
-                return [], None
-            data, key = fhl_rw.read_fhl_file(load_path)
-            return data, key
+                return [], None, None
+            from f_hamlog import project
+            return project.read_project_file(load_path)
 
         finish_dialog = QDialog(window)
         finish_dialog.setWindowTitle('批量记录')
@@ -801,34 +805,38 @@ def main(window, preset=None, on_saved=None, preset_records=None, recovered=Fals
                 finish_dialog,
                 i18n.tr('添加到 F HamLog项目'),
                 desktop_dir(),
-                i18n.tr('F HamLog项目 (*.fhl)')
+                i18n.tr('F HamLog项目 (*.fhl *.fhla)')
             )
             if project_path == '':
                 return
-            records, key = load_records_from_path(project_path)
+            records, key, meta = load_records_from_path(project_path)
+            records = list(records or [])
             records.extend(fhl_list)
-            save_records_to_path(records, project_path, key)
+            save_records_to_path(records, project_path, key, meta)
             QMessageBox.information(finish_dialog, '完成', f'已添加 {len(fhl_list)} 条记录到项目。')
             finish_dialog.accept()
 
         def save_as_project():
-            save_path, _ = QFileDialog.getSaveFileName(
+            from f_hamlog import project   # 延迟导入：project 亦以延迟方式引用本模块
+            save_path, sel = QFileDialog.getSaveFileName(
                 finish_dialog,
                 i18n.tr('另存为 F HamLog项目'),
                 desktop_dir(),
-                i18n.tr('F HamLog项目 (*.fhl)')
+                project.project_save_filters()   # .fhl / .fhla 各一条，由用户当场选格式
             )
             if save_path == '':
                 return
+            save_path = project.complete_project_suffix(save_path, sel)
             save_records_to_path(fhl_list, save_path)
             QMessageBox.information(finish_dialog, '完成', f'已另存为项目文件：{save_path}')
             finish_dialog.accept()
 
         def add_to_default_log():
-            default_path = os.path.join('file', 'main.fhl')
-            records, key = load_records_from_path(default_path)
+            default_path = app_path('file/main.fhl')   # 数据目录下的绝对路径，勿用 cwd 相对路径
+            records, key, meta = load_records_from_path(default_path)
+            records = list(records or [])
             records.extend(fhl_list)
-            save_records_to_path(records, default_path, key)
+            save_records_to_path(records, default_path, key, meta)
             QMessageBox.information(finish_dialog, '完成', f'已添加 {len(fhl_list)} 条记录到默认通联日志')
             finish_dialog.accept()
 

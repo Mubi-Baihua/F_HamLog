@@ -80,12 +80,17 @@ _lang = DEFAULT_LANG
 
 
 def settings_path():
-    """设置文件路径——复用 theme 的解析（单一事实来源），失败则退回相对路径。"""
+    """设置文件路径——复用 theme 的解析（单一事实来源），失败则退回 app_path。
+
+    退路也必须落在**数据目录**里（app_path），不要用 cwd 相对的 'file/m_xml.txt'：
+    在别的目录跑一次就会凭空建出一个假的 file/，反而把数据目录解析带偏。
+    """
     try:
         from f_hamlog import theme
         return theme.settings_path()
     except Exception:
-        return os.path.join('file', 'm_xml.txt')
+        from f_hamlog.paths import app_path
+        return app_path('file/m_xml.txt')
 
 
 def read_settings():

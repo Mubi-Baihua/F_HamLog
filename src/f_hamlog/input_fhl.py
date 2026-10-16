@@ -3,7 +3,6 @@ from PySide6.QtWidgets import *
 from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
 from f_hamlog.dialog_defaults import desktop_dir
 from f_hamlog import i18n
-from f_hamlog import fhl_rw
 
 
 def _ensure_log_keys(entry):
@@ -69,12 +68,15 @@ def main(file_list):
         None,
         i18n.tr("选择 F HamLog 项目文件"),
         desktop_dir(),
-        i18n.tr("F HamLog项目 (*.fhl);;All Files (*)")
+        i18n.tr("F HamLog项目 (*.fhl *.fhla);;All Files (*)")
     )
     if not file_path:
         return list(file_list or [])
 
-    data,key = fhl_rw.read_fhl_file(file_path)
+    # 按扩展名分派：.fhla 会读出记录列表（属性块对「导入日志」无意义，忽略）。
+    # 实现见 project.py「.fhla 文件格式」一节。
+    from f_hamlog import project
+    data, key, _meta = project.read_project_file(file_path)
 
     records = _normalize_records(data if isinstance(data, list) else [])
     if not records:

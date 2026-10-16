@@ -420,7 +420,12 @@ TRANSLATIONS = {
     # ------------------------------------------------------------------
     '选择 F HamLog 项目文件': 'Select F HamLog project file',
     'F HamLog项目 (*.fhl)': 'F HamLog project (*.fhl)',
+    # 保存 / 另存为对话框里的第二条过滤器（.fhla 带属性）：与上一条并列，由用户选格式
+    'F HamLog项目（带属性） (*.fhla)': 'F HamLog project (with properties) (*.fhla)',
     'F HamLog项目 (*.fhl);;All Files (*)': 'F HamLog project (*.fhl);;All Files (*)',
+    'F HamLog项目 (*.fhl *.fhla)': 'F HamLog project (*.fhl *.fhla)',
+    'F HamLog项目 (*.fhl *.fhla);;All Files (*)':
+        'F HamLog project (*.fhl *.fhla);;All Files (*)',
     '另存为 F HamLog项目': 'Save as F HamLog project',
     '添加到 F HamLog项目': 'Add to F HamLog project',
     '导出选中日志为FHL文件': 'Export selected logs to FHL file',
@@ -776,4 +781,54 @@ TRANSLATIONS = {
         'Expected YYYY-MM-DD HH:MM (e.g. 2026-08-02 17:45), current input: {}',
     'ADIF 文件 (*.adi);;All Files (*)': 'ADIF file (*.adi);;All Files (*)',
     'YYYY-MM-DD HH:MM（如 2026-07-27 17:45）': 'YYYY-MM-DD HH:MM (e.g. 2026-07-27 17:45)',
+
+    # ------------------------------------------------------------------
+    #  .fhla 项目属性（创建者 / 编辑者 / 时间 / 版本 / 加密状态）
+    #  注：属性窗口用 QMessageBox 展示，文本不经过控件树，故这里只作词表留存；
+    #      菜单项「项目属性」由事件过滤器按控件文字翻译，可直接生效。
+    # ------------------------------------------------------------------
+    '项目属性': 'Project properties',
+    '创建者（第一次编辑的人）': 'Creator (first editor)',
+    '最后一次编辑的人': 'Last editor',
+    '创建时间': 'Created',
+    '最后一次编辑时间': 'Last edited',
+    '上次打开所用版本': 'Version last opened with',
+    '加密状态': 'Encryption',
+    '已加密': 'Encrypted',
+    '未加密': 'Not encrypted',
+    '自定义记录项目': 'Custom log fields',
+    '无': 'None',
+    '提示：这些属性只在保存为 .fhla 项目文件时写入磁盘（当前为 .fhl）。':
+        'Note: these properties are written to disk only when saving as a .fhla project '
+        'file (currently .fhl).',
+
+    # ------------------------------------------------------------------
+    #  项目属性（Alt+Enter）：.fhl 时提示不支持的格式
+    # ------------------------------------------------------------------
+    '不支持的格式：当前项目不是 .fhla 文件。':
+        'Unsupported format: this project is not a .fhla file.',
+    '.fhl 是纯记录格式，不含创建者、编辑者、时间、版本、加密状态等属性。':
+        '.fhl is a records-only format; it carries no creator/editor/time/version/encryption '
+        'properties.',
+    '请「另存为」带属性的 .fhla 项目文件后再查看。':
+        'Please use "Save As" to write a .fhla project file first, then check again.',
+
+    # ------------------------------------------------------------------
+    #  自定义日志字段（.fhla 属性块 other_item）——管理窗口
+    # ------------------------------------------------------------------
+    '自定义日志字段': 'Custom log fields',
+    '字段键': 'Field key',
+    '显示名称': 'Display name',
+    '添加字段': 'Add field',
+    '.fhl 是纯记录格式，不含自定义日志字段。':
+        '.fhl is a records-only format; it carries no custom log fields.',
+    '请「另存为」带属性的 .fhla 项目文件后再使用。':
+        'Please use "Save As" to write a .fhla project file first, then try again.',
+    '字段键只能用字母、数字、下划线，且不能以数字开头：':
+        'Field keys may contain only letters, digits and underscores, and must not start '
+        'with a digit: ',
+    '该字段键是标准字段，不能作为自定义字段：':
+        'This key is a standard field and cannot be used as a custom field: ',
+    '缺少显示名称：': 'Missing display name: ',
+    '字段键重复：': 'Duplicate field key: ',
 }

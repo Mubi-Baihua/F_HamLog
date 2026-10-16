@@ -56,6 +56,22 @@ def _cleanup_remote_rooms(days=1):
                 pass
 
 
+def load_quick_project_data(path):
+    """读「通联日志」（file/main.fhl）的数据 → ``(records, key)``。
+
+    文件不存在（首次使用 / 数据目录刚建好）时返回 ``([], None)``：**按空项目打开**，
+    首次保存时再创建。旧写法直接 ``read_fhl_file(path)``，缺文件就抛
+    FileNotFoundError，整个「通联日志」都点不开（2026-10-16 实测崩溃）。
+    返回 ``(None, None)`` 表示用户取消了密钥输入 / 解密失败，调用方应中断打开。
+    """
+    if not os.path.exists(path):
+        return [], None
+    data, key = fhl_rw.read_fhl_file(path)
+    if data is None:
+        return None, None
+    return data, key
+
+
 def main():
     # 启动时清理过期（默认 3 天）的多人日志房间文件
     _cleanup_remote_rooms(days=1)
@@ -95,7 +111,7 @@ def main():
         project_window = QMainWindow()
         save_path = app_path('file/main.fhl')
         print(save_path)
-        data,key = fhl_rw.read_fhl_file(save_path)
+        data, key = load_quick_project_data(save_path)
         if data == None:
             return
         project.main(project_window, data, save_path,key_=key,quick_poject=True)
@@ -115,19 +131,21 @@ def main():
             window,  # 父窗口
             i18n.tr("打开项目"),  # 对话框标题
             desktop_dir(),  # 初始目录：桌面
-            i18n.tr("F HamLog项目 (*.fhl)")  # 文件过滤器
+            i18n.tr("F HamLog项目 (*.fhl *.fhla)")  # 文件过滤器；.fhla 是带属性的扩展格式
         )
         if save_path == '':
             return
         if not _confirm_replace_session():
             return
         print(save_path)
-        data,key = fhl_rw.read_fhl_file(save_path)
+        # 按扩展名分派：.fhla 连属性块（创建者/编辑者/时间/版本/加密状态）一起读出，
+        # .fhl 行为与旧版完全一致（meta 为 None）。实现见 project.py「.fhla 文件格式」。
+        data, key, fhla_meta = project.read_project_file(save_path)
         if data == None:
             return
         global project_window  # 保持引用，防止被回收
         project_window = QMainWindow()
-        project.main(project_window, data, save_path,key_=key)
+        project.main(project_window, data, save_path, key_=key, fhla_meta=fhla_meta)
 
     def join_server():
         print("加入多人日志")

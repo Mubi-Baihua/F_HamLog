@@ -1,5 +1,5 @@
 from PySide6.QtWidgets import *
-from PySide6.QtGui import QAction
+from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtCore import Qt, QEvent, QObject, QTimer, QThread, Signal, QRect  # 新增导入 Qt
 from f_hamlog.dialog_defaults import desktop_dir
 from f_hamlog import i18n
@@ -9,12 +9,15 @@ import sys
 import os
 import re
 import json
+import getpass
 import socket
 import threading
 import subprocess
 import webbrowser
 import urllib.parse
 from f_hamlog import fhl_rw
+from f_hamlog import fhl_aes     # .fhl / .fhla 共用的 AES-256-GCM 加解密
+from f_hamlog import __version__ as APP_VERSION   # 「上次打开所用版本」的唯一来源
 import copy
 from f_hamlog import call_upper
 from f_hamlog import backup
@@ -43,12 +46,584 @@ FIELD_LABELS = {
     'notes': '备注'
 }
 
+# 「新建日志 / 更多信息」两个窗口的行顺序与字段标签（值一律取自 FIELD_LABELS）。
+# 顺序即行号，必须与旧版逐项一致（行 2 / 3 = 己方 / 对方呼号，按行号挂「呼号自动大写」委托）。
+# 自定义日志字段（.fhla 属性块里的 other_item）一律**追加在这 20 行之后**，不影响行号。
+DIALOG_FIELDS = {k: FIELD_LABELS[k] for k in (
+    'date', 'time', 'm_call', 'o_call', 'freq', 'freq_rx', 'prop_mode', 'sat_name',
+    'mode', 'm_rst', 'o_rst', 'm_qth', 'o_qth', 'm_dig', 'o_dig', 'm_ant', 'o_ant',
+    'm_pow', 'o_pow', 'notes')}
+
+# 自定义字段键的合法形状：字母 / 数字 / 下划线，不以数字开头（它要写进记录的 JSON 当键用）
+CUSTOM_FIELD_KEY_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
+
+
+def cell_text(value):
+    """记录里的值 → 单元格文本（缺失 / None 一律按空串，避免 str(None) 写出 'None'）。"""
+    return '' if value is None else str(value)
+
+
+def write_back_field(rec, key, text, is_custom=False):
+    """把单元格文本写回记录。
+
+    自定义字段留空 → **整个键移除**（用户清空即表示这条记录不要该字段，
+    避免往数据里塞一堆空的自定义字段）；标准字段维持旧行为，一律写入。
+    """
+    if is_custom and text == '':
+        rec.pop(key, None)
+    else:
+        rec[key] = text
+
+# ==========================================================================
+# .fhla 文件格式（F HamLog Archive）—— 带属性的项目文件
+# ==========================================================================
+# 本段原先独立成模块 fhla_rw.py，现按用户要求**直接内嵌进 project.py**。
+# 对外接口名一律保持原样（read_project_file / save_project_file / is_fhla_path /
+# describe_meta / normalize_meta / empty_meta / current_editor / current_version /
+# fhla_project …），因此其它模块只需把 ``fhla_rw.xxx`` 换成 ``project.xxx``。
+# 原先要靠延迟导入 project 取 FIELD_LABELS 的那处（standard_field_labels）现在
+# 就在同一文件里，循环依赖随之消失。
+#
+# .fhla 是 .fhl 的**带属性扩展格式**：记录列表之外多出一块 xml 元数据
+# （命名沿用设置文件 m_xml.txt 的习惯），用来承载：
+#
+#   other_item      自定义日志字段：{字段键: 显示标签}，等价于把 FIELD_LABELS
+#                   扩展一份（只加不改，标准字段不被覆盖）
+#   creator         创建者（第一次编辑的人）
+#   last_editor     最后一次编辑的人
+#   created_time    创建时间
+#   last_edit_time  最后一次编辑的时间
+#   last_version    上次打开（保存）该文件所用的 F HamLog 版本
+#   encrypted       加密状态（文件是否以 AES-GCM 加密落盘）
+#
+# 磁盘结构（未加密时就是一份普通 UTF-8 JSON，缩进 4）::
+#
+#     {
+#         "xml": {
+#             "format": "fhla",
+#             "format_version": 1,
+#             "other_item": {"wx": "天气"},
+#             "creator": "BI8SQL",
+#             "last_editor": "BI8SQL",
+#             "created_time": "2026-10-16 22:40:11",
+#             "last_edit_time": "2026-10-16 22:40:11",
+#             "last_version": "2.7.0",
+#             "encrypted": false
+#         },
+#         "project": [ {…一条日志…}, … ]
+#     }
+#
+# 设计约定（与 fhl_rw.py 一致的几点 + 本格式独有的几点）：
+# * ``project`` 就是原 .fhl 的记录列表（list[dict]），老代码拿到的结构与原来完全
+#   一样；记录里**没有登记在 FIELD_LABELS 里的键原样保留**，所以自定义日志字段
+#   不会在「打开 → 保存」往返中被抹掉（主表只显示固定 14 列，多余字段照旧留在数据里）。
+# * 自定义日志字段（other_item）的**界面**：「文件 → 自定义日志字段」管理定义
+#   （字段键 + 显示名称，键必须能当 JSON 键用、且不能与标准字段重名），
+#   「新建日志 / 更多信息」两个窗口在标准 20 行**之后**追加这些字段并读写记录值。
+#   定义随项目走：**只属于 .fhla**（定义存在属性块里、立即写盘）；.fhl 属不受支持的格式，
+#   管理窗口直接拒绝打开（提示「不支持的格式」），录入窗口也只显示标准 20 行。
+# * 加密沿用 fhl_aes（与 .fhl 同一套 AES-256-GCM）。``encrypted`` 只是**声明**：
+#   读取时以「文件字节能否按 UTF-8 解出」为**准**，谁也不会因为元数据被改而解错文件。
+# * 版本号唯一来源 = ``f_hamlog.__version__``（本文件顶部的 APP_VERSION），不硬编码。
+# * 性能：与 fhl_rw 同一约定——``json.dumps`` 到内存后**一次性** write，替代
+#   json.dump 的几十万次小 write（上万条日志时能省下 1 秒以上的 I/O 调用开销）。
+
+# 格式 / 属性常量
+FHLA_SUFFIX = '.fhla'
+FHL_SUFFIX = '.fhl'
+FORMAT_NAME = 'fhla'
+FORMAT_VERSION = 1
+TIME_FMT = '%Y-%m-%d %H:%M:%S'
+
+# 属性键（顺序 = 「项目属性」窗口与 JSON 里的展示顺序）
+META_KEYS = ('other_item', 'creator', 'last_editor', 'created_time',
+             'last_edit_time', 'last_version', 'encrypted')
+_TEXT_KEYS = ('creator', 'last_editor', 'created_time', 'last_edit_time', 'last_version')
+
+
+# -------------------------- 基础工具 --------------------------
+def now_str():
+    """当前时间（``YYYY-MM-DD HH:MM:SS``，与日志里 date/time 的写法同一习惯）。"""
+    return time_.strftime(TIME_FMT, time_.localtime())
+
+
+def current_version():
+    """当前 F HamLog 版本（唯一来源 ``f_hamlog.__version__``）。"""
+    return APP_VERSION
+
+
+def current_editor():
+    """当前操作者：优先设置里的「己方呼号」，其次操作系统用户名。
+
+    呼号取自 ``file/m_xml.txt``（与本模块读同一份设置）。读不到时退化到系统用户名；
+    再取不到就返回空串（属性留空，而不是写个假的）。
+    """
+    try:
+        with open(app_path('file/m_xml.txt'), 'r', encoding='utf-8') as f:
+            call = (eval(f.read()).get('m_call') or '').strip().upper()
+        if call:
+            return call
+    except Exception:
+        pass
+    try:
+        return getpass.getuser()
+    except Exception:
+        return ''
+
+
+def standard_field_labels():
+    """标准字段 -> 中文标签（就是本模块的 FIELD_LABELS，唯一出处）。"""
+    return dict(FIELD_LABELS)
+
+
+def is_fhla_path(path):
+    """扩展名是否为 ``.fhla``（大小写不敏感）。"""
+    return os.path.splitext(str(path or ''))[1].lower() == FHLA_SUFFIX
+
+
+def detect_encrypted(file_path):
+    """按文件字节判断是否加密：UTF-8 能解出 → 明文 JSON；解不出 → 加密包。
+
+    这是「加密状态」的唯一权威（元数据里的 ``encrypted`` 只是声明）。
+    """
+    with open(file_path, 'rb') as f:
+        raw = f.read()
+    try:
+        raw.decode('utf-8')
+        return False
+    except UnicodeDecodeError:
+        return True
+
+
+def empty_meta():
+    """一份空白属性块。"""
+    return normalize_meta()
+
+
+def normalize_meta(meta=None):
+    """补齐 / 纠正属性键，返回新 dict（未知键原样保留，便于向后兼容新属性）。"""
+    out = dict(meta) if isinstance(meta, dict) else {}
+    other = out.get('other_item')
+    out['other_item'] = {str(k): str(v) for k, v in other.items()} if isinstance(other, dict) else {}
+    for k in _TEXT_KEYS:
+        v = out.get(k)
+        out[k] = '' if v is None else str(v)
+    out['encrypted'] = bool(out.get('encrypted', False))
+    out['format'] = out.get('format') or FORMAT_NAME
+    try:
+        out['format_version'] = int(out.get('format_version') or FORMAT_VERSION)
+    except (TypeError, ValueError):
+        out['format_version'] = FORMAT_VERSION
+    return out
+
+
+def ordered_meta(meta=None):
+    """按固定顺序整理属性块（文件可读性 + 便于 diff），未识别的键留在末尾。"""
+    meta = normalize_meta(meta)
+    out = {'format': meta.pop('format'), 'format_version': meta.pop('format_version')}
+    for k in META_KEYS:
+        out[k] = meta.pop(k)
+    out.update(meta)
+    return out
+
+
+def other_item_text(other_item):
+    """自定义记录项目的单行描述（供界面展示）：``键（标签）、键（标签）``。"""
+    if not other_item:
+        return '无'
+    return '、'.join(f'{k}（{v}）' for k, v in other_item.items())
+
+
+def describe_meta(meta=None, other_item=None, path=''):
+    """把属性块整理成 ``[(显示名, 值)]``，供「项目属性」窗口逐行展示。"""
+    m = normalize_meta(meta)
+    rows = []
+    if path:
+        rows.append(('文件', os.path.basename(path)))
+    rows += [
+        ('创建者（第一次编辑的人）', m['creator'] or '—'),
+        ('最后一次编辑的人', m['last_editor'] or '—'),
+        ('创建时间', m['created_time'] or '—'),
+        ('最后一次编辑时间', m['last_edit_time'] or '—'),
+        ('上次打开所用版本', f"F HamLog {m['last_version']}" if m['last_version'] else '—'),
+        ('加密状态', '已加密' if m['encrypted'] else '未加密'),
+        ('自定义记录项目', other_item_text(m['other_item'] if other_item is None else other_item)),
+        ('格式版本', f"{m['format']} v{m['format_version']}"),
+    ]
+    return rows
+
+
+# -------------------------- 内存表示 --------------------------
+class fhla_project:
+    """一份 .fhla 项目的内存表示：``project``（记录列表） + ``xml``（属性块）。
+
+    典型用法::
+
+        proj = fhla_project({'xml': meta, 'project': records})
+        proj.add_other_item('wx', '天气')          # 自定义记录项目
+        proj.mark_edited('BI8SQL')                 # 记一次编辑（含创建者/创建时间）
+        write_fhla_file('a.fhla', proj)
+    """
+
+    def __init__(self, fhla_dict=None, project=None, meta=None):
+        if isinstance(fhla_dict, fhla_project):
+            self.xml = normalize_meta(fhla_dict.get_xml())
+            self.project = list(fhla_dict.get_fhl())
+        elif isinstance(fhla_dict, list):
+            self.xml = normalize_meta(meta)
+            self.project = fhla_dict
+        elif fhla_dict is None:
+            self.xml = normalize_meta(meta)
+            self.project = list(project or [])
+        else:
+            self.input_fhla_project(fhla_dict)
+
+    # ---------- 结构化输入 / 输出 ----------
+    def input_fhla_project(self, fhla_dict):
+        """从 ``{'xml':…, 'project':…}`` 载入（键缺失按空处理，结构完全不对才报错）。"""
+        if not isinstance(fhla_dict, dict) or not ('xml' in fhla_dict or 'project' in fhla_dict):
+            keys = fhla_dict.keys() if isinstance(fhla_dict, dict) else type(fhla_dict).__name__
+            raise ValueError(f'未找到合法的keys,fhla_dict.keys:{keys}')
+        self.xml = normalize_meta(fhla_dict.get('xml'))
+        records = fhla_dict.get('project')
+        self.project = records if isinstance(records, list) else []
+
+    def output_fhla_project(self):
+        """导出为可写盘的 dict（属性块按固定顺序整理）。"""
+        return {'xml': ordered_meta(self.xml), 'project': self.project}
+
+    # ---------- 属性块 ----------
+    def get_xml(self):
+        return self.xml
+
+    def write_xml(self, xml):
+        """整体替换属性块（会做规范化；未知键保留）。"""
+        self.xml = normalize_meta(xml)
+
+    def get_meta(self, key=None):
+        if key is None:
+            return dict(self.xml)
+        return self.xml.get(key)
+
+    def write_meta(self, key, value):
+        self.xml[key] = value
+        self.xml = normalize_meta(self.xml)
+
+    # ---------- 自定义记录项目（other_item） ----------
+    def get_other_item(self):
+        """自定义记录项目：``{字段键: 显示标签}``（可能为空 dict）。"""
+        return dict(self.xml.get('other_item') or {})
+
+    def write_other_item(self, other_item):
+        """整体替换自定义记录项目。"""
+        self.xml['other_item'] = {str(k): str(v) for k, v in dict(other_item or {}).items()}
+
+    def add_other_item(self, field, label):
+        """添加 / 覆盖一个自定义记录项目（标准字段不会被它改掉，见 field_labels）。"""
+        other = self.get_other_item()
+        other[str(field)] = str(label)
+        self.write_other_item(other)
+        return other
+
+    def remove_other_item(self, field):
+        other = self.get_other_item()
+        other.pop(field, None)
+        self.write_other_item(other)
+        return other
+
+    def field_labels(self, include_standard=True):
+        """记录字段 -> 显示标签：标准字段（FIELD_LABELS）+ 本项目自定义字段。"""
+        labels = standard_field_labels() if include_standard else {}
+        labels.update(self.get_other_item())
+        return labels
+
+    # ---------- 记录列表 ----------
+    def get_fhl(self):
+        return self.project
+
+    def write_fhl(self, fhl):
+        self.project = fhl if isinstance(fhl, list) else []
+
+    def __len__(self):
+        return len(self.project)
+
+    # ---------- 属性便捷读写 ----------
+    @property
+    def creator(self):
+        return self.xml.get('creator', '')
+
+    @property
+    def last_editor(self):
+        return self.xml.get('last_editor', '')
+
+    @property
+    def created_time(self):
+        return self.xml.get('created_time', '')
+
+    @property
+    def last_edit_time(self):
+        return self.xml.get('last_edit_time', '')
+
+    @property
+    def last_version(self):
+        return self.xml.get('last_version', '')
+
+    @property
+    def encrypted(self):
+        return bool(self.xml.get('encrypted', False))
+
+    # ---------- 属性维护 ----------
+    def mark_created(self, editor=None, at=None):
+        """写入创建者与创建时间；**已有创建者时不覆盖**（创建者只认第一次编辑的人）。"""
+        if self.creator:
+            return False
+        self.xml['creator'] = '' if editor is None else str(editor)
+        self.xml['created_time'] = at or now_str()
+        return True
+
+    def mark_edited(self, editor=None, at=None):
+        """记一次编辑：刷新最后编辑者 / 最后编辑时间；文件尚无创建者则同时补创建者。"""
+        at = at or now_str()
+        self.mark_created(editor=editor, at=at)
+        self.xml['last_editor'] = '' if editor is None else str(editor)
+        self.xml['last_edit_time'] = at
+        return self.xml
+
+    def mark_opened(self, version=None):
+        """记录「上次打开（保存）该文件所用的版本」。只改内存，落盘发生在写文件时。"""
+        self.xml['last_version'] = version or current_version()
+        return self.xml['last_version']
+
+    def set_encrypted(self, flag):
+        """记录加密状态（写盘时由写入函数按是否给了密钥自动设置）。"""
+        self.xml['encrypted'] = bool(flag)
+        return self.xml['encrypted']
+
+
+# -------------------------- 解析 / 构造 --------------------------
+def build_project(data):
+    """把磁盘解析结果（dict / list / fhla_project）转成 fhla_project。"""
+    if isinstance(data, fhla_project):
+        return data
+    if data is None:
+        raise ValueError('fhla 数据结构为空')
+    if isinstance(data, list):
+        # 只有记录列表：把 .fhl 直接改名成 .fhla、或导出功能产出的纯记录文件
+        return fhla_project({'xml': {}, 'project': data})
+    if isinstance(data, dict):
+        return fhla_project(data)
+    raise ValueError(f'不支持的 fhla 数据类型：{type(data).__name__}')
+
+
+def as_project(data, meta=None):
+    """把「记录列表 / 属性 dict / fhla_project」统一成 fhla_project；meta 非空时覆盖属性块。"""
+    proj = build_project(data)
+    if meta is not None:
+        merged = dict(proj.get_xml())
+        merged.update(normalize_meta(meta))
+        proj.write_xml(merged)
+    return proj
+
+
+def parse_fhla_text(text):
+    """解析 .fhla 文本 → fhla_project（严格 JSON；结构不对抛 ValueError）。"""
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as e:
+        raise ValueError(f'.fhla 内容不是合法 JSON：{e}') from e
+    return build_project(data)
+
+
+# -------------------------- 读写文件 --------------------------
+def _ask_key():
+    """弹「输入加密密钥」对话框（沿用 .fhl 的同一实现）。"""
+    try:
+        return fhl_rw.get_user_key_dialog()
+    except Exception:
+        return None
+
+
+def _warn(title, text):
+    try:
+        QMessageBox.warning(None, title, text)
+    except Exception:
+        pass
+
+
+def read_fhla_file(file_path, key=None, ask_key=True):
+    """读取 .fhla 文件 → ``(fhla_project 或 None, key)``。
+
+    加密文件的密钥处理与 fhl_rw.read_fhl_file 保持一致：未给 key 时弹框索要密钥，
+    解密失败提示后**重新索要**；用户取消则返回 ``(None, None)``（调用方据此中断）。
+    """
+    with open(file_path, 'rb') as f:
+        raw = f.read()
+    try:
+        raw.decode('utf-8')
+        encrypted = False
+    except UnicodeDecodeError:
+        encrypted = True
+
+    while True:
+        if not encrypted:
+            text = raw.decode('utf-8')
+            break
+        if not key:
+            if not ask_key:
+                return None, None
+            key = _ask_key()
+            if not key:
+                return None, None
+        try:
+            text = fhl_aes.aes_gcm_decrypt(raw, key)
+            break
+        except Exception:
+            _warn('解密失败', '请检查密钥是否正确。')
+            key = None      # 让用户重新输入
+
+    proj = parse_fhla_text(text)
+    proj.set_encrypted(encrypted)   # 以磁盘实际字节为准
+    proj.mark_opened()              # 记下「上次打开所用版本」（保存时才落盘）
+    return proj, key
+
+
+def write_fhla_file(file_path, data, key=None, meta=None, editor=None, touch=True):
+    """把记录（或 fhla_project）写成 .fhla；返回真正落盘的 fhla_project。
+
+    * ``data``：记录列表 / ``{'xml':…, 'project':…}`` / fhla_project 均可。
+    * ``meta``：属性块；非空时覆盖 ``data`` 自带的属性（用于把调用方持有的最新属性写回）。
+    * ``key``：非空则 AES-GCM 加密落盘，并把 ``encrypted`` 置 True。
+    * ``touch=True``：算一次编辑——刷新最后编辑者 / 最后编辑时间。
+      ``touch=False``：**不算编辑**（例如「打开项目即自动保存一次」这种写入），
+      只补创建者与创建时间、并刷新「上次打开所用版本」。
+      导入导出这类不以编辑为语义的写入也可传 False。
+    """
+    editor = editor if editor is not None else current_editor()
+    proj = as_project(data, meta)
+    proj.set_encrypted(bool(key))
+    if touch:
+        proj.mark_edited(editor)
+    else:
+        # 即使这一次不算编辑，文件第一次落盘也要留下创建者（创建者只认第一次，幂等）
+        proj.mark_created(editor)
+    proj.mark_opened()
+
+    payload = proj.output_fhla_project()
+    if key:
+        blob = fhl_aes.aes_gcm_encrypt(json.dumps(payload, ensure_ascii=False), key)
+        with open(file_path, 'wb') as f:
+            f.write(blob)
+    else:
+        text = json.dumps(payload, ensure_ascii=False, indent=4)
+        with open(file_path, 'w', encoding='utf-8') as f:
+            f.write(text)
+    return proj
+
+
+# -------------------------- 按扩展名分派 --------------------------
+def read_project_file(file_path, key=None, ask_key=True):
+    """读项目文件 → ``(records, key, meta)``。
+
+    ``.fhla`` → 记录 + 属性块；其余（``.fhl`` 等）→ 记录 + ``meta=None``（行为与旧版一致）。
+    记录为 None 表示用户取消了密钥输入 / 解密失败退出，调用方应中断打开流程。
+    """
+    if is_fhla_path(file_path):
+        proj, key = read_fhla_file(file_path, key=key, ask_key=ask_key)
+        if proj is None:
+            return None, key, None
+        return proj.get_fhl(), key, proj.get_xml()
+    records, key = fhl_rw.read_fhl_file(file_path, key)
+    return records, key, None
+
+
+def save_project_file(file_path, records, key=None, meta=None, editor=None, touch=True):
+    """按扩展名写项目文件：``.fhla`` 带属性块，其余走老的 .fhl 写入（不引入新结构）。"""
+    if is_fhla_path(file_path):
+        return write_fhla_file(file_path, records, key=key, meta=meta,
+                               editor=editor, touch=touch)
+    fhl_rw.write_fhl_file(file_path, records, key)
+    return None
+
+
+# -------------------------- 保存对话框：格式由用户当场选 --------------------------
+# 「保存 / 另存为」一律给**两条过滤器**（.fhl 与 .fhla 各一条），让用户自己选存成
+# 哪种格式；合并成一条 `(*.fhl *.fhla)` 时用户没得选，且输入不带扩展名的文件名会
+# 落盘成「无扩展名」文件——再打开时按 .fhl 处理，属性就全丢了。
+# 「打开」类对话框仍用合并的一条（一次就能看到两种文件，更好用）。
+SAVE_FILTER_FHL = 'F HamLog项目 (*.fhl)'
+SAVE_FILTER_FHLA = 'F HamLog项目（带属性） (*.fhla)'
+
+
+def project_save_filters():
+    """保存对话框的过滤器字符串（两条，用户选的哪条决定落盘格式）。
+
+    逐段 ``i18n.tr`` 后再拼——整条拼完再翻会漏翻（见 i18n 约定）。
+    """
+    return ';;'.join((i18n.tr(SAVE_FILTER_FHL), i18n.tr(SAVE_FILTER_FHLA)))
+
+
+def complete_project_suffix(path, selected_filter=''):
+    """按用户所选的过滤器补全扩展名。
+
+    Qt 的静态保存对话框**不会**替我们加后缀（自绘对话框尤其如此），用户只输入
+    ``123`` 就会得到一个没有扩展名的文件。规则：已经有 .fhl / .fhla 扩展名
+    （大小写不敏感）时原样返回；否则按所选过滤器补 .fhla 或 .fhl（默认 .fhl）。
+    """
+    path = str(path or '')
+    low = path.lower()
+    if low.endswith(FHL_SUFFIX) or low.endswith(FHLA_SUFFIX):
+        return path
+    use_fhla = FHLA_SUFFIX in str(selected_filter or '').lower()
+    return path + (FHLA_SUFFIX if use_fhla else FHL_SUFFIX)
+
+
+def _fhla_selftest():
+    """格式层自检（不依赖界面）：写 → 读 → 校验，返回临时目录。
+
+    用法（在已安装 editable 包的 venv 里）::
+
+        python -c "from f_hamlog import project; project._fhla_selftest()"
+    """
+    import tempfile
+    tmp = tempfile.mkdtemp(prefix='fhla_selftest_')
+    plain = os.path.join(tmp, 'a.fhla')
+    locked = os.path.join(tmp, 'b.fhla')
+    records = [{'date': '2026-10-16', 'time': '22:00', 'm_call': 'BI8SQL',
+                'o_call': 'BG5ABC', 'freq': '144.1', 'notes': '', 'wx': '晴'}]
+
+    proj = fhla_project({'xml': {}, 'project': records})
+    proj.add_other_item('wx', '天气')
+    write_fhla_file(plain, proj, editor='BI8SQL')
+    back, _ = read_fhla_file(plain)
+    assert back.get_fhl() == records, '记录未原样往返'
+    assert back.get_other_item() == {'wx': '天气'}, '自定义记录项目丢失'
+    assert back.creator == 'BI8SQL' and back.created_time, '创建者 / 创建时间缺失'
+    assert back.last_version == current_version(), '版本未记录'
+    assert back.encrypted is False and detect_encrypted(plain) is False
+
+    write_fhla_file(locked, records, key='pwd', editor='BG5ABC')
+    assert detect_encrypted(locked) is True
+    got, key = read_fhla_file(locked, key='pwd')
+    assert got.get_fhl() == records
+    assert got.encrypted is True and got.last_editor == 'BG5ABC'
+    assert read_fhla_file(locked, ask_key=False)[0] is None, '无密钥应返回 None'
+
+    r2, k2, meta2 = read_project_file(plain)
+    assert r2 == records and meta2 and meta2['creator'] == 'BI8SQL'
+    for k, v in describe_meta(meta2, path=plain):
+        print(f'  {k}：{v}')
+    print('.fhla 自检通过：', tmp)
+    return tmp
+
+
 file = None
 key = None
 _open_windows = []  # 保持由本模块打开的卫星批量记录窗口引用，防止被回收
 # “新建日志 / 更多信息”窗口引用：在 main() 内被 _on_sync 等引用，
 # 必须先于任何使用初始化，否则首次打开项目时引用会抛 NameError。
 project_others_window = None
+# 「自定义日志字段」窗口引用（同一时刻只开一个，重复点菜单就换一个新的）
+custom_fields_window = None
 
 # Qt 对象存活性判断：QMainWindow 的 destroyed 信号回调执行时，底层 C++ 对象已被删除，
 # 此时任何 setWindowTitle / setVisible 等调用都会抛
@@ -610,9 +1185,22 @@ class _SyncThread(QThread):
 
 
 def main(window, filee='', save_path='', key_=None, quick_poject=False, recovered=False,
-         remote=None, is_host=False, server=None):
+         remote=None, is_host=False, server=None, fhla_meta=None):
+    """打开主日志窗。
+
+    fhla_meta：打开 ``.fhla`` 项目时由调用方传入的属性块（创建者 / 编辑者 / 时间 /
+    版本 / 加密状态）；``.fhl`` 传入 None 即可。详见本文件「.fhla 文件格式」一节。
+    """
     global file,key
     key = key_
+    if isinstance(filee, dict) and ('project' in filee or 'xml' in filee):
+        # 传进来的是 .fhla 的整块内容（调用方没拆开，或文件扩展名不是 .fhla 时走了 .fhl 读法）：
+        # 记录照收、属性块一并接住。否则会按「非 list」当成空项目打开，随后一次自动保存
+        # 就把整份项目覆盖成空文件。
+        _fhla_proj = fhla_project(filee)
+        if not isinstance(fhla_meta, dict):
+            fhla_meta = _fhla_proj.get_xml()
+        filee = _fhla_proj.get_fhl()
     if isinstance(filee, list):
         file = filee
         _upgrade_file_records(file)
@@ -655,6 +1243,60 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
     # 本会话最近一次「真正写到本机文件」的路径与内容：用于跳过重复的整份重写，
     # 又不会误跳过首次保存（详见 save() 内注释）。
     _last_written = {'path': None, 'json': None}
+
+    # ---------- .fhla 扩展格式的属性（创建者 / 编辑者 / 时间 / 版本 / 加密状态） ----------
+    # 属性只在「保存成 .fhla」时写入磁盘；.fhl 保持原样，不给老文件引入新结构
+    # （实现见本文件「.fhla 文件格式」一节）。
+    # meta 由调用方（main.py 打开 .fhla 时）传入；直接调用 / 另存为 .fhla 时新建一份，
+    # 创建者就认「本次首次落盘的操作者」——不在写盘时去读目标文件里的旧属性，
+    # 否则「把本项目另存到别人建的 .fhla 上」会把对方的创建者身份抄过来。
+    # open_json：打开时的内容快照——与它一致说明「这次写入只是打开后的自动保存」，
+    # 不刷「最后编辑者 / 最后编辑时间」；真有改动才算一次编辑（详见 write_fhla_file）。
+    # dirty：**属性块**（目前只有自定义字段 other_item）被用户改过的标记。记录列表之外的
+    # 改动同样算一次编辑，但 open_json 只看记录，所以要单独记一笔（见 _write_project_file）。
+    _fhla = {'meta': dict(fhla_meta) if isinstance(fhla_meta, dict) else None,
+             'open_json': _bk_init,
+             'dirty': False}
+
+    def _fhla_editor():
+        """本次编辑的操作者：优先设置里的「己方呼号」，其次系统用户名。"""
+        return current_editor()
+
+    def _fhla_meta_for_write():
+        """要写入 .fhla 的属性块：还没有就新建一份空白属性（其余由写入函数填充）。"""
+        if _fhla['meta'] is None:
+            _fhla['meta'] = empty_meta()
+        return _fhla['meta']
+
+    # ---------- 自定义日志字段（.fhla 属性块里的 other_item） ----------
+    # 字段定义随项目走，且**只属于 .fhla**（存在 xml 属性块里，改完立即写盘）；
+    # .fhl 没有属性块 → 不受支持：管理窗口拒绝打开，custom_fields() 恒为空，
+    # 「新建日志 / 更多信息」也就只显示标准 20 行（不为没有归宿的字段留位置）。
+    def custom_fields():
+        """当前项目的自定义字段：``{字段键: 显示标签}``（没有 / 不受支持则空 dict）。
+
+        自定义字段是 .fhla 的特性（定义存在属性块 other_item 里）；.fhl 是纯记录格式、
+        没有属性块 → 一律当「没有自定义字段」（录入窗口也只显示标准 20 行），
+        否则另存为 .fhl 之后还会冒出一批其实无处保存的字段行。
+        """
+        if _fhla['meta'] is None or not is_fhla_path(save_path):
+            return {}
+        return dict(normalize_meta(_fhla['meta']).get('other_item') or {})
+
+    def set_custom_fields(fields):
+        """整体替换自定义字段；.fhla 项目立即落盘（属性只存在 .fhla 里，不落盘等于丢）。
+
+        走统一写入口，既刷新属性（编辑者 / 时间 / 版本 / 加密状态），也保证
+        「改了字段定义」被记成一次编辑（_fhla['dirty']，见 _write_project_file）。
+        """
+        meta = normalize_meta(_fhla['meta'] or empty_meta())
+        meta['other_item'] = {str(k): str(v) for k, v in dict(fields or {}).items()}
+        _fhla['meta'] = meta
+        _fhla['dirty'] = True
+        if save_path and is_fhla_path(save_path) and _rc() is None:
+            _write_project_file(save_path)
+            backup.clear_backup(backup.PROJECT_BACKUP)
+            _bk_snapshot()
 
     def _bk_snapshot(snap=None):
         """把当前内容记为「已持久化」。
@@ -1057,24 +1699,9 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
             project_others_window = QMainWindow()
             project_others_window.resize(410, 680)
             project_others_window.setWindowTitle('新建日志')
-            translation_dict = {
-                'date': '日期',
-                'time': '时间',
-                'm_call': '己方呼号',
-                'o_call': '对方呼号',
-                'freq': '频率',
-                'freq_rx': '接收频率',
-                'prop_mode': '传播方式',
-                'sat_name': '卫星名称',
-                'mode': '调制模式',
-                'm_rst': '己方接收信号','o_rst': '对方接收信号',
-                'm_qth': '己方QTH','o_qth': '对方QTH',
-                "m_dig": '己方设备','o_dig': '对方设备',
-                'm_ant': '己方天线','o_ant': '对方天线',
-                'm_pow': '己方功率','o_pow': '对方功率',
-                'notes': '备注'
-            }
-            rows = len(translation_dict)
+            translation_dict = DIALOG_FIELDS
+            custom = custom_fields()   # 本项目自定义字段：追加在标准 20 行之后
+            rows = len(translation_dict) + len(custom)
             table_others = QTableWidget(rows, 2)
             table_others.setColumnWidth(0, 100)  # 设置第1列宽度为100
             table_others.setColumnWidth(1, 250)
@@ -1085,8 +1712,14 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
                 item = QTableWidgetItem(translation_dict[i])
                 item.setFlags(item.flags() & ~Qt.ItemIsEditable)  # 禁止编辑
                 table_others.setItem(row, 0, item)
-                item2 = QTableWidgetItem(file_app[i])  # 第2列可以编辑
+                item2 = QTableWidgetItem(cell_text(file_app.get(i, '')))  # 第2列可以编辑
                 table_others.setItem(row, 1, item2)
+                row += 1
+            for k, label in custom.items():
+                item = QTableWidgetItem(label)
+                item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+                table_others.setItem(row, 0, item)
+                table_others.setItem(row, 1, QTableWidgetItem(cell_text(file_app.get(k, ''))))
                 row += 1
             # 己方呼号(行2)与对方呼号(行3)单元格编辑时实时转大写
             _call_del = call_upper.UpperCallDelegate()
@@ -1096,15 +1729,15 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
             # 字段名写在「单元格」里（不是表头），translate_widget 只翻表头不会翻它，
             # 故显式接入翻译；每次按中文原文重设，中英来回切都能正确还原。
             i18n.bind_cell_texts(project_others_window, table_others,
-                                 list(translation_dict.values()), col=0)
+                                 list(translation_dict.values()) + list(custom.values()), col=0)
             central_widget = QWidget()
             project_others_window.setCentralWidget(central_widget)
             layout_others = QVBoxLayout(central_widget)
             layout_others.addWidget(table_others)
 
             def save_changes():
-                # 获取表格数据并更新到 file 结构
-                keys_list = list(translation_dict.keys())
+                # 获取表格数据并更新到 file 结构（自定义字段排在标准字段之后）
+                keys_list = list(translation_dict.keys()) + list(custom.keys())
                 for row in range(len(keys_list)):
                     key = keys_list[row]
 
@@ -1116,14 +1749,14 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
                         if not re.search(r'^\d{2}:\d{2}?$', table_others.item(row, 1).text()):
                             QMessageBox.warning(project_others_window, "格式错误", f"时间格式错误，应为HH:MM")
                             return
-                    elif key == 'm_call' or key == 'o_call' or key == 'freq' or key == 'mode'or key == 'm_rst' or key == 'o_rst':
+                    elif key in ('m_call', 'o_call', 'freq', 'mode', 'm_rst', 'o_rst'):
                         if table_others.item(row, 1).text() == '':
-                            QMessageBox.warning(project_others_window, "格式错误", f"缺少 {translation_dict[key]} (必填)")
+                            QMessageBox.warning(project_others_window, "格式错误", f"缺少 {DIALOG_FIELDS.get(key, key)} (必填)")
                             return
 
                     item = table_others.item(row, 1)  # 第二列是可编辑的内容
                     if item!=None:
-                        file_app[key] = item.text()
+                        write_back_field(file_app, key, item.text(), key in custom)
                 project_others_window.close()
 
                 snapshot_before()
@@ -1141,24 +1774,9 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         project_others_window = QMainWindow()
         project_others_window.resize(410, 690)
         project_others_window.setWindowTitle('更多信息')
-        translation_dict = {
-            'date': '日期',
-            'time': '时间',
-            'm_call': '己方呼号',
-            'o_call': '对方呼号',
-            'freq': '频率',
-            'freq_rx': '接收频率',
-            'prop_mode': '传播方式',
-            'sat_name': '卫星名称',
-            'mode': '调制模式',
-            'm_rst': '己方接收信号','o_rst': '对方接收信号',
-            'm_qth': '己方QTH','o_qth': '对方QTH',
-            "m_dig": '己方设备','o_dig': '对方设备',
-            'm_ant': '己方天线','o_ant': '对方天线',
-            'm_pow': '己方功率','o_pow': '对方功率',
-            'notes': '备注'
-        }
-        rows = len(translation_dict)
+        translation_dict = DIALOG_FIELDS
+        custom = custom_fields()   # 本项目自定义字段：追加在标准 20 行之后
+        rows = len(translation_dict) + len(custom)
         table_others = QTableWidget(rows, 2)
         table_others.setColumnWidth(0, 100)  # 设置第1列宽度为100
         table_others.setColumnWidth(1, 250)
@@ -1169,8 +1787,14 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
             item = QTableWidgetItem(translation_dict[i])
             item.setFlags(item.flags() & ~Qt.ItemIsEditable)  # 禁止编辑
             table_others.setItem(row, 0, item)
-            item2 = QTableWidgetItem(file[index][i])  # 第2列可以编辑
+            item2 = QTableWidgetItem(cell_text(file[index].get(i, '')))  # 第2列可以编辑
             table_others.setItem(row, 1, item2)
+            row += 1
+        for k, label in custom.items():
+            item = QTableWidgetItem(label)
+            item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+            table_others.setItem(row, 0, item)
+            table_others.setItem(row, 1, QTableWidgetItem(cell_text(file[index].get(k, ''))))
             row += 1
         # 己方呼号(行2)与对方呼号(行3)单元格编辑时实时转大写
         _call_del = call_upper.UpperCallDelegate()
@@ -1180,14 +1804,14 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         # 字段名写在「单元格」里（不是表头），translate_widget 只翻表头不会翻它，
         # 故显式接入翻译；每次按中文原文重设，中英来回切都能正确还原。
         i18n.bind_cell_texts(project_others_window, table_others,
-                             list(translation_dict.values()), col=0)
+                             list(translation_dict.values()) + list(custom.values()), col=0)
         central_widget = QWidget()
         project_others_window.setCentralWidget(central_widget)
         layout_others = QVBoxLayout(central_widget)
         layout_others.addWidget(table_others)
         def save_changes():
-            # 获取表格数据并更新到 file 结构
-            keys_list = list(translation_dict.keys())
+            # 获取表格数据并更新到 file 结构（自定义字段排在标准字段之后）
+            keys_list = list(translation_dict.keys()) + list(custom.keys())
             # 先校验所有字段，校验不通过则不记录撤销点
             for row in range(len(keys_list)):
                 key = keys_list[row]
@@ -1203,9 +1827,9 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
                     if not re.search(r'^\d{2}:\d{2}$', text):
                         QMessageBox.warning(project_others_window, "格式错误", f"时间格式错误，应为HH:MM")
                         return
-                elif key == 'm_call' or key == 'o_call' or key == 'freq' or key == 'mode'or key == 'm_rst' or key == 'o_rst':
+                elif key in ('m_call', 'o_call', 'freq', 'mode', 'm_rst', 'o_rst'):
                     if text == '':
-                        QMessageBox.warning(project_others_window, "格式错误", f"缺少 {translation_dict[key]} (必填)")
+                        QMessageBox.warning(project_others_window, "格式错误", f"缺少 {DIALOG_FIELDS.get(key, key)} (必填)")
                         return
             # 校验通过，记录撤销点后再写入
             snapshot_before()
@@ -1213,7 +1837,7 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
                 key = keys_list[row]
                 item = table_others.item(row, 1)  # 第二列是可编辑的内容
                 if item!=None:
-                    file[index][key] = item.text()
+                    write_back_field(file[index], key, item.text(), key in custom)
             project_others_window.close()
             table_update()
         def del_log(index):
@@ -1262,13 +1886,14 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         # （消除“未保存”标记）。之后若再次编辑，定时器会因 file 偏离快照而
         # 重新标记“未保存”。
         nonlocal save_path
-        sp, _ = QFileDialog.getSaveFileName(
+        sp, sel = QFileDialog.getSaveFileName(
             window,
             i18n.tr("保存恢复的文件"),
             os.path.join(desktop_dir(), '恢复的项目.fhl'),
-            "F HamLog项目 (*.fhl)")
+            project_save_filters())   # 两种格式各一条：由用户当场选 .fhl / .fhla
         if sp == '':
             return False
+        sp = complete_project_suffix(sp, sel)
         global key
         snap = _write_project_file(sp)
         backup.clear_backup(backup.PROJECT_BACKUP)
@@ -1328,24 +1953,40 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         return True
 
     def _write_project_file(path):
-        """把当前 file 写到 path，并记录「本会话已写入」的路径与内容（供 save() 跳过重复写）。"""
+        """把当前 file 写到 path，并记录「本会话已写入」的路径与内容（供 save() 跳过重复写）。
+
+        .fhla → 连同属性块写（创建者 / 最后编辑者 / 时间 / 版本 / 加密状态），
+        其余（.fhl 等）→ 与旧版完全一致，只写记录列表。
+        """
         global key
-        fhl_rw.write_fhl_file(path, file, key)
+        snap = _bk_json()          # 与「打开时的快照」比对，用于判断这次写入算不算一次编辑
+        if is_fhla_path(path):
+            written = write_fhla_file(
+                path, file, key=key,
+                meta=_fhla_meta_for_write(),
+                editor=_fhla_editor(),
+                # 记录变了、或属性块（自定义字段）被改过 → 都算一次编辑
+                touch=(snap != _fhla['open_json'] or _fhla['dirty']))
+            _fhla['meta'] = written.get_xml()   # 回收刷新后的属性（编辑者/时间/版本/加密状态）
+            _fhla['dirty'] = False
+        else:
+            fhl_rw.write_fhl_file(path, file, key)
         # 顺手算一次内容快照，既记录“已写入内容”，也供调用方的 _bk_snapshot 复用
         _last_written['path'] = path
-        _last_written['json'] = _bk_json()
-        return _last_written['json']
+        _last_written['json'] = snap
+        return snap
 
     def osave():
         import json
-        sp, _ = QFileDialog.getSaveFileName(
+        sp, sel = QFileDialog.getSaveFileName(
             window,  # 父窗口，可以是None或者您的主窗口
             i18n.tr("另存为文件"),  # 对话框标题
             desktop_dir(),  # 初始目录：桌面，默认文件名为空
-            "F HamLog项目 (*.fhl)"  # 文件过滤器，只显示.fos文件
+            project_save_filters()  # 两种格式各一条：.fhl 只存记录 / .fhla 附带属性
         )
         if sp == '':
             return False
+        sp = complete_project_suffix(sp, sel)
         snap = _write_project_file(sp)
         backup.clear_backup(backup.PROJECT_BACKUP)
         _bk_snapshot(snap)
@@ -1456,16 +2097,18 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         selected_records = get_selected_records()
         if not selected_records:
             return
-        save_path, _ = QFileDialog.getSaveFileName(
+        save_path, sel = QFileDialog.getSaveFileName(
             window,
             i18n.tr("导出选中日志为FHL文件"),
             desktop_dir(),
-            "F HamLog项目 (*.fhl)"
+            project_save_filters()      # 两种格式各一条，由用户当场选
         )
         if not save_path:
             return
+        save_path = complete_project_suffix(save_path, sel)
         global key
-        fhl_rw.write_fhl_file(save_path,selected_records,key)
+        # 按扩展名分派：.fhla 附带属性块，其余与旧版一致（只写记录）
+        save_project_file(save_path, selected_records, key, editor=_fhla_editor())
 
             
         QMessageBox.information(window, "导出成功", f"已导出 {len(selected_records)} 条记录到：\n{save_path}")
@@ -1488,14 +2131,15 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
     # 待用户真正点击“保存”时，再由 save()/_do_save 弹出“保存恢复的文件”。
     # 多人日志模式（本机开放服务端 / 加入他人多人日志）不需要本地项目文件，跳过选择。
     if save_path == '' and not recovered and remote is None:
-        save_path, _ = QFileDialog.getSaveFileName(
+        save_path, sel = QFileDialog.getSaveFileName(
             window,  # 父窗口，可以是None或者您的主窗口
             i18n.tr("新建文件"),  # 对话框标题
             desktop_dir(),  # 初始目录：桌面，默认文件名为空
-            "F HamLog项目 (*.fhl)"  # 文件过滤器，只显示.fos文件
+            project_save_filters()  # 两种格式各一条：由用户当场选 .fhl / .fhla
         )
         if save_path == '':
             return
+        save_path = complete_project_suffix(save_path, sel)
     print(save_path)
     window.resize(1350, 700)
     if _rc() is not None:
@@ -1564,6 +2208,140 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
     # 多人日志模式：不显示加密菜单（与服务端后端互斥）
     window._aes_action = aes_action
 
+    file_menu.addSeparator()
+
+    def show_project_props():
+        """「项目属性」（Alt+Enter）：展示 .fhla 的属性（创建者 / 最后编辑者 / 时间 / 版本 / 加密状态）。
+
+        属性保存在 .fhla 的 xml 块里（见本文件「.fhla 文件格式」一节）；.fhl 是纯记录格式、
+        没有这块 → 直接提示「不支持的格式」，不做半展示（避免把内存状态当成文件属性看）。
+        加密状态一律按当前密钥（key）显示，而不是只信文件里的声明。
+        """
+        if not is_fhla_path(save_path):
+            # 多段文案逐段 tr 后再拼：整条拼完再翻会漏翻（i18n 词表按整串匹配）
+            QMessageBox.information(
+                window, '项目属性',
+                i18n.tr('不支持的格式：当前项目不是 .fhla 文件。') + '\n\n'
+                + i18n.tr('.fhl 是纯记录格式，不含创建者、编辑者、时间、版本、加密状态等属性。') + '\n'
+                + i18n.tr('请「另存为」带属性的 .fhla 项目文件后再查看。'))
+            return
+        meta = normalize_meta(_fhla['meta'] or empty_meta())
+        meta['encrypted'] = bool(key)
+        lines = [f'{k}：{v}' for k, v in describe_meta(meta, path=save_path)]
+        QMessageBox.information(window, '项目属性', '\n'.join(lines))
+
+    props_action = QAction('项目属性', window)
+    # Alt+Enter：Return（主键盘）与 Enter（小键盘区）在 Qt 里是两个不同的键，
+    # 两个都收下，用户按哪个都能打开（Windows 上「Enter」通常指主键盘那个）。
+    props_action.setShortcuts([QKeySequence('Alt+Return'), QKeySequence('Alt+Enter')])
+    props_action.triggered.connect(show_project_props)
+    file_menu.addAction(props_action)
+
+    def manage_custom_fields():
+        """「自定义日志字段」：增删改本项目的自定义字段（存在 .fhla 属性块 other_item 里）。
+
+        字段定义只存在于 .fhla 的 xml 块里 → .fhl 属**不受支持的格式**，直接提示并拒绝打开
+        （与「项目属性」同一套口径，不做「只在内存生效」的半支持）。
+        字段键要写进记录的 JSON 当键用，所以必须能当键：字母 / 数字 / 下划线、不以数字开头，
+        且不能与标准字段重名（标准字段的标签由 FIELD_LABELS 决定，另存为不会覆盖它）。
+        「添加字段」按既定风格插入空行直接内联编辑，不弹二级对话框。
+        """
+        global custom_fields_window
+        if not is_fhla_path(save_path):
+            # 多段文案逐段 tr 后再拼：整条拼完再翻会漏翻（i18n 词表按整串匹配）
+            QMessageBox.information(
+                window, '自定义日志字段',
+                i18n.tr('不支持的格式：当前项目不是 .fhla 文件。') + '\n\n'
+                + i18n.tr('.fhl 是纯记录格式，不含自定义日志字段。') + '\n'
+                + i18n.tr('请「另存为」带属性的 .fhla 项目文件后再使用。'))
+            return
+        if custom_fields_window is not None:
+            custom_fields_window.close()
+        dlg = QMainWindow()
+        custom_fields_window = dlg
+        dlg.setWindowTitle('自定义日志字段')
+        dlg.resize(470, 500)
+        central = QWidget()
+        dlg.setCentralWidget(central)
+        lay = QVBoxLayout(central)
+
+        tbl = QTableWidget(0, 2)
+        tbl.setHorizontalHeaderLabels(['字段键', '显示名称'])
+        tbl.setColumnWidth(0, 160)
+        tbl.setColumnWidth(1, 250)
+        tbl.setSelectionBehavior(QAbstractItemView.SelectRows)
+        tbl.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        lay.addWidget(tbl)
+
+        def add_row(field='', label=''):
+            r = tbl.rowCount()
+            tbl.insertRow(r)
+            tbl.setItem(r, 0, QTableWidgetItem(field))
+            tbl.setItem(r, 1, QTableWidgetItem(label))
+
+        for _k, _v in custom_fields().items():
+            add_row(_k, _v)
+
+        def add_field():
+            add_row('', '')
+            tbl.setCurrentCell(tbl.rowCount() - 1, 0)
+            tbl.editItem(tbl.item(tbl.rowCount() - 1, 0))
+
+        def del_rows():
+            rows = sorted({i.row() for i in tbl.selectedIndexes()}, reverse=True)
+            for r in rows:
+                tbl.removeRow(r)
+
+        btn_add = QPushButton('添加字段')
+        btn_add.clicked.connect(add_field)
+        btn_del = QPushButton('删除选中')
+        btn_del.clicked.connect(del_rows)
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(10)
+        btn_row.addWidget(btn_add)
+        btn_row.addWidget(btn_del)
+        btn_row.addStretch(1)
+        lay.addLayout(btn_row)
+
+        def warn(msg):
+            QMessageBox.warning(dlg, '格式错误', msg)
+
+        def save_fields():
+            global custom_fields_window
+            fields = {}
+            for r in range(tbl.rowCount()):
+                k_item, v_item = tbl.item(r, 0), tbl.item(r, 1)
+                key = (k_item.text() if k_item else '').strip()
+                label = (v_item.text() if v_item else '').strip()
+                if key == '' and label == '':
+                    continue          # 整行空白（点了「添加字段」又没填）→ 忽略
+                if not CUSTOM_FIELD_KEY_RE.match(key):
+                    warn(i18n.tr('字段键只能用字母、数字、下划线，且不能以数字开头：') + key)
+                    return
+                if key in FIELD_LABELS:
+                    warn(i18n.tr('该字段键是标准字段，不能作为自定义字段：')
+                         + f'{key}（{FIELD_LABELS[key]}）')
+                    return
+                if label == '':
+                    warn(i18n.tr('缺少显示名称：') + key)
+                    return
+                if key in fields:
+                    warn(i18n.tr('字段键重复：') + key)
+                    return
+                fields[key] = label
+            set_custom_fields(fields)
+            dlg.close()
+            custom_fields_window = None
+            toast_tip.show_toast(f'已保存 {len(fields)} 个自定义字段。', window)
+
+        btn_save = QPushButton('保存更改')
+        btn_save.clicked.connect(save_fields)
+        lay.addWidget(btn_save)
+        dlg.show()
+
+    custom_fields_action = QAction('自定义日志字段', window)
+    custom_fields_action.triggered.connect(manage_custom_fields)
+    file_menu.addAction(custom_fields_action)
 
     '''file_menu.addSeparator()
 
@@ -1957,11 +2735,14 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
             if not recs:
                 QMessageBox.warning(research_window, "导出失败", "没有可导出的搜索结果。")
                 return
-            save_path, _ = QFileDialog.getSaveFileName(
-                research_window, i18n.tr("导出搜索结果为FHL文件"), desktop_dir(), i18n.tr("F HamLog项目 (*.fhl)"))
+            save_path, sel = QFileDialog.getSaveFileName(
+                research_window, i18n.tr("导出搜索结果为FHL文件"), desktop_dir(),
+                project_save_filters())     # 两种格式各一条，由用户当场选
             if not save_path:
                 return
-            fhl_rw.write_fhl_file(save_path, recs, key)
+            save_path = complete_project_suffix(save_path, sel)
+            # 按扩展名分派：.fhla 附带属性块，其余与旧版一致（只写记录）
+            save_project_file(save_path, recs, key, editor=_fhla_editor())
             QMessageBox.information(research_window, "导出成功", f"已导出 {len(recs)} 条记录到：\n{save_path}")
 
         def _export_search_adi():
@@ -2461,7 +3242,6 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
             file.append(rec)
         table_update(scroll_to_bottom=True)   # 新记录追加在末尾 → 跳到最后一条，便于查看
         # 直接落盘到当前项目文件（不依赖自动保存开关，也不弹“保存成功”）
-        global key
         if _rc() is not None:
             # 多人日志：追加即同步到服务端
             try:
@@ -2470,7 +3250,8 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
                 toast_tip.show_toast('保存失败：' + str(e), window, kind='warning')
         else:
             if save_path:
-                fhl_rw.write_fhl_file(save_path, file, key)
+                # 经统一写入口落盘：.fhla 会顺带刷新属性（创建者/编辑者/时间/版本/加密状态）
+                _write_project_file(save_path)
             else:
                 # 恢复项目 / 尚未落盘的新建项目：没有目标文件可写 → 交给统一的保存流程
                 # （恢复场景弹「保存恢复的文件」）；用户取消则提前返回，内容继续以
@@ -2538,8 +3319,15 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
     window._quick_add = quick_log  # 直接把预填记录追加到当前项目（不弹窗）
 
     pack_menu = menu_bar.addMenu('插件')
-    with open(app_path('file/pack_list.txt'), 'r', encoding='utf-8') as f:
-        pack_list = eval(f.read())
+    # pack_list.txt 属**运行时生成**（由插件设置写入）：文件缺失 / 内容坏了都按
+    # 「无插件」处理，绝不能让主窗因此打不开（缺一个插件清单不该阻塞整个项目）。
+    try:
+        with open(app_path('file/pack_list.txt'), 'r', encoding='utf-8') as f:
+            pack_list = eval(f.read())
+    except (OSError, SyntaxError, ValueError, NameError):
+        pack_list = []
+    if not isinstance(pack_list, list):
+        pack_list = []
     # 在菜单栏上显示插件状态（若无插件则显示“未安装插件”）
     plugin_label = QLabel()
     plugin_label.setStyleSheet(theme.hint_css('padding: 4px;'))
@@ -3040,6 +3828,15 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         '_bk_is_dirty': _bk_is_dirty,
         '_bk_tick': _bk_tick,
         'save': save,
+        # .fhla 属性（创建者/编辑者/时间/版本/加密状态）：可读可写，供冒烟脚本断言
+        'fhla_meta': _fhla,
+        'fhla_editor': _fhla_editor,
+        'show_project_props': show_project_props,
+        # 自定义日志字段（other_item）：定义读写 + 管理窗口，供冒烟脚本驱动
+        'custom_fields': custom_fields,
+        'set_custom_fields': set_custom_fields,
+        'manage_custom_fields': manage_custom_fields,
+        'custom_fields_window': lambda: custom_fields_window,
     }
 
     window.show()

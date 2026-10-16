@@ -10,13 +10,18 @@
 
 import os
 from f_hamlog import fhl_rw
+from f_hamlog.paths import app_path
 
-PROJECT_BACKUP = os.path.join('file', 'project_backup.fhl')
-BATCH_BACKUP = os.path.join('file', 'batch_backup.fhl')
+# ⚠️ 必须是**数据目录下的绝对路径**（app_path 解析），不能用 cwd 相对的 'file/xxx'。
+# 2026-10-16：旧写法在仓库根跑一次应用就会凭空建出 <仓库根>/file/ 并把
+# paths._app_base_dir() 的 cwd 候选带偏 → app_path() 全部解析到仓库根，
+# file/main.fhl、file/pack_list.txt 集体 FileNotFoundError（主窗都打不开）。
+PROJECT_BACKUP = app_path(os.path.join('file', 'project_backup.fhl'))
+BATCH_BACKUP = app_path(os.path.join('file', 'batch_backup.fhl'))
 
 # 兼容迁移：旧版本曾把批量备份写成 batch_backup.fh（错误扩展名），统一改为 .fhl。
 # 若旧文件存在且新文件不存在（或新文件为空而旧文件非空），则重命名以保留可恢复内容。
-_OLD_BATCH_BACKUP = os.path.join('file', 'batch_backup.fh')
+_OLD_BATCH_BACKUP = app_path(os.path.join('file', 'batch_backup.fh'))
 if os.path.exists(_OLD_BATCH_BACKUP):
     _old_size = os.path.getsize(_OLD_BATCH_BACKUP)
     _new_exists = os.path.exists(BATCH_BACKUP)

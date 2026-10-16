@@ -17,8 +17,40 @@
   `main.py` 用 `app.aboutToQuit.connect(satellite_auto_updater.stop)`，`stop()` 内 `requestInterruption→wait→terminate` 兜底。
 - 本机 shell 部分可用（shim 缺 `dirname`/`cat`）：`ls/head/tail/wc/rm/git` 可用。
 - 文件读写优先 Glob/Grep/Read/Edit；项目 venv：`D:\F-Dev\BIG\F_HamLog\.venv\Scripts\python.exe`（绝对路径）。
+- **数据目录解析顺序 = `F_HAMLOG_DATA_DIR` → exe 目录 → 模块目录 → cwd（垫底）**（`paths.py`）：
+  **绝对不要相信 cwd**——任何进程/脚本都能在 cwd 下造出（甚至带标记文件的）`file/`，
+  2026-10-16 因此踩了两次坑；要指定数据目录用环境变量覆盖。
+  **数据文件一律走 `app_path('file/…')` 绝对路径，禁止用 cwd 相对路径写**。
 - **不主动 git commit/push**，除非用户明确要求。
 - 分支：`main`（默认/发版）、`develop`（开发）、`develop-English`（英文翻译）。
+
+## 项目文件格式：`.fhl` / `.fhla`（2026-10-16 定稿，细节见 `DETAILS.md`）
+- `.fhl` 不变 = 纯 `list[dict]` 记录；`.fhla` = `{"xml": 属性块, "project": 记录列表}`。
+  **读写统一走 `project.read_project_file` / `save_project_file`（按扩展名分派）**，
+  别在调用处直接 `fhl_rw.*`（会漏掉属性块，且 `.fhla` 会被写成纯 list 丢属性）。
+  **实现就在 `project.py` 里**（`FIELD_LABELS` 之后那段）——原来的独立模块 `fhla_rw.py`
+  已于 2026-10-16 并入 `project.py` 并删除；接口名没变，只是命名空间改成 `project.*`。
+- 属性：`other_item`（**自定义日志字段**，扩展 FIELD_LABELS）+ 创建者 / 最后编辑者 / 创建时间 /
+  最后编辑时间 / 上次打开所用版本（= `__version__`）/ 加密状态。**上传送三元组 `(records, key, meta)`**，
+  `.fhl` 的 meta 恒为 `None`。回写时必须把 meta 原样带回，否则属性被重置。
+- `encrypted` 只是声明，**以字节能否 UTF-8 解为准**；「创建者」只认第一次落盘的人（幂等）；
+  **「打开即自动保存」不算一次编辑**（`project.py` 用打开时的内容快照比对决定 `touch`；
+  改自定义字段则靠 `_fhla['dirty']` 单独记一笔）。
+- **「项目属性」= `Alt+Enter`**（`Alt+Return` + `Alt+Enter` 两个都挂）；**`.fhl` 项目直接提示
+  「不支持的格式」**（`.fhl` 没有属性块，不做半展示）。
+- **自定义日志字段**：管理入口「文件 → 自定义日志字段」（两列内联编辑，添加=插入空行）；
+  **在「新建日志 / 更多信息」两窗中追加在标准 20 行之后**（行序常量 `DIALOG_FIELDS`，
+  行 2/3 的呼号大写委托不能动；`bind_cell_texts` 要带上自定义标签）。
+  **`.fhl` 属不受支持的格式：管理窗口拒绝打开（提示不支持的格式），`custom_fields()` 恒空，
+  录入窗口只显示标准 20 行**——不做「内存生效」半支持。
+  **绝不进主表 14 列**（主表必须与旧版逐项一致，勿擅自加列）。
+- **保存对话框让用户当场选格式**：`project.project_save_filters()`（两条过滤器：
+  `*.fhl` / `*.fhla`）+ `project.complete_project_suffix(path, sel)`（补扩展名，Qt 不补）。
+  默认选中第一条 → 默认 `.fhl`。**「打开」对话框仍用合并的一条**。
+- ⚠️ **数据目录解析的坑（2026-10-16）**：`paths._app_base_dir()` 只认「`file/` 里有标记文件
+  （m_xml.txt / main.fhl / amateur.tle / pack_list.txt）」的候选；**任何代码都不许往 cwd 相对
+  路径写数据**（`backup.py` 曾写 `file/project_backup.fhl`，凭空造出假 `file/` 把 DATA_DIR
+  带偏 → 主窗打不开）。新加数据文件时一律 `app_path('file/xxx')`。详见 `DETAILS.md`。
 
 ## 主题系统（theme.py）——基线 = 6d48024
 - 浅/深**一律采用平台原生调色板**，不自建兜底色；应用保持**系统原生样式（windows11）**。

@@ -147,13 +147,15 @@ def settings_path():
     """设置文件路径。
 
     优先复用 `satellite_pred.app_path` 的打包路径解析（单一事实来源），
-    不可用时退回相对路径。延迟导入，避免模块级重依赖。
+    不可用时退回 `paths.app_path`（同样是数据目录下的绝对路径，**不用 cwd 相对路径**：
+    否则在别处跑一次就会凭空建出假 file/，把数据目录解析带偏）。
     """
     try:
         from f_hamlog import satellite_pred as sp
         return sp.SETTINGS_PATH
     except Exception:
-        return os.path.join('file', 'm_xml.txt')
+        from f_hamlog.paths import app_path
+        return app_path('file/m_xml.txt')
 
 
 def read_settings():
