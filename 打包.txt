@@ -9,9 +9,43 @@ nuitka --standalone --output-filename="F HamLog 2" --output-folder-name=main --m
 --include-module=f_hamlog.remote_crypto 会直接 FATAL，因为该解析发生在编译主模块之前，
 那时 __main__.py 里的 sys.path.insert(src) 还没生效。
 
+===== 打包前必须让 src 在 PYTHONPATH 上（否则产出空壳 exe）=====
+现象：打包「成功」，双击 exe 完全没反应；窗口版 console-mode=disable 下连日志都没有。
+真跑（把控制台模式换成 force，或临时抹掉清单里的提权要求）会看到：
+    File "...\dist\__main__.py", line 21, in <module>
+    ModuleNotFoundError: No module named 'f_hamlog'
+原因：Nuitka 解析 __main__.py 里的 from f_hamlog.main import main 时，如果 f_hamlog
+不在 sys.path 上，它会把 __main__.py 当「孤立脚本」编译，**不报错也不告警**
+（构建日志里 zero 条 Unresolved import），生成的 exe 里一个 f_hamlog 模块都没有。
+
+为什么本机常常没事、CI 就中招：本地 pip install -e . 老式安装会在 site-packages 放一个
+.pth（内容就是 src 的绝对路径），src 恰好在 sys.path 上；新版 setuptools 的
+pip install -e . 生成的是 finder 形态（__editable___*_finder.py），不再把 src 塞进
+sys.path → Nuitka 静态分析看不到包。
+
+所以：打包命令前必须
+    Windows(PowerShell): $env:PYTHONPATH = "<repo>\src"
+    bash:                PYTHONPATH=<repo>/src
+两个 workflow（main.yml / preview.yml）已加这一行。本地手工打包同理。
+
+验证方法（别只看「打包成功」）：扫 exe 字节里有没有包内模块符号
+    .venv\Scripts\python.exe -c "d=open(r'main.dist\F HamLog 2.exe','rb').read(); print(d.count(b'f_hamlog.app_log'))"
+正常是 > 0；0 就是空壳。CI 的「校验打包产物」步骤已内置这项检查，命中直接失败。
+
+===== 依赖版本只认 第三方模块.txt =====
+该文件是 requirements 格式（pkg==版本），workflow 里用 pip install -r 安装，
+并逐条比对缓存里的 venv 版本（actions/cache 的 restore-keys 是前缀匹配，只验
+「能 import」会让旧版本环境被静默复用）。改版本只改这一个文件，别在 workflow
+里另写包名列表。
+
 ===== 运行日志：程序自己写，优先看这个 =====
 启动即写「<exe 同目录>\file\log\」（开发时是 src\f_hamlog\file\log\）：
 
+  F_HamLog_boot_YYYY-MM-DD.log   启动兜底日志：**先在**这条上找。入口在导入任何
+                                 f_hamlog 模块之前就写，记录启动环境（exe / argv / cwd /
+                                 package / frozen）、app_log 是否装配成功及失败原因、
+                                 导入 f_hamlog.main 失败时的完整 traceback。
+                                 打包后「双击没反应」几乎都在这份里。
   F_HamLog_YYYY-MM-DD.log        启动横幅（版本 / python / 平台 / 数据目录 / argv / cwd）
                                  + 所有 print（stdout 记 INFO、stderr 记 ERROR）
                                  + logging 记录 + 未捕获异常（主线程与线程，完整 traceback
@@ -19,13 +53,19 @@ nuitka --standalone --output-filename="F HamLog 2" --output-folder-name=main --m
   F_HamLog_crash_YYYY-MM-DD.log  只有 C 层崩溃（段错误 / 访问违例）时才有内容，是栈帧
 
 按自然日一个文件，**只保留最近三天**（今天 / 昨天 / 前天），启动时自动删更早的。
-界面出问题、点了没反应、闪退 —— 直接让用户把当天那个 .log 整个发来。
+界面出问题、点了没反应、闪退 —— 直接让用户把当天那几个 .log 整个发来。
+
+日志目录写不进去时（典型：装到 C:\Program Files 又没拿到管理员权限），
+程序会自动退到 **%LOCALAPPDATA%\F_HamLog\log**（再不行 %TEMP%\F_HamLog\log），
+并在横幅里记一条「日志装配告警」写明原因。所以「exe 旁边没有 file\log」时，
+先去 %LOCALAPPDATA%\F_HamLog\log 找 —— 不要再当成「日志没生成」。
 
 --noinclude-data-files="file/log/*.log" 是为了别把开发机上的日志打进安装包（不写也不崩，
 只是包里会多几个旧日志）。打包前顺手删掉 src/f_hamlog/file/log 更干净。
 
 ===== 日志也看不到的情况 =====
-1) 程序在日志装配**之前**就崩了（缺 VC 运行库、解压失败、Nuitka 启动期异常）：
+1) 连 F_HamLog_boot_*.log 都没有：说明程序在建目录之前就崩了（缺 VC 运行库 /
+   解压在只读位置 / Nuitka 启动期异常）。
    把 --windows-console-mode=disable 换成 force 另打一份调试版（--output-filename 换名，
    别覆盖正式产物），从命令行启动，traceback 直接打在控制台上：
    nuitka --standalone --output-filename="F HamLog 2 debug" --output-folder-name=main-debug --main=src/f_hamlog/__main__.py --windows-icon-from-ico=src/f_hamlog/file/F_HamLog.ico --msvc=latest --windows-console-mode=force --enable-plugin=pyside6 --include-package=skyfield --include-package-data=skyfield --include-package=numpy --windows-uac-admin --include-data-dir=src/f_hamlog/file=file/

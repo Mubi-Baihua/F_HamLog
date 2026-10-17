@@ -7,8 +7,16 @@
 - PySide6 桌面应用，Nuitka 打包；**src 结构**（包 `src/f_hamlog/`，入口 `__main__.py`，
   兼容 `-m f_hamlog` 与直跑）。开发用 `pip install -e .`，**包内模块不加 sys.path 守卫**（只 `__main__.py` 一处）。
 - **版本单一来源 = `__init__.py.__version__`**（pyproject 用 `dynamic`+`attr`），一切版本号禁止硬编码（i18n 用 `{}`）。
-- **退出前必须停掉所有后台 `QThread`**（`app.aboutToQuit` → `AutoTleUpdater.stop()`：
-  `requestInterruption→wait→terminate`），否则 GC 时 Qt 崩溃（Windows「Python 停止运行」）。
+- **退出前必须停掉所有后台 `QThread`**：所有长生命周期线程**一律继承
+  `bg_thread.BgThread`**（只做弱引用登记，不改行为），`main.py` 里
+  `app.aboutToQuit` 连 `bg_thread.stop_all()`、`app.exec()` 返回后再调一次（幂等）。
+  原因：Qt 在「线程还在跑就被析构」时走 `qFatal`→`abort`，Windows 上是
+  `0xc0000409` / 出错模块 `Qt6Core.dll`，**没有任何 Python traceback**。各窗口
+  `closeEvent` 里的 `wait()` 只覆盖「用户关这个窗」，覆盖不到 quit / 关机 / 最后窗口关闭。
+- **依赖版本单一来源 = 根目录 `第三方模块.txt`**（requirements 格式，全部 `==` 锁定，含
+  运行时 7 个 + 仅打包用的 nuitka）。两个 workflow 用 `pip install -r` 装，**禁止在
+  workflow 里另写包名列表**（会与 `hashFiles('第三方模块.txt')` 缓存键脱钩）；venv 缓存
+  命中时**逐条比对版本**而不是只验 import（`restore-keys` 前缀匹配会把旧 venv 还回来）。
 - **数据目录 = `F_HAMLOG_DATA_DIR` → exe 目录 → 模块目录 → cwd（垫底）**（`paths._app_base_dir()`
   只认带标记文件的候选）。**绝不相信 cwd**：数据文件一律 `app_path('file/…')` 绝对路径，
   禁止 cwd 相对路径写（`backup.py` 曾造出假 `file/` → 主窗打不开，2026-10-16）。
@@ -88,6 +96,12 @@
   删除后处理 `_checked_rows`（批量清空 / 单条行号前移）。**别再改回 `QMessageBox.question`**。
 
 ## 卫星 / 多人日志 / 服务端 / 验证 / 发布
+- **打包必须显式给 `PYTHONPATH=<repo>/src`**（本地手工打包同 CI）：Nuitka 解析
+  `--main=src/f_hamlog/__main__.py` 时若 `f_hamlog` 不在 `sys.path`，会把 `__main__.py` 当孤立脚本
+  编译，**零告警**产出「空壳 exe」（双击没反应、无日志，跑起来才见 `No module named 'f_hamlog'`）。
+  本地老式 `pip install -e .` 的 `.pth` 恰好在 path 上，所以本机常看不出问题。两个 workflow 的
+  「校验打包产物」已内置**空包检查**（exe 字节里找不到 `f_hamlog.app_log` 直接失败）。
+  验证口诀：**「打包成功」≠产物可用**，必须扫符号或真跑一次。
 - 卫星：`satellite_pred.py`（skyfield 离线）；`MAX_PREDICT_HOURS=240`、`MAX_SELECTED_SATELLITES=250`；
   数据源 = `file/tle_sources.txt` + 独立窗口（`#` 禁用、延迟自动探测只进 `_ROLE_DELAY`、按 NORAD 增量更新）；
   入口 project「卫星→通联预测」Ctrl+Shift+E / main「卫星过境」「通联预测」；

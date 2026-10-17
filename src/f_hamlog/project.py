@@ -3,6 +3,7 @@ from PySide6.QtGui import QAction, QKeySequence, QBrush
 from PySide6.QtCore import Qt, QEvent, QObject, QTimer, QThread, Signal, QRect  # 新增导入 Qt
 from f_hamlog.dialog_defaults import desktop_dir
 from f_hamlog import i18n
+from f_hamlog import bg_thread
 from functools import partial
 import time as time_
 import sys
@@ -1451,7 +1452,7 @@ class RemoteConnection:
                 pass
 
 
-class _SyncThread(QThread):
+class _SyncThread(bg_thread.BgThread):
     """后台线程：每秒向服务端拉取一次最新日志（FETCH→FILE，拉取式同步），
     同时接收 PEERS 广播以刷新在线客户端列表。"""
     sync_signal = Signal(list)

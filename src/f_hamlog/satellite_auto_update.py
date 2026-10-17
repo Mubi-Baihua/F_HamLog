@@ -21,6 +21,7 @@ import time
 
 from PySide6.QtCore import QTimer, QThread, Signal
 
+from f_hamlog import bg_thread
 from f_hamlog import satellite_pred as sp
 
 
@@ -96,7 +97,7 @@ def should_update_now(settings=None, now=None):
 #  后台下载线程
 # ---------------------------------------------------------------------------
 
-class _FetchThread(QThread):
+class _FetchThread(bg_thread.BgThread):
     """在后台线程中强制刷新星历缓存。done(ok: bool, msg: str)。"""
 
     done = Signal(bool, str)

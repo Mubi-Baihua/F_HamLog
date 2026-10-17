@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, QThread, Signal, QTimer
 
+from f_hamlog import bg_thread
 from f_hamlog import satellite_pred as sp
 from f_hamlog import theme
 from f_hamlog import i18n
@@ -711,7 +712,7 @@ class DictEditorDialog(QDialog):
             QMessageBox.warning(self, '保存失败', '写入文件出错：%s' % e)
 
 
-class PredictWorker(QThread):
+class PredictWorker(bg_thread.BgThread):
     progress = Signal(int)
     done = Signal(list)
 
@@ -778,7 +779,7 @@ class PredictWorker(QThread):
         }
 
 
-class TleFetchWorker(QThread):
+class TleFetchWorker(bg_thread.BgThread):
     """后台下载/解析业余卫星 TLE，避免阻塞主线程（加速界面打开）。"""
     fetched = Signal(list)
     progress = Signal(str)

@@ -8,6 +8,7 @@ import re
 import json
 from f_hamlog import fhl_rw
 from f_hamlog import backup
+from f_hamlog import bg_thread
 from f_hamlog import theme
 from f_hamlog import i18n
 from f_hamlog.dialog_defaults import desktop_dir
@@ -435,9 +436,15 @@ def main():
     from f_hamlog import satellite_auto_update
     satellite_auto_updater = satellite_auto_update.AutoTleUpdater(window)
     satellite_auto_updater.start()
-    # 退出前必须停掉后台下载线程，否则 App 结束时 QThread 仍在运行会被析构 → 崩溃
-    # （Windows 上表现为“Python 停止运行”）。见 AutoTleUpdater.stop()。
+    # 退出前必须停掉后台线程，否则 App 结束时 QThread 仍在运行会被析构 → Qt 走 qFatal
+    # （Windows 上表现为 0xc0000409 / 事件日志「应用程序错误 1000」出错模块 Qt6Core.dll，
+    #   用户看到的就是「程序突然消失」，且没有任何 Python traceback）。
+    # ① 星历线程有自己的停止顺序（先置位再等），先单独停；
+    # ② 再用 bg_thread.stop_all() 兜底扫一遍所有登记过的后台线程
+    #    —— 覆盖「关掉主窗口退出」「quit()」「最后一个窗口关闭」这些不经过
+    #    各窗口 closeEvent 的路径。见 bg_thread 模块说明。
     app.aboutToQuit.connect(satellite_auto_updater.stop)
+    app.aboutToQuit.connect(lambda: bg_thread.stop_all())
 
     # ---------- 启动时静默升级旧版数据（卫星名 → 卫星编号） ----------
     # 自选卫星、卫星转发器表、TQSL 映射表在旧版本里都以「卫星名」为键，而卫星名会
@@ -498,6 +505,10 @@ def main():
     QTimer.singleShot(0, _check_recovery)
 
     app.exec()
+
+    # 最后一道网：aboutToQuit 若因异常路径没触发（或退出过程中又起了线程），
+    # 这里再扫一遍。stop_all 幂等，重复调用无副作用。
+    bg_thread.stop_all()
 
 if __name__ == '__main__':
     main()

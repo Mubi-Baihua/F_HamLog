@@ -45,12 +45,20 @@ RETENTION_DAYS = 3
 LOG_PREFIX = 'F_HamLog'
 CRASH_PREFIX = 'F_HamLog_crash'
 
+# 主目录写不进去时的退路（按顺序试）：%LOCALAPPDATA%\F_HamLog\log → %TEMP%\F_HamLog\log
+# 打包安装到 Program Files 后，若程序没拿到管理员权限，exe 旁边的 file/log 是只读的，
+# 此时必须有个用户级目录兜住日志，否则「打不开 + 没有日志」就真的无从查起。
+FALLBACK_ENVS = ('LOCALAPPDATA', 'APPDATA', 'TEMP', 'TMP')
+FALLBACK_SUBDIR = ('F_HamLog', 'log')
+
 _LOG_FMT = '%(asctime)s [%(levelname)s] %(name)s: %(message)s'
 _LOG_DATEFMT = '%Y-%m-%d %H:%M:%S'
 
 _state = {
     'installed': False,
     'path': '',
+    'dir': '',
+    'last_error': '',
     'handler': None,
     'stdout': None,
     'stderr': None,
@@ -64,11 +72,71 @@ _date_re = re.compile(r'(\d{4})-(\d{2})-(\d{2})')
 # ---------------------------------------------------------------- 目录与文件
 
 def log_dir():
-    """日志目录的绝对路径（不保证已存在）。"""
+    """日志目录的绝对路径（不保证已存在）。
+
+    一旦 :func:`setup` 选定了目录（含兜底目录），后续一律以它为准，
+    否则 ``log_path()`` 会和真正的 handler 指向不同位置。
+    """
+    chosen = _state.get('dir')
+    if chosen:
+        return chosen
     try:
         return paths.app_path(LOG_DIR_NAME)
     except Exception:
         return ''
+
+
+def _candidate_dirs():
+    """候选日志目录：数据目录下的 ``file/log`` 优先，其后是用户级兜底目录。"""
+    found = []
+    try:
+        d = paths.app_path(LOG_DIR_NAME)
+    except Exception:
+        d = ''
+    if d:
+        found.append(d)
+    for env in FALLBACK_ENVS:
+        base = os.environ.get(env)
+        if not base:
+            continue
+        cand = os.path.join(base, *FALLBACK_SUBDIR)
+        if cand not in found:
+            found.append(cand)
+    return found
+
+
+def _record_error(msg):
+    """记一条「装配失败原因」，供启动兜底日志（__main__）转述给用户。"""
+    try:
+        old = _state.get('last_error') or ''
+        _state['last_error'] = (old + '\n' + msg) if old else msg
+    except Exception:
+        pass
+
+
+def last_error():
+    """最近一次装配失败的原因（成功时为空字符串）。"""
+    return _state.get('last_error') or ''
+
+
+def _writable(d):
+    """真写一个探针文件来判定可写 —— ``makedirs`` 成功不代表能建文件。
+
+    Program Files 下的目录对普通进程是只读的：``isdir`` 为真、``makedirs`` 也可能
+    因为目录已存在而直接返回，只有真写一次才知道能不能落日志。
+    """
+    try:
+        os.makedirs(d, exist_ok=True)
+    except Exception as exc:
+        return False, 'makedirs 失败：%r' % (exc,)
+    probe = os.path.join(d, '.fhamlog_write_test')
+    try:
+        with open(probe, 'wb') as f:
+            f.write(b'ok')
+        os.remove(probe)
+        return True, ''
+    except Exception as exc:
+        return False, '写入失败：%r' % (exc,)
 
 
 def log_path(day=None):
@@ -349,6 +417,9 @@ def write_banner(extra=''):
         log.info('platform=%s', platform.platform())
         log.info('数据目录=%s', _safe_data_dir())
         log.info('日志文件=%s（保留 %d 天）', _state.get('path') or log_path(), RETENTION_DAYS)
+        reason = _state.get('last_error')
+        if reason:
+            log.warning('日志装配告警（目录可能已退到用户目录）：%s', reason)
         log.info('argv=%s  cwd=%s', sys.argv, os.getcwd())
         if extra:
             log.info(extra)
@@ -373,15 +444,27 @@ def setup(level=logging.INFO, retention_days=RETENTION_DAYS, banner=True):
     """
     if _state['installed']:
         return _state['path']
-    d = log_dir()
-    if not d:
+
+    # 选目录：先试数据目录下的 file/log；装到 Program Files 又没拿到管理员权限时
+    # 那里是只读的，必须退到用户级目录，否则「打不开 + 没日志」无从查起。
+    chosen = ''
+    primary_reason = ''
+    for cand in _candidate_dirs():
+        writable, why = _writable(cand)
+        if writable:
+            if primary_reason:
+                _record_error('主日志目录不可写，已退到 %s（%s）' % (cand, primary_reason))
+            chosen = cand
+            break
+        if not primary_reason:
+            primary_reason = '%s %s' % (cand, why)
+        _record_error('日志目录不可写：%s（%s）' % (cand, why))
+    if not chosen:
+        _record_error('没有任何可写的日志目录，日志功能未启用')
         return ''
+    _state['dir'] = chosen
     try:
-        os.makedirs(d, exist_ok=True)
-    except OSError:
-        return ''
-    try:
-        purge_old_logs(retention_days, d)
+        purge_old_logs(retention_days, chosen)
     except Exception:
         pass
 
@@ -398,7 +481,8 @@ def setup(level=logging.INFO, retention_days=RETENTION_DAYS, banner=True):
             root.setLevel(level)
         _state['handler'] = handler
         _state['path'] = handler.baseFilename
-    except Exception:
+    except Exception as exc:
+        _record_error('创建日志文件失败：%r' % (exc,))
         return ''
     # handler 自己写失败（磁盘满 / 文件被删）时，logging 默认会往 sys.stderr 打错误 ——
     # 而 stderr 已被 Tee 接管，会再触发一次落盘失败。关掉这条回灌通道。
@@ -484,7 +568,8 @@ def teardown():
             handler.close()
         except Exception:
             pass
-    _state.update({'installed': False, 'path': '', 'handler': None,
+    _state.update({'installed': False, 'path': '', 'dir': '', 'last_error': '',
+                   'handler': None,
                    'stdout': None, 'stderr': None,
                    'excepthook': None, 'thread_hook': None})
     try:

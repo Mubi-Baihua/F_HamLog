@@ -23,6 +23,7 @@ from PySide6.QtCore import QEvent, QObject, QRect, Qt, QThread, Signal
 from PySide6.QtGui import QPalette
 from PySide6.QtWidgets import *
 
+from f_hamlog import bg_thread
 from f_hamlog import satellite_pred as sp
 from f_hamlog import theme
 from f_hamlog import i18n
@@ -126,7 +127,7 @@ class SourceItemDelegate(QStyledItemDelegate):
         painter.restore()
 
 
-class DelayProbeWorker(QThread):
+class DelayProbeWorker(bg_thread.BgThread):
     """后台逐个测数据源延迟，每测完一个就发一次结果。
 
     只测、不碰界面：结果带回「探测令牌」，由界面按令牌找回对应行

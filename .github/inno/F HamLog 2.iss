@@ -95,6 +95,10 @@ OutputDir={#OutputDirPath}
 OutputBaseFilename={#OutputBaseFilename}
 SetupIconFile={#RepoRoot}\src\f_hamlog\file\F_HamLog.ico
 SolidCompression=yes
+; 130MB 的主程序 + Qt 库，用最高压缩率；LZMA 单独进程跑，避免 ISCC 进程本身吃满内存
+; （本机只有 16G，跑 Blender 时更容易被 OOM 杀掉）。
+Compression=lzma2/max
+LZMAUseSeparateProcess=yes
 WizardStyle=modern dynamic windows11
 
 [Languages]
@@ -105,33 +109,50 @@ Name: "chinesesimplified"; MessagesFile: "{#ChineseMessagesFile}"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
 [Files]
-;普通程序文件，每次升级正常覆盖，排除file文件夹
+; ---- ① 程序本体：每次升级整体覆盖 -------------------------------------------
+;    排除 file\ 整个目录 —— 它下面混着「用户数据」和「随版本更新的资源」，
+;    混在一起用 ignoreversion 覆盖会冲掉用户设置，所以要拆开处理（见 ②③④）。
 Source: "{#SourceDistDir}\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SourceDistDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "file\*"
 
-; file目录：单文件级"存在则保留、缺失则创建（带数据）"
-; 不使用 ignoreversion/recursesubdirs，改用 onlyifdoesntexist：
-; 仅当目标同名文件不存在时才安装，升级时用户数据不被覆盖，新增模板会自动补回
-Source: "{#SourceDistDir}\file\amateur.tle"; DestDir: "{app}\file"; Flags: onlyifdoesntexist
-Source: "{#SourceDistDir}\file\F_HamLog.ico"; DestDir: "{app}\file"; Flags: onlyifdoesntexist
-Source: "{#SourceDistDir}\file\main.fhl"; DestDir: "{app}\file"; Flags: onlyifdoesntexist
-Source: "{#SourceDistDir}\file\m_xml.txt"; DestDir: "{app}\file"; Flags: onlyifdoesntexist
-Source: "{#SourceDistDir}\file\pack_list.txt"; DestDir: "{app}\file"; Flags: onlyifdoesntexist
-Source: "{#SourceDistDir}\file\sat_radio_dict.txt"; DestDir: "{app}\file"; Flags: onlyifdoesntexist
-Source: "{#SourceDistDir}\file\tqsl_dict.txt"; DestDir: "{app}\file"; Flags: onlyifdoesntexist
-Source: "{#SourceDistDir}\file\world_land.json"; DestDir: "{app}\file"; Flags: onlyifdoesntexist
+; ---- ② file\ 下「必须跟着版本走」的只读资源：覆盖 ---------------------------
+;    ⚠️ 这几个以前也写成 onlyifdoesntexist，导致**升级后用户手里还是旧字典 / 旧地图**
+;       （卫星转发器表、TQSL 映射、世界地图轮廓都是随版本改进的数据）。
+Source: "{#SourceDistDir}\file\F_HamLog.ico";      DestDir: "{app}\file"; Flags: ignoreversion
+Source: "{#SourceDistDir}\file\sat_radio_dict.txt"; DestDir: "{app}\file"; Flags: ignoreversion
+Source: "{#SourceDistDir}\file\tqsl_dict.txt";     DestDir: "{app}\file"; Flags: ignoreversion
+Source: "{#SourceDistDir}\file\world_land.json";   DestDir: "{app}\file"; Flags: ignoreversion
+
+; ---- ③ file\ 下「其余一切」：缺失则补装，已存在则保留 -----------------------
+;    **用反向排除而不是逐条白名单**：以前是 8 个文件的白名单，于是给 file\ 新增
+;    tle_sources.txt / sat_map_markers.txt 这类数据时忘了改脚本 → 全新安装就是缺文件。
+;    现在新增数据文件会自动补装（仍然不覆盖用户已有内容，安全方向一致）。
+;    排除项 = ②里已单独处理过的 + ④的种子 + 开发机残留（python-*.exe / 未保存备份）+ 运行时目录。
+Source: "{#SourceDistDir}\file\*"; DestDir: "{app}\file"; Flags: onlyifdoesntexist recursesubdirs createallsubdirs; Excludes: "F_HamLog.ico,sat_radio_dict.txt,tqsl_dict.txt,world_land.json,amateur.tle,main.fhl,m_xml.txt,tle_sources.txt,sat_map_markers.txt,python-*.exe,*backup.fhl,log\*,keys\*,remote_rooms\*,pypack\*"
+
+; ---- ④ 用户数据 / 可写状态的「种子」 ---------------------------------------
+;    全新安装才写入；升级一律保留用户现有内容。
+Source: "{#SourceDistDir}\file\amateur.tle";        DestDir: "{app}\file"; Flags: onlyifdoesntexist
+Source: "{#SourceDistDir}\file\main.fhl";           DestDir: "{app}\file"; Flags: onlyifdoesntexist
+Source: "{#SourceDistDir}\file\m_xml.txt";          DestDir: "{app}\file"; Flags: onlyifdoesntexist
+Source: "{#SourceDistDir}\file\tle_sources.txt";    DestDir: "{app}\file"; Flags: onlyifdoesntexist
+Source: "{#SourceDistDir}\file\sat_map_markers.txt"; DestDir: "{app}\file"; Flags: onlyifdoesntexist
 
 [Dirs]
-Name: "{app}\file"; Check: not DirExists(ExpandConstant('{app}\file'))
+; {app}\file 一定存在（③④ 会往里写）；这里只是把「程序会自己创建的运行时目录」
+; 提前建好，省得首次启动时因为 Program Files 写权限时序问题卡一下。
+; 不用 Check: not DirExists(...)：Inno 的 [Dirs] 本身就是「不存在才建」。
+Name: "{app}\file"
+Name: "{app}\file\log"
+Name: "{app}\file\keys"
+Name: "{app}\file\remote_rooms"
 
 [Icons]
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [INI]
-; 避免重复安装时堆叠多个键：Inno 的 [INI] 写入是「追加」语义（同一文件重复运行会
-; 把键再写一遍），因此用 destructive 标志让每次安装都把 version.txt 整个重建。
-; {app}\file 是安装包对用户数据的“存在则保留”保护范围，version.txt 属于本包自己
-; 维护的版本标识（不属用户数据），因此覆盖它是预期行为。
+; version.txt 记录「当前装的是哪个版本」，属于本包自己维护的标识。
+; 这里只要一行：Inno 的 [INI] 走 WritePrivateProfileString，同 section+key 是覆盖语义，
+; 重复运行不会堆叠。以前写了两行一模一样的（第二行没有 flags），纯属冗余，已删。
 Filename: "{app}\file\version.txt"; Section: "version"; Key: "version"; String: "{#MyAppVersion}"; Flags: uninsdeleteentry createkeyifdoesntexist
-Filename: "{app}\file\version.txt"; Section: "version"; Key: "version"; String: "{#MyAppVersion}"

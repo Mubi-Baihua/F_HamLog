@@ -43,6 +43,7 @@ from PySide6.QtGui import (
     QPainter, QPen, QBrush, QColor, QPainterPath, QPixmap, QFont,
 )
 
+from f_hamlog import bg_thread
 from f_hamlog import satellite_pred as sp
 from f_hamlog import theme
 from f_hamlog import i18n
@@ -547,7 +548,7 @@ def _footprint_paths(lon, lat, ang, W, H, n=360):
     return [path, path.translated(-W, 0.0), path.translated(W, 0.0)]
 
 
-class TrackWorker(QThread):
+class TrackWorker(bg_thread.BgThread):
     """后台批量计算多颗卫星的地面轨迹（矢量化，避免阻塞界面）。
 
     发出 done(dict)：{卫星名: [(lat, lon, alt_km, elev_deg 或 None), ...]}

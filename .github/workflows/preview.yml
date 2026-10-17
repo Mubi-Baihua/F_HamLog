@@ -324,11 +324,35 @@ jobs:
           $venv   = Join-Path $env:GITHUB_WORKSPACE '.venv'
           $venvPy = Join-Path $venv 'Scripts\python.exe'
 
-          # 缓存命中时先校验依赖是否齐全（Python 补丁版本变化会让旧 venv 失效）
+          # 缓存命中时校验「版本」而不只是「能 import」：
+          # actions/cache 的 restore-keys 是前缀匹配，key 变了仍会还原到旧 venv，
+          # 只验 import 会让旧版本的环境被静默复用（曾因此 CI 用 PySide6 6.11.2、
+          # 本地 6.11.1，两边行为不一致）。这里逐条比对 第三方模块.txt 里的 ==版本。
+          $pins = @{}
+          foreach ($line in Get-Content '第三方模块.txt') {
+            if ($line -match '^\s*([A-Za-z0-9_.\-]+)\s*==\s*(\S+)\s*$') { $pins[$matches[1]] = $matches[2] }
+          }
+          if ($pins.Count -eq 0) { throw '第三方模块.txt 里没有解析到任何 ==锁定版本' }
+
           $ready = $false
           if (Test-Path $venvPy) {
-            & $venvPy -c "import PySide6, pandas, openpyxl, skyfield, numpy, cryptography, matplotlib, nuitka" 2>$null
-            if ($LASTEXITCODE -eq 0) { $ready = $true; Write-Host '缓存命中：直接复用虚拟环境' }
+            $installed = @{}
+            & $venvPy -m pip list --format=freeze 2>$null | ForEach-Object {
+              $p = $_ -split '=='
+              if ($p.Count -eq 2) { $installed[$p[0].Trim()] = $p[1].Trim() }
+            }
+            $bad = @()
+            foreach ($name in $pins.Keys) {
+              if ($installed[$name] -ne $pins[$name]) {
+                $bad += ('{0} 需 {1} 实际 {2}' -f $name, $pins[$name], $installed[$name])
+              }
+            }
+            if ($bad.Count -eq 0) {
+              $ready = $true
+              Write-Host '缓存命中：依赖版本与 第三方模块.txt 完全一致'
+            } else {
+              Write-Host ('缓存版本不符，将重建：' + ($bad -join '；'))
+            }
           }
 
           if (-not $ready) {
@@ -337,7 +361,11 @@ jobs:
             python -m venv $venv
             if ($LASTEXITCODE -ne 0) { throw '创建虚拟环境失败' }
             & $venvPy -m pip install --upgrade pip
-            & $venvPy -m pip install pyside6 pandas openpyxl nuitka skyfield numpy cryptography matplotlib
+            # 依赖版本只认仓库根目录的 第三方模块.txt（带 == 锁定版本），
+            # 别再在这里写包名列表：写死列表会和缓存键 hashFiles('第三方模块.txt') 脱钩，
+            # 出现「缓存按 A 算、实际装的是 B」的漂移（曾导致 CI 装到 PySide6 6.11.2、
+            # 本地是 6.11.1，两边行为不一致却查不出来源）。
+            & $venvPy -m pip install -r '第三方模块.txt'
             if ($LASTEXITCODE -ne 0) { throw '安装依赖失败' }
             & $venvPy -m pip install -e .
             if ($LASTEXITCODE -ne 0) { throw '以可编辑模式安装 f-hamlog 失败' }
@@ -380,6 +408,16 @@ jobs:
           #    「from f_hamlog import remote_crypto」自动跟随收录（已实测在 Included 列表里）。
           #    写 --include-module=f_hamlog.remote_crypto 会直接 FATAL：这一步的模块解析发生在
           #    编译主模块之前，那时 __main__.py 里的 sys.path.insert(src) 还没生效，包名不可见。
+          # ⚠️ PYTHONPATH 必须带上 <repo>\src，否则打出来的 exe 打不开：
+          #    新版 setuptools 的 `pip install -e .` 生成的是「finder 形式」可编辑安装
+          #    （__editable___f_hamlog_*_finder.py + 一行 .pth），**不再把 <repo>\src 写进
+          #    sys.path**（旧版会写，所以以前没事）。Nuitka 静态分析解析 __main__.py 里的
+          #    `from f_hamlog.main import main` 时因此找不到包，直接把 __main__.py 当孤立脚本
+          #    编译 —— 既不报错也不告警，产出的 exe 一启动就是
+          #    `ModuleNotFoundError: No module named 'f_hamlog'`；窗口版（console-mode=disable）
+          #    下表现为「双击一闪而过 / 完全没反应，连日志都没有」。
+          #    只在这一步设置，不影响其它步骤；用分号保留原有值。
+          $env:PYTHONPATH = (Join-Path $env:GITHUB_WORKSPACE 'src') + ';' + $env:PYTHONPATH
           & $env:PYTHON_VENV -m nuitka --standalone `
             --assume-yes-for-downloads `
             --output-filename="$env:APP_EXE_NAME" `
@@ -393,7 +431,10 @@ jobs:
             --include-package-data=skyfield `
             --include-package=numpy `
             --windows-uac-admin `
-            --include-data-dir=src/f_hamlog/file=file/
+            --include-data-dir=src/f_hamlog/file=file/ `
+            --noinclude-data-files="file/log/*.log" `
+            --noinclude-data-files="file/*backup.fhl" `
+            --noinclude-data-files="file/python-*.exe"
           if ($LASTEXITCODE -ne 0) { throw "Nuitka 打包失败（退出码 $LASTEXITCODE）" }
 
       - name: 校验打包产物
@@ -412,6 +453,17 @@ jobs:
           $size = [math]::Round((Get-Item $exe).Length / 1MB, 1)
           Write-Host "主程序：$exe（$size MB）"
           Write-Host 'main.dist 文件数：' ([System.IO.Directory]::GetFiles($dist, '*', 'AllDirectories').Count)
+
+          # ⚠️ 空包检查（必须保留）：如果构建时 f_hamlog 不在 sys.path 上，Nuitka 会把
+          #    __main__.py 当孤立脚本编译 —— 不报错、不告警，但 exe 里一个 f_hamlog 模块
+          #    都没有，用户双击就是「没反应、连日志都没有」。这里直接扫字节兜住这一整类
+          #    「打包成功但产物是空壳」的问题，让它在 CI 里当场失败，而不是发出去才发现。
+          $probe = 'f_hamlog.app_log'
+          $text = [System.Text.Encoding]::GetEncoding(28591).GetString([System.IO.File]::ReadAllBytes($exe))
+          if (-not $text.Contains($probe)) {
+            throw "打包产物里找不到 '$probe' —— f_hamlog 包没被收录，exe 一启动就会 ModuleNotFoundError。请检查构建步骤是否把 <repo>\src 放进了 PYTHONPATH。"
+          }
+          Write-Host "空包检查通过：exe 内含 $probe"
 
       # ------------------------------------------------------------------
       # 8. Inno Setup 6 生成安装包（注入预览用 AppName / AppId / 时间戳版本号）

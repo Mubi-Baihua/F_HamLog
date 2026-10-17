@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import QThread, Signal, QTimer
 
+from f_hamlog import bg_thread
 from f_hamlog import satellite_pred as sp
 from f_hamlog import theme
 from f_hamlog import i18n
@@ -153,7 +154,7 @@ class StationBox(QGroupBox):
             return ''
 
 
-class MutualWorker(QThread):
+class MutualWorker(bg_thread.BgThread):
     """后台计算两站的可通联窗口。"""
     progress = Signal(int)
     done = Signal(list)
