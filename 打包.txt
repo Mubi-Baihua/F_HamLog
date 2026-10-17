@@ -1,4 +1,13 @@
-nuitka --standalone --output-filename="F HamLog 2" --main=src/f_hamlog/__main__.py --windows-icon-from-ico=src/f_hamlog/file/F_HamLog.ico --msvc=latest --windows-console-mode=disable --enable-plugin=pyside6 --include-package=skyfield --include-package-data=skyfield --include-package=numpy --include-module=remote_crypto --windows-uac-admin --include-data-dir=src/f_hamlog/file=file/ --noinclude-data-files="file/log/*.log"
+nuitka --standalone --output-filename="F HamLog 2" --output-folder-name=main --main=src/f_hamlog/__main__.py --windows-icon-from-ico=src/f_hamlog/file/F_HamLog.ico --msvc=latest --windows-console-mode=disable --enable-plugin=pyside6 --include-package=skyfield --include-package-data=skyfield --include-package=numpy --windows-uac-admin --include-data-dir=src/f_hamlog/file=file/ --noinclude-data-files="file/log/*.log"
+
+--output-folder-name=main 别删：Nuitka 默认用「主模块文件名」给产出目录起名
+（--main=…/__main__.py → __main__.dist / __main__.build），而 .iss 的 SourceDistDir、
+兼容版 zip、GitHub Actions 的构建缓存都按 main.dist / main.build 取路径。
+
+也别再加 --include-module（旧命令里的 --include-module=remote_crypto 已删）：remote_crypto
+由 project.py 的 from f_hamlog import remote_crypto 自动跟随收录；写成
+--include-module=f_hamlog.remote_crypto 会直接 FATAL，因为该解析发生在编译主模块之前，
+那时 __main__.py 里的 sys.path.insert(src) 还没生效。
 
 ===== 运行日志：程序自己写，优先看这个 =====
 启动即写「<exe 同目录>\file\log\」（开发时是 src\f_hamlog\file\log\）：
@@ -19,7 +28,7 @@ nuitka --standalone --output-filename="F HamLog 2" --main=src/f_hamlog/__main__.
 1) 程序在日志装配**之前**就崩了（缺 VC 运行库、解压失败、Nuitka 启动期异常）：
    把 --windows-console-mode=disable 换成 force 另打一份调试版（--output-filename 换名，
    别覆盖正式产物），从命令行启动，traceback 直接打在控制台上：
-   nuitka --standalone --output-filename="F HamLog 2 debug" --main=src/f_hamlog/__main__.py --windows-icon-from-ico=src/f_hamlog/file/F_HamLog.ico --msvc=latest --windows-console-mode=force --enable-plugin=pyside6 --include-package=skyfield --include-package-data=skyfield --include-package=numpy --include-module=remote_crypto --windows-uac-admin --include-data-dir=src/f_hamlog/file=file/
+   nuitka --standalone --output-filename="F HamLog 2 debug" --output-folder-name=main-debug --main=src/f_hamlog/__main__.py --windows-icon-from-ico=src/f_hamlog/file/F_HamLog.ico --msvc=latest --windows-console-mode=force --enable-plugin=pyside6 --include-package=skyfield --include-package-data=skyfield --include-package=numpy --windows-uac-admin --include-data-dir=src/f_hamlog/file=file/
 
    不想蹲控制台也可以让 Nuitka 直接把 stdout / stderr 落成文件（保持 disable），追加：
    --force-stdout-spec="%TEMP%/F_HamLog.out.txt" --force-stderr-spec="%TEMP%/F_HamLog.err.txt"
