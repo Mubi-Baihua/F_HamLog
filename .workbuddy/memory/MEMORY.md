@@ -107,5 +107,9 @@
 - 发布：仓库 `github.com/Mubi-Baihua/F_HamLog`，默认分支 `main`，只有 `main.yml`（手动发布，唯一能发
   Release）/ `preview.yml`（cron 预览，必须在 `main`）/ `.github/inno/F HamLog 2.iss`；本机无 `gh`、无 token；
   **取产物脚本双位置回退**（先 `兼容版/` 再仓库根）。
+- **打包产出目录名 = `main.dist` / `main.build`，靠命令行 `--output-folder-name=main` 固定**
+  （Nuitka 默认取主模块文件名 → `--main=src/f_hamlog/__main__.py` 会变成 `__main__.dist`，
+  同时让 `actions/cache` 的 `main.build` 空转、每次全量重编）；`.iss` 的 `SourceDistDir`、
+  兼容版 zip、`.gitignore` 都按 `main.dist` 写死。**退出码无关，这行别删**。
 - 合并 `file/` 数据文件：`.tle` 取更完整一侧；`m_xml.txt` 只差 `sat_last_update` 取较新；
   `.workbuddy/memory/*.md` **双方全保留**。

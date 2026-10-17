@@ -351,6 +351,8 @@ jobs:
       # 7. Nuitka 独立打包
       # ------------------------------------------------------------------
       # 缓存 main.build：源码未变动的模块会跳过 C 编译与链接，显著加速下一次打包
+      # 目录名由打包命令里的 --output-folder-name=main 固定：不写它是 __main__.build，
+      # 与这里的 main.build 对不上 → 缓存永远空转、每次全量重编（实测约 40 分钟）。
       # 键里必须带上 exe 名：Nuitka 把 result_exe 写进 SCons 命令行（main.build/scons-debug.py），
       # 命令行一变 SCons 会判定 1244 个目标全部失效 → 全量重编（约 1.3 GB 中间产物重来）。
       # 本工作流用「F HamLog 2 Preview」，与正式版「F HamLog 2」不同，
@@ -369,9 +371,15 @@ jobs:
         if: ${{ env.SHOULD_BUILD == 'true' }}
         run: |
           $ErrorActionPreference = 'Stop'
+          # ⚠️ --output-folder-name=main 必须保留：Nuitka 默认拿「主模块文件名」给产出目录取名，
+          #    --main=src/f_hamlog/__main__.py 会让产物落到 __main__.dist / __main__.build；
+          #    而后续「校验打包产物」、安装包（.iss 里 SourceDistDir = RepoRoot\main.dist）、
+          #    兼容版 zip、以及上面的构建缓存目录，全部按 main.dist / main.build 取路径。
+          #    显式钉死基名后，主模块将来再改名也不会牵动这些下游路径。
           & $env:PYTHON_VENV -m nuitka --standalone `
             --assume-yes-for-downloads `
             --output-filename="$env:APP_EXE_NAME" `
+            --output-folder-name=main `
             --main=src/f_hamlog/__main__.py `
             --windows-icon-from-ico=src/f_hamlog/file/F_HamLog.ico `
             --msvc=latest `
@@ -380,7 +388,7 @@ jobs:
             --include-package=skyfield `
             --include-package-data=skyfield `
             --include-package=numpy `
-            --include-module=remote_crypto `
+            --include-module=f_hamlog.remote_crypto `
             --windows-uac-admin `
             --include-data-dir=src/f_hamlog/file=file/
           if ($LASTEXITCODE -ne 0) { throw "Nuitka 打包失败（退出码 $LASTEXITCODE）" }
@@ -389,11 +397,18 @@ jobs:
         if: ${{ env.SHOULD_BUILD == 'true' }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $exe = Join-Path $env:GITHUB_WORKSPACE "main.dist\$env:APP_EXE_NAME.exe"
-          if (-not (Test-Path $exe)) { throw "未找到主程序：$exe" }
+          # 产出目录名由 Nuitka 的 --output-folder-name=main 决定（默认会变成 __main__.dist）
+          $dist = Join-Path $env:GITHUB_WORKSPACE 'main.dist'
+          $exe = Join-Path $dist "$env:APP_EXE_NAME.exe"
+          if (-not (Test-Path $exe)) {
+            $found = @(Get-ChildItem $env:GITHUB_WORKSPACE -Directory -Filter '*.dist' -ErrorAction SilentlyContinue |
+                       ForEach-Object { $_.Name })
+            $hint = if ($found.Count -gt 0) { "实际存在的 .dist 目录：$($found -join ', ')" } else { '工作区里没有任何 .dist 目录（打包环节没产出）' }
+            throw "未找到主程序：$exe；$hint"
+          }
           $size = [math]::Round((Get-Item $exe).Length / 1MB, 1)
           Write-Host "主程序：$exe（$size MB）"
-          Write-Host 'main.dist 文件数：' ([System.IO.Directory]::GetFiles("$env:GITHUB_WORKSPACE\main.dist", '*', 'AllDirectories').Count)
+          Write-Host 'main.dist 文件数：' ([System.IO.Directory]::GetFiles($dist, '*', 'AllDirectories').Count)
 
       # ------------------------------------------------------------------
       # 8. Inno Setup 6 生成安装包（注入预览用 AppName / AppId / 时间戳版本号）
