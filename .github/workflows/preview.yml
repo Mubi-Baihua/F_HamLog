@@ -41,6 +41,15 @@ env:
   # 否则预览包会覆盖/卸载掉正式版
   APP_ID: '{{2AF71D4C-3B58-4E6A-9A21-6E10B7F3C4D8}'
   ARTIFACT_NAME: 'F-HamLog-Preview'
+  # GitHub 的 Windows runner 控制台代码页是 cp1252：Python 子进程（pip / nuitka）
+  # 只要往 stdio 写中文（需求文件路径、需求文件里的注释行、含中文的产物名），
+  # rich 就会走 legacy_windows_render → UnicodeEncodeError，pip 随之以非 0 退出
+  # （表现为「安装依赖失败」，真正的错误信息被这个编码异常盖掉，极难定位）。
+  # 这里全局强制 UTF-8；PIP_PROGRESS_BAR=off 顺带避开 rich 的进度条渲染。
+  PYTHONUTF8: '1'
+  PYTHONIOENCODING: 'utf-8'
+  PIP_PROGRESS_BAR: 'off'
+  PIP_DISABLE_PIP_VERSION_CHECK: '1'
 
 jobs:
   preview:
@@ -324,6 +333,14 @@ jobs:
           $venv   = Join-Path $env:GITHUB_WORKSPACE '.venv'
           $venvPy = Join-Path $venv 'Scripts\python.exe'
 
+          # 就算 workflow 级 env 没生效（比如单独跑这一段），也在进程内兜一层：
+          # 让本步骤里所有 Python 子进程按 UTF-8 读写 stdio，PowerShell 也按 UTF-8 解码。
+          $env:PYTHONUTF8 = '1'
+          $env:PYTHONIOENCODING = 'utf-8'
+          $env:PIP_PROGRESS_BAR = 'off'
+          $env:PIP_DISABLE_PIP_VERSION_CHECK = '1'
+          try { [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false } catch { }
+
           # 缓存命中时校验「版本」而不只是「能 import」：
           # actions/cache 的 restore-keys 是前缀匹配，key 变了仍会还原到旧 venv，
           # 只验 import 会让旧版本的环境被静默复用（曾因此 CI 用 PySide6 6.11.2、
@@ -360,16 +377,38 @@ jobs:
             if (Test-Path $venv) { Remove-Item $venv -Recurse -Force }
             python -m venv $venv
             if ($LASTEXITCODE -ne 0) { throw '创建虚拟环境失败' }
-            & $venvPy -m pip install --upgrade pip
+            & $venvPy -m pip install --upgrade pip --progress-bar off
             # 依赖版本只认仓库根目录的 第三方模块.txt（带 == 锁定版本），
             # 别再在这里写包名列表：写死列表会和缓存键 hashFiles('第三方模块.txt') 脱钩，
             # 出现「缓存按 A 算、实际装的是 B」的漂移（曾导致 CI 装到 PySide6 6.11.2、
             # 本地是 6.11.1，两边行为不一致却查不出来源）。
-            & $venvPy -m pip install -r '第三方模块.txt'
+            # ⚠️ 安装时用**ASCII 名字的副本**：pip 会把需求文件路径回显到输出里，
+            #    文件名带中文就会触发上面说的 cp1252 编码异常（已实际踩到）。
+            #    缓存键仍按仓库里的原名 hashFiles，不要改。
+            $reqSrc = Join-Path $env:GITHUB_WORKSPACE '第三方模块.txt'
+            $req    = Join-Path $env:RUNNER_TEMP 'requirements-ci.txt'
+            Copy-Item $reqSrc $req -Force
+            & $venvPy -m pip install --progress-bar off --no-input -r $req
             if ($LASTEXITCODE -ne 0) { throw '安装依赖失败' }
-            & $venvPy -m pip install -e .
+            & $venvPy -m pip install --progress-bar off --no-input -e .
             if ($LASTEXITCODE -ne 0) { throw '以可编辑模式安装 f-hamlog 失败' }
           }
+
+          # 装完立刻按 第三方模块.txt 逐条核对版本：不合就在这里说清楚，
+          # 别等到 Nuitka 打出一个依赖错位的包（那种包现象千奇百怪，排查成本极高）。
+          $now = @{}
+          & $venvPy -m pip list --format=freeze 2>$null | ForEach-Object {
+            $p = $_ -split '=='
+            if ($p.Count -eq 2) { $now[$p[0].Trim()] = $p[1].Trim() }
+          }
+          $mismatch = @()
+          foreach ($name in $pins.Keys) {
+            if ($now[$name] -ne $pins[$name]) {
+              $mismatch += ('{0} 需 {1} 实际 {2}' -f $name, $pins[$name], $now[$name])
+            }
+          }
+          if ($mismatch.Count -gt 0) { throw ('依赖安装后版本仍不符：' + ($mismatch -join '；')) }
+          Write-Host '依赖版本校验通过（与 第三方模块.txt 完全一致）'
 
           [System.IO.File]::AppendAllLines($env:GITHUB_ENV, [string[]]@("PYTHON_VENV=$venvPy"), (New-Object System.Text.UTF8Encoding $false))
           # 版本号用 importlib.metadata 读取（Nuitka 4.x 已移除 nuitka.__version__）

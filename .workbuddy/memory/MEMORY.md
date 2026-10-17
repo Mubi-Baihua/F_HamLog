@@ -128,5 +128,12 @@
 - **打包命令禁止 `--include-module`**：它在「编译主模块之前」解析，那阶段只认主模块目录里的
   顶层名，点分名（`f_hamlog.remote_crypto`）必然 FATAL；`remote_crypto` 由 `project.py` 的
   `from f_hamlog import remote_crypto` 自动跟随收录，不需要额外 include。
+- **CI 的 pip 不许碰中文输出**：Windows runner 代码页是 cp1252，pip 26 用 rich 渲染，
+  一写中文（需求文件路径「第三方模块.txt」等）就 `UnicodeEncodeError` 并以非 0 退出，
+  被 `throw '安装依赖失败'` 误报成依赖问题。两个 workflow 必须同时保持：
+  workflow 级 `PYTHONUTF8=1` / `PYTHONIOENCODING=utf-8` / `PIP_PROGRESS_BAR=off`；
+  步骤内再设 + `[Console]::OutputEncoding`；安装前复制成
+  `%RUNNER_TEMP%\requirements-ci.txt` 再 `pip -r`（**缓存键仍 hashFiles 原名，别改副本名**）。
+  装完按 `第三方模块.txt` 逐条复核版本，不符直接 throw。
 - 合并 `file/` 数据文件：`.tle` 取更完整一侧；`m_xml.txt` 只差 `sat_last_update` 取较新；
   `.workbuddy/memory/*.md` **双方全保留**。

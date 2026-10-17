@@ -38,6 +38,26 @@ sys.path → Nuitka 静态分析看不到包。
 「能 import」会让旧版本环境被静默复用）。改版本只改这一个文件，别在 workflow
 里另写包名列表。
 
+===== CI 装依赖时别让它输出中文（cp1252 坑）=====
+现象：步骤报「安装依赖失败」，日志里却是一大段 pip 内部的编码异常，真正的安装
+错误完全看不到：
+    File "...\encodings\cp1252.py", line 19, in encode
+    UnicodeEncodeError: 'charmap' codec can't encode characters in position 36-40
+原因：GitHub 的 Windows runner 控制台代码页是 cp1252，pip（26 起用 rich 渲染）
+一旦往 stdio 写中文（需求文件路径「第三方模块.txt」、需求文件里的中文注释），
+rich 就走 legacy_windows_render → UnicodeEncodeError，pip 以非 0 退出，
+被后续的 `if ($LASTEXITCODE -ne 0) { throw '安装依赖失败' }` 报成「安装失败」。
+
+三条一起上（main.yml / preview.yml 都已加，缺一条都可能再犯）：
+  1) workflow 级 env：PYTHONUTF8=1、PYTHONIOENCODING=utf-8、PIP_PROGRESS_BAR=off；
+  2) 步骤内再设一遍，并 [Console]::OutputEncoding = UTF8（PS 也按 UTF-8 解码子进程输出）；
+  3) 安装时把 第三方模块.txt 复制成 %RUNNER_TEMP%\requirements-ci.txt 再用 ——
+     pip 会回显需求文件路径，文件名带中文就会触发同一个异常。
+     ⚠️ 缓存键仍是 hashFiles('第三方模块.txt')，别改成副本名，否则缓存永远失效。
+
+装完会立刻按 第三方模块.txt 逐条核对版本，不符直接 throw —— 不再带着错位依赖去打
+Nuitka（那种包的故障现象千奇百怪，排查成本极高）。
+
 ===== 运行日志：程序自己写，优先看这个 =====
 启动即写「<exe 同目录>\file\log\」（开发时是 src\f_hamlog\file\log\）：
 
