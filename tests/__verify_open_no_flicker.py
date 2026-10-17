@@ -21,7 +21,7 @@ from PySide6.QtWidgets import QDialog, QMessageBox  # noqa: E402
 
 import satellite_window as sw  # noqa: E402
 
-SETTINGS = app_path(app_path('file/m_xml.txt'))
+SETTINGS = app_path('file/m_xml.txt')
 bak = SETTINGS + '.verify_bak'
 shutil.copyfile(SETTINGS, bak)
 
@@ -29,7 +29,7 @@ N_SEL = 200
 BLOCK = 1.5
 app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
 
-lines = open(app_path(app_path('file/amateur.tle')), encoding='utf-8-sig', errors='replace').read().splitlines()
+lines = open(app_path('file/amateur.tle'), encoding='utf-8-sig', errors='replace').read().splitlines()
 names = [ln.strip() for ln in lines if ln.strip() and not ln.startswith('1 ') and not ln.startswith('2 ')][:N_SEL]
 
 s = eval(open(SETTINGS, encoding='utf-8').read())

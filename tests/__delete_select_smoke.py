@@ -31,7 +31,7 @@ from f_hamlog.paths import app_path
 from f_hamlog import data_factory as fhlgen
 
 N = 40
-SETTINGS = app_path('file/m_xml.txt'))
+SETTINGS = app_path('file/m_xml.txt')
 BAK = SETTINGS + '.delsel_bak'
 shutil.copyfile(SETTINGS, BAK)
 TMPDIR = tempfile.mkdtemp(prefix='fhl_delsel_')

@@ -56,20 +56,38 @@ def _cleanup_remote_rooms(days=1):
                 pass
 
 
-def load_quick_project_data(path):
-    """读「通联日志」（file/main.fhl）的数据 → ``(records, key)``。
+def default_quick_project_path():
+    """「通联日志」默认打开哪个文件：**优先 `file/main.fhla`，否则老的 `file/main.fhl`**。
 
-    文件不存在（首次使用 / 数据目录刚建好）时返回 ``([], None)``：**按空项目打开**，
+    两者都不存在（全新安装）时返回 `.fhla` 路径 —— 默认格式已是带属性的 F HamLog 项目。
+    迁移会把 `main.fhl` 删掉，所以下次启动必须能找到新的 `main.fhla`，
+    否则「通联日志」会打开一份空项目、每次都重新提示迁移。
+    """
+    fhla = app_path('file/main.fhla')
+    fhl = app_path('file/main.fhl')
+    if os.path.exists(fhla):
+        return fhla
+    if os.path.exists(fhl):
+        return fhl
+    return fhla
+
+
+def load_quick_project_data(path):
+    """读「通联日志」（`file/main.fhla` 或 `main.fhl`）→ ``(records, key, meta)``。
+
+    文件不存在（首次使用 / 数据目录刚建好）时返回 ``([], None, None)``：**按空项目打开**，
     首次保存时再创建。旧写法直接 ``read_fhl_file(path)``，缺文件就抛
     FileNotFoundError，整个「通联日志」都点不开（2026-10-16 实测崩溃）。
-    返回 ``(None, None)`` 表示用户取消了密钥输入 / 解密失败，调用方应中断打开。
+    按扩展名分派：`.fhla` 连属性块一起返回（meta），`.fhl` 的 meta 恒为 None。
+    返回 ``(None, None, None)`` 表示用户取消了密钥输入 / 解密失败，调用方应中断打开。
     """
     if not os.path.exists(path):
-        return [], None
-    data, key = fhl_rw.read_fhl_file(path)
+        return [], None, None
+    from f_hamlog import project
+    data, key, meta = project.read_project_file(path)
     if data is None:
-        return None, None
-    return data, key
+        return None, None, None
+    return data, key, meta
 
 
 def main():
@@ -109,12 +127,18 @@ def main():
             return
         global project_window  # 保持引用，防止被回收
         project_window = QMainWindow()
-        save_path = app_path('file/main.fhl')
+        # 优先 .fhla（迁移后的正式格式），没有才退回老的 main.fhl
+        save_path = default_quick_project_path()
         print(save_path)
-        data, key = load_quick_project_data(save_path)
+        data, key, fhla_meta = load_quick_project_data(save_path)
         if data == None:
             return
-        project.main(project_window, data, save_path,key_=key,quick_poject=True)
+        # 默认日志同样属于「打开 .fhl」→ 也一样提示迁移（用户要求每次打开都提示）。
+        # 迁移成功会删掉 main.fhl，下次 default_quick_project_path() 自然找到 main.fhla。
+        save_path, fhla_meta = project.offer_migration(window, save_path, data,
+                                                       key=key, meta=fhla_meta)
+        project.main(project_window, data, save_path, key_=key,
+                     quick_poject=True, fhla_meta=fhla_meta)
     def new_project():
         print("新建项目")
         from f_hamlog import project
@@ -131,7 +155,7 @@ def main():
             window,  # 父窗口
             i18n.tr("打开项目"),  # 对话框标题
             desktop_dir(),  # 初始目录：桌面
-            i18n.tr("F HamLog项目 (*.fhl *.fhla)")  # 文件过滤器；.fhla 是带属性的扩展格式
+            i18n.tr(project.OPEN_FILTER_BOTH)  # 合并过滤器：.fhla 与 .fhl 一次看全
         )
         if save_path == '':
             return
@@ -143,6 +167,10 @@ def main():
         data, key, fhla_meta = project.read_project_file(save_path)
         if data == None:
             return
+        # 打开的是 .fhl（兼容项目）→ 每次都问一句要不要迁移成 .fhla；
+        # 迁移成功就用新路径 + 新属性块打开，窗口此后的保存直接落到 .fhla。
+        save_path, fhla_meta = project.offer_migration(window, save_path, data,
+                                                       key=key, meta=fhla_meta)
         global project_window  # 保持引用，防止被回收
         project_window = QMainWindow()
         project.main(project_window, data, save_path, key_=key, fhla_meta=fhla_meta)

@@ -20,7 +20,7 @@ from PySide6.QtWidgets import QDialog, QMessageBox  # noqa: E402
 import satellite_pred as sp  # noqa: E402
 import satellite_window as sw  # noqa: E402
 
-SETTINGS = app_path(app_path('file/m_xml.txt'))
+SETTINGS = app_path('file/m_xml.txt')
 bak = SETTINGS + '.asrtu_bak'
 shutil.copyfile(SETTINGS, bak)
 

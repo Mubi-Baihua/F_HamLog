@@ -40,8 +40,8 @@ def check(cond, msg):
         print('  [FAIL] ' + msg, flush=True)
 
 
-REAL_SETTINGS = app_path('file/m_xml.txt'))
-REAL_TLE = app_path('file/amateur.tle'))
+REAL_SETTINGS = app_path('file/m_xml.txt')
+REAL_TLE = app_path('file/amateur.tle')
 bak = REAL_SETTINGS + '.satnum_probe_bak'
 shutil.copyfile(REAL_SETTINGS, bak)
 

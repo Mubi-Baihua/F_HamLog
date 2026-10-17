@@ -24,7 +24,7 @@ from f_hamlog.paths import app_path
 from f_hamlog import data_factory as fhlgen
 
 N = int(sys.argv[1]) if len(sys.argv) > 1 else 200
-SETTINGS = app_path('file/m_xml.txt'))
+SETTINGS = app_path('file/m_xml.txt')
 BAK = SETTINGS + '.sr_bak'
 shutil.copyfile(SETTINGS, BAK)
 TMPDIR = tempfile.mkdtemp(prefix='fhl_sr_')

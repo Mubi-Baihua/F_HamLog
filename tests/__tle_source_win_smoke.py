@@ -34,7 +34,7 @@ import tle_source_window as tsw  # noqa: E402
 import set as settings_window  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-REAL_SETTINGS = app_path(app_path('file/m_xml.txt'))
+REAL_SETTINGS = app_path('file/m_xml.txt')
 
 RESULT = []
 

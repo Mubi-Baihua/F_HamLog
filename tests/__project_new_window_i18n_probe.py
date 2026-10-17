@@ -61,7 +61,7 @@ sp.migrate_legacy_sat_data = lambda *a, **k: None
 
 # 设置副本：把语言改成英文（不污染真实 file/m_xml.txt）
 dst = os.path.join(TMP, 'm_xml.txt')
-shutil.copyfile(app_path('file/m_xml.txt')), dst)
+shutil.copyfile(app_path('file/m_xml.txt'), dst)
 _s = eval(io.open(dst, encoding='utf-8').read())
 _s['language'] = 'en'
 io.open(dst, 'w', encoding='utf-8').write(str(_s))

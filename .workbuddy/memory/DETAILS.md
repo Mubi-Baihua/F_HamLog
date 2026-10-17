@@ -65,7 +65,11 @@
 - `encrypted` 只是**声明**：读取时以「文件字节能否 UTF-8 解出」为**准**（`detect_encrypted`），
   以磁盘实际状态覆盖声明值。加密文件无密钥时 `read_fhla_file(..., ask_key=False)` 返回 `(None, None)`。
 - 「创建者」语义 = 第一次落盘的操作者；`mark_created` 幂等（已有创建者不覆盖）。
-  操作者取 `file/m_xml.txt` 的 `m_call`，空则系统用户名（`project.current_editor`）。
+  **操作者 = 设置里自己填的呼号 `m_call`（大写去空白），没填才用系统用户名**
+  （`project.current_editor()` = `my_call()` or `getpass.getuser()`）。
+  ⚠️ 读设置一律走 `project.load_settings()`：`utf-8-sig`（**吃 BOM**）+ `ast.literal_eval` → `eval`
+  兜底。旧的 `eval(open(..., encoding='utf-8'))` 遇到带 BOM 的设置文件会抛异常被 `except: pass`
+  吞掉 → 呼号静默失效、属性里显示系统用户名（2026-10-17 用户报的现象）。
 - **「打开即自动保存」不算一次编辑**：`project.main` 记「打开时的内容快照」`_fhla['open_json']`，
   写盘时 `touch=(当前快照 != open_json)` —— 一致则只刷 `last_version` + `encrypted`，
   真改过才算编辑、才刷 `last_editor` / `last_edit_time`。`write_fhla_file(touch=False)` 即该分支。
@@ -73,7 +77,7 @@
   `read_project_file` 返回三元组 `(records, key, meta)`——**`.fhl` 的 meta 恒为 None**（格式没变）。
 - 接入点：`main.py open_project`（过滤器 + 分派 + 传 `fhla_meta`）；`project.py`
   另存为 / 恢复另存 / 导出选中 / 搜索结果导出 / 新建文件对话框（过滤器均含 `*.fhla`）、
-  文件菜单「项目属性」（**`Alt+Enter`**，QMessageBox 展示 `describe_meta` 的行）、
+  文件菜单「项目属性」（**`Alt+I`**，QMessageBox 展示 `describe_meta` 的行）、
   文件菜单「自定义日志字段」；`batch_project.py`
   的 `save_records_to_path/load_records_from_path` 改为按扩展名分派（返回三元组，回写带 meta）；
   `input_fhl.py`（导入日志吃 `.fhla`）。
@@ -87,10 +91,10 @@
   自定义字段示例用 `wx`（天气）/ `rx_pwr`（接收功率）。词表补 15 条（2 条过滤器 + 13 条属性文案，
   见 `i18n_zh_en.py` 末节）+ 自定义字段一节。
 
-- **「项目属性」快捷键 = `Alt+Enter`**（2026-10-16 追加）：`props_action.setShortcuts([
-  QKeySequence('Alt+Return'), QKeySequence('Alt+Enter')])` —— Qt 里**Return（主键盘）与 Enter
-  （小键盘区）是两个不同的键**（`matches()` 两向都是 NoMatch），两个都挂才能「按哪个都开」。
-  原先的 `Ctrl+I` 让给「反选」（主窗口/搜索窗口的选择菜单本来也用 `Ctrl+I`，之前是重复占用）。
+- **「项目属性」快捷键 = `Alt+I`**（2026-10-17 定稿）：`props_action.setShortcut(
+  QKeySequence('Alt+I'))`。曾试过 `Alt+Enter`（`Alt+Return` + `Alt+Enter` 两个都挂，因为 Qt 里
+  Return（主键盘）与 Enter（小键盘区）不等价），**用户改用 `Alt+I` 后只剩一把键，不再需要双挂**。
+  `Ctrl+I` 让给「反选」（主窗口/搜索窗口的选择菜单本来也用 `Ctrl+I`，之前是重复占用）。
   ⚠️ **描述按键一律写 `Return` / `Enter`，不写「回车」**（用户 2026-10-16 明确要求）。
   **`.fhl` 项目直接提示「不支持的格式」**（不再展示内存状态 + 提示保存为 .fhla）：
   `.fhl` 没有属性块，半展示会让人把内存状态当成文件属性。文案**逐段 `i18n.tr` 后再拼**。
@@ -122,17 +126,71 @@
   - ⚠️ **批量记录窗口（`batch_project.py`）没接自定义字段**：它的 `translation_dict`/`KEYS` 是
     模块级全局（冻结列、i18n、写回都按 `KEYS` 索引行），且该窗口可以从主界面单独打开、
     **没有项目上下文**（可能没有 meta）。要接得先把 `KEYS` 变成"每窗口一份"，属单独改动。
-- **保存时由用户当场选格式**（2026-10-16 追加）：
-  `project.project_save_filters()` 返回**两条**过滤器（`F HamLog项目 (*.fhl)` +
-  `F HamLog项目（带属性） (*.fhla)`，**逐段 i18n.tr 后再拼**），
+- **保存时由用户当场选格式**（2026-10-16 加、2026-10-17 改默认）：
+  `project.project_save_filters()` 返回**两条**过滤器，**顺序即默认**：
+  第一条 `F HamLog A 项目 (*.fhla)`（**默认**，带宽属性），第二条 `F HamLog项目 (*.fhl)`
+  （纯记录）；**逐段 i18n.tr 后再拼**。
   `project.complete_project_suffix(path, sel)` 按所选过滤器补扩展名
-  （Qt 静态保存对话框**不会**替用户补后缀；已有 .fhl/.fhla 时原样返回）。
+  （Qt 静态保存对话框**不会**替用户补后缀；已有 .fhl/.fhla 时原样返回）；
+  **`sel` 为空也默认补 `.fhla`**，只有明确选了纯 .fhl 那条才补 `.fhl`。
+  ⚠️ 判 `sel` 时注意：`'*.fhl'` 是 `'*.fhla'` 的前缀，必须先判 `.fhla` 再判 `.fhl`。
   ⚠️ 合并成一条 `(*.fhl *.fhla)` 时用户拿不到格式选择权，且输入不带扩展名的名字会落盘成
   **无扩展名文件**，再打开按 .fhl 处理、属性全丢 —— 所以必须两条。
   改动 5 处保存对话框：另存为 / 恢复另存 / 导出选中 / 导出搜索结果 / 新建文件；
-  `batch_project` 的「另存为 F HamLog项目」同样两条。
+  `batch_project` 的「另存为 F HamLog项目」同样两条。恢复另存的默认文件名已改 `恢复的项目.fhla`。
   **「打开」类对话框仍用合并的一条**（一次就能看到两种文件，更好用）。
-  默认选中第一条 → **默认格式仍是 `.fhl`**（要改默认就先放 .fhla；排序即默认）。
+
+### 显示名与迁移（2026-10-17 定稿）
+
+- **显示名**（`project.py` 常量，所有过滤器都引用它们，别再写字符串字面量）：
+  `SAVE_FILTER_FHLA = 'F HamLog 项目 (*.fhla)'`、`SAVE_FILTER_FHL = 'F HamLog 兼容项目 (*.fhl)'`、
+  `OPEN_FILTER_BOTH = 'F HamLog 项目 (*.fhla *.fhl)'`（打开类对话框合并用）、
+  `OPEN_FILTER_BOTH_ALL`（同上 + `;;All Files (*)`）。
+  历史名「F HamLog A 项目」「F HamLog项目（带属性）」**已作废**，词表同步替换。
+  菜单动作名「另存为 / 添加到 F HamLog项目」**不改**（那是动作不是格式名）。
+- **打开 .fhl 的迁移提示**（`project.py` 三件套 + `main.open_project` 调用）：
+  `fhla_sibling_path()`（`c.fhl` → `c.fhla`）、`migrate_fhl_to_fhla()`（写同名 .fhla，返回
+  `(路径, 属性块)`，失败返回 `(None, None)`）、`ask_migrate_fhl()`（两个按钮「迁移 / 保持原样」，
+  默认迁移、Esc = 保持原样；同名 .fhla 存在时在**同一个**提示里说明会覆盖，不再单独弹覆盖确认）、
+  `offer_migration(parent, path, records, key, meta)`（一站式：问 → 迁移 → 返回实际打开路径与属性块）。
+- 迁移语义：**写同名 .fhla → 读回来校验条数 → 删除原 .fhl**（2026-10-17 用户改为「自动删源文件」，
+  之前是「原件保留」）；校验不过就不删、只提示「原 .fhl 已保留」。
+  `key` 沿用 → 加密 .fhl 迁移后仍是加密 .fhla；创建者 = 本次操作者；迁移算一次编辑。
+- **每次打开都问**，不做「不再提示」记忆、不加设置开关（用户明确要求「每次」）。
+  **默认日志 `file/main.fhl` 也问**：`main.default_quick_project_path()` 优先 `file/main.fhla`
+  → 迁移删掉 `main.fhl` 后，下次启动自然打开 `main.fhla`（全新安装时直接给 `.fhla` 路径）。
+- 迁移失败**不中断打开**：提示「迁移失败」后照常打开原 .fhl。
+
+## 日志字段定义：顺序 / 必填 / 主页显示（2026-10-17）
+
+属性块新增两个**可选**键（用户没调整过就不写）：
+
+```json
+"field_order": ["date", "time", "m_call", "…", "wx", "接收功率"],
+"field_meta": {"接收功率": {"required": true, "main": true}}
+```
+
+- `other_item` 仍是「键 → 显示名称」表；**新字段的键 = 首次创建时的名称**（撞名追加 `_2`，
+  见 `make_field_key`）。改名只改名称，**记录里的键不动** → 改名不丢数据，也不会迁移旧值。
+- `STANDARD_REQUIRED_KEYS = (date, time, m_call, o_call, freq, mode, m_rst, o_rst)`、
+  `MAIN_DEFAULT_KEYS = 12 个历史列`：这是**默认值**，不是约束 —— 标准字段的 required / main
+  在管理窗口里同样可改（2026-10-17 用户：「不管是什么都改」）。`field_meta` 里**只记偏离默认的键**，
+  改回默认 = 删掉覆盖项；`normalize_field_meta` 因此「只保留写了的项」，不能补 False。
+- 顺序是**一张总表**：标准 20 行 + 自定义字段混排 → 「新建日志 / 更多信息」的行序，
+  **主页列序也用它**（2026-10-17 定稿：两边顺序一致，排一次两边都走）。因此**呼号大写委托
+  必须按 key 找行号**（`keys_list.index('m_call')`），不能再写死行 2 / 3。
+- 主页表格：`_main_cols()` 遍历 `field_entries()` 只取 main=True，「选择」45 恒首列、「更多」80
+  恒末列；列宽走 `MAIN_COL_WIDTHS` / `CUSTOM_COL_WIDTH(110)` / `EXTRA_COL_WIDTH(90)`。
+  默认列序下 传播模式 / 卫星名称 排在 调制模式 之前（跟录入窗口一致）。
+- GUI：`manage_custom_fields()`（照 `DictEditorDialog` 版式：说明 + 表格 + 添加/删除/上移/下移/
+  **恢复默认** /保存更改/关闭）。标准行名称 `Qt.ItemIsEditable` 关掉 + `theme.hint_color()` 灰显；
+  删除标准行直接拒绝。`api` 暴露 `field_entries` / `custom_main_fields` / `set_field_defs` / `main_table`。
+- **「恢复默认」`reset_defaults()`**：清表后按 `fields_from_meta(None)` 重填（20 标准行、历史顺序、
+  默认勾选、无自定义字段）。**只改表格不落盘**，点「保存更改」才生效（一键抹掉全部字段定义太重，
+  不做「点一下就写文件」）。`fields_to_meta()` 在顺序 == `standard_field_keys()` 时整个省掉
+  `field_order` → 恢复默认后 xml 回到出厂状态（`other_item` 空、无 `field_order` / `field_meta`）。
+- 管理窗口 620×560；名称列 `QHeaderView.Stretch`，勾选列固定 70 / 100（窗口变宽不留右侧空白）。
+- `.fhl`：`field_entries()` 只返回标准 20 行（历史顺序），`custom_fields()` 恒空。
 
 ## 数据目录解析（paths.py）与「假 file/」劫持（2026-10-16 崩溃复盘）
 
@@ -483,3 +541,10 @@ sat_dur(1~240) / sat_sats / mu_sats / **theme_mode**。
 
 ## 发布流程：`.iss` 与 PowerShell 补充
 - `.iss` 用 `DefaultDirName={autopf}\{#MyAppName}` + **显式 `PrivilegesRequired=admin`**。
+
+## Git 合并 `file/` 数据文件（冲突处理口径）
+- `.tle` 冲突几乎总是「不同时刻同一批数据」：比三侧行数，**取更完整/更新一侧**。
+- `m_xml.txt` 冲突通常只差 `sat_last_update` 时间戳 → 取较新值。
+- `.workbuddy/memory/*.md` 是追加型 → **双方内容全保留**，只删 `<<<<<<<`/`=======`/`>>>>>>>` 标记行。
+- `project.py` 的 `_bk_snapshot(...)` 冲突 → 合并为 `_bk_snapshot(snap)` + 各自提示调用。
+- **绝不能 `git checkout -- file/…`** 还原数据文件（用户正在用，可能已手工改）。

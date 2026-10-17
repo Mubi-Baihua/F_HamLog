@@ -1,1 +1,16 @@
 nuitka --standalone --output-filename="F HamLog 2" --main=src/f_hamlog/__main__.py --windows-icon-from-ico=src/f_hamlog/file/F_HamLog.ico --msvc=latest --windows-console-mode=disable --enable-plugin=pyside6 --include-package=skyfield --include-package-data=skyfield --include-package=numpy --include-module=remote_crypto --windows-uac-admin --include-data-dir=src/f_hamlog/file=file/
+
+===== 打包后怎么看运行时报错 =====
+1) 调试版（能看到 traceback）：把 --windows-console-mode=disable 换成 force 另打一份
+   （--output-filename 换个名字，别覆盖正式产物），然后从 cmd / PowerShell 启动：
+   nuitka --standalone --output-filename="F HamLog 2 debug" --main=src/f_hamlog/__main__.py --windows-icon-from-ico=src/f_hamlog/file/F_HamLog.ico --msvc=latest --windows-console-mode=force --enable-plugin=pyside6 --include-package=skyfield --include-package-data=skyfield --include-package=numpy --include-module=remote_crypto --windows-uac-admin --include-data-dir=src/f_hamlog/file=file/
+
+2) 保持无控制台窗口，把 stdout/stderr 落成文件（Nuitka 的 --force-*-spec）：
+   把上面的 force 换回 disable，并追加
+   --force-stdout-spec="%TEMP%/F_HamLog.out.txt" --force-stderr-spec="%TEMP%/F_HamLog.err.txt"
+   运行后去 %TEMP% 看这两个文件。注意本程序带 --windows-uac-admin，cwd 可能是 system32，
+   所以 spec 里**不要用相对路径**。
+
+3) C 层崩溃（不是 Python 异常，traceback 打不出来）：
+   事件查看器 → Windows 日志 → 应用程序 → 找「应用程序错误」(Application Error, 事件 ID 1000)，
+   记下异常代码与出错模块名。

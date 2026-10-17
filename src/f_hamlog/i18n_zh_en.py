@@ -419,15 +419,39 @@ TRANSLATIONS = {
     #  文件对话框标题 / 过滤器
     # ------------------------------------------------------------------
     '选择 F HamLog 项目文件': 'Select F HamLog project file',
-    'F HamLog项目 (*.fhl)': 'F HamLog project (*.fhl)',
-    # 保存 / 另存为对话框里的第二条过滤器（.fhla 带属性）：与上一条并列，由用户选格式
-    'F HamLog项目（带属性） (*.fhla)': 'F HamLog project (with properties) (*.fhla)',
-    'F HamLog项目 (*.fhl);;All Files (*)': 'F HamLog project (*.fhl);;All Files (*)',
-    'F HamLog项目 (*.fhl *.fhla)': 'F HamLog project (*.fhl *.fhla)',
-    'F HamLog项目 (*.fhl *.fhla);;All Files (*)':
-        'F HamLog project (*.fhl *.fhla);;All Files (*)',
+    # 两种项目格式的显示名（定稿 2026-10-17）：
+    #   .fhla = F HamLog 项目（带属性块的新格式，保存对话框里的默认项）
+    #   .fhl  = F HamLog 兼容项目（纯记录的老格式，老版本 F HamLog 也能打开）
+    'F HamLog 项目 (*.fhla)': 'F HamLog project (*.fhla)',
+    'F HamLog 兼容项目 (*.fhl)': 'F HamLog compatible project (*.fhl)',
+    'F HamLog 项目 (*.fhla *.fhl)': 'F HamLog project (*.fhla *.fhl)',
+    'F HamLog 项目 (*.fhla *.fhl);;All Files (*)':
+        'F HamLog project (*.fhla *.fhl);;All Files (*)',
     '另存为 F HamLog项目': 'Save as F HamLog project',
     '添加到 F HamLog项目': 'Add to F HamLog project',
+    # 打开 .fhl 时的迁移提示
+    '迁移项目格式': 'Convert project format',
+    '这是 F HamLog 兼容项目（.fhl）文件。': 'This is an F HamLog compatible project (.fhl) file.',
+    'F HamLog 项目（.fhla）在此之外还保存项目属性'
+    '（创建者、最后编辑者、创建与编辑时间、上次打开所用版本、加密状态）'
+    '和自定义日志字段。':
+        'An F HamLog project (.fhla) additionally stores project properties '
+        '(creator, last editor, created/edited time, last opened version, '
+        'encryption state) and custom log fields.',
+    '同名 .fhla 已存在，迁移会覆盖它：':
+        'A .fhla file with the same name already exists and will be overwritten:',
+    '迁移会在同一目录另存为：': 'It will be saved next to it as:',
+    '迁移成功后，原 .fhl 文件会被删除。':
+        'After a successful conversion, the original .fhl file will be deleted.',
+    '迁移': 'Convert',
+    '暂不迁移': 'Not now',
+    '迁移失败': 'Conversion failed',
+    '没能写入 {}：\n{}': 'Could not write {}:\n{}',
+    '新文件校验未通过，原 .fhl 已保留。':
+        'The new file failed verification; the original .fhl has been kept.',
+    '删除源文件失败': 'Could not delete the source file',
+    '{}：\n{}': '{}:\n{}',
+    '已迁移为 {}（原 .fhl 已删除）': 'Converted to {} (the original .fhl has been deleted)',
     '导出选中日志为FHL文件': 'Export selected logs to FHL file',
     '导出搜索结果为FHL文件': 'Export search results to FHL file',
     '保存恢复的文件': 'Save recovered file',
@@ -803,7 +827,7 @@ TRANSLATIONS = {
         'file (currently .fhl).',
 
     # ------------------------------------------------------------------
-    #  项目属性（Alt+Enter）：.fhl 时提示不支持的格式
+    #  项目属性（Alt+I）：.fhl 时提示不支持的格式
     # ------------------------------------------------------------------
     '不支持的格式：当前项目不是 .fhla 文件。':
         'Unsupported format: this project is not a .fhla file.',
@@ -817,18 +841,27 @@ TRANSLATIONS = {
     #  自定义日志字段（.fhla 属性块 other_item）——管理窗口
     # ------------------------------------------------------------------
     '自定义日志字段': 'Custom log fields',
-    '字段键': 'Field key',
-    '显示名称': 'Display name',
     '添加字段': 'Add field',
+    # 2026-10-17 改版：只填名称，另有「必填 / 在主页显示」与顺序调整
+    '字段名称': 'Field name',
+    '必填': 'Required',
+    '在主页显示': 'Show on main page',
+    '只填字段名称即可（保存时自动生成数据用的键）。'
+    '标准字段灰显不可改名，但和自定义字段一样可以改「必填」「在主页显示」，'
+    '也能一起用「上移 / 下移」调整顺序——主页的列序就按这里的顺序来。':
+        'Just enter the field name (the data key is generated automatically on save). '
+        'Standard fields are greyed out and cannot be renamed, but "Required" and '
+        '"Show on main page" are editable for every field, and all fields can be '
+        'reordered with Move up / Move down — the main table follows that order.',
+    '字段名称不能为空。': 'The field name cannot be empty.',
+    '不能与标准字段重名：': 'Cannot reuse a standard field name: ',
+    '字段名称重复：': 'Duplicate field name: ',
+    '标准字段不能删除：': 'Standard fields cannot be deleted: ',
+    '已保存 {} 个自定义字段。': 'Saved {} custom field(s).',
+    '已恢复默认，点「保存更改」后生效。':
+        'Restored the defaults — click "Save changes" to apply.',
     '.fhl 是纯记录格式，不含自定义日志字段。':
         '.fhl is a records-only format; it carries no custom log fields.',
     '请「另存为」带属性的 .fhla 项目文件后再使用。':
         'Please use "Save As" to write a .fhla project file first, then try again.',
-    '字段键只能用字母、数字、下划线，且不能以数字开头：':
-        'Field keys may contain only letters, digits and underscores, and must not start '
-        'with a digit: ',
-    '该字段键是标准字段，不能作为自定义字段：':
-        'This key is a standard field and cannot be used as a custom field: ',
-    '缺少显示名称：': 'Missing display name: ',
-    '字段键重复：': 'Duplicate field key: ',
 }

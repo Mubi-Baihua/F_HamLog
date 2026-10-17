@@ -1,5 +1,5 @@
 from PySide6.QtWidgets import *
-from PySide6.QtGui import QAction, QKeySequence
+from PySide6.QtGui import QAction, QKeySequence, QBrush
 from PySide6.QtCore import Qt, QEvent, QObject, QTimer, QThread, Signal, QRect  # 新增导入 Qt
 from f_hamlog.dialog_defaults import desktop_dir
 from f_hamlog import i18n
@@ -8,6 +8,7 @@ import time as time_
 import sys
 import os
 import re
+import ast
 import json
 import getpass
 import socket
@@ -73,6 +74,27 @@ def write_back_field(rec, key, text, is_custom=False):
         rec.pop(key, None)
     else:
         rec[key] = text
+
+
+# 日期 / 时间两个字段除了「非空」还要校验格式（历史行为，勾掉「必填」后空值即放行）
+_FIELD_PATTERNS = {'date': (r'^\d{4}-\d{2}-\d{2}$', '日期格式错误，应为YYYY-MM-DD'),
+                   'time': (r'^\d{2}:\d{2}$', '时间格式错误，应为HH:MM')}
+
+
+def validate_field_text(key, label, text, required=False):
+    """校验录入窗口里某个字段的内容，返回错误提示；``None`` = 通过。
+
+    「必填」由字段定义决定（标准字段的默认必填项 + 用户勾选的），不再写死字段名；
+    日期 / 时间额外校验格式，但**取消必填后允许留空**。
+    """
+    pattern = _FIELD_PATTERNS.get(key)
+    if text == '':
+        if required:
+            return f"缺少 {label} (必填)"
+        return None
+    if pattern is not None and not re.search(pattern[0], text):
+        return pattern[1]
+    return None
 
 # ==========================================================================
 # .fhla 文件格式（F HamLog Archive）—— 带属性的项目文件
@@ -152,21 +174,47 @@ def current_version():
     return APP_VERSION
 
 
-def current_editor():
-    """当前操作者：优先设置里的「己方呼号」，其次操作系统用户名。
+def load_settings():
+    """读设置字典（``file/m_xml.txt``，数据目录下的绝对路径）。读不出来就返回空 dict。
 
-    呼号取自 ``file/m_xml.txt``（与本模块读同一份设置）。读不到时退化到系统用户名；
-    再取不到就返回空串（属性留空，而不是写个假的）。
+    读文件用 ``utf-8-sig``：设置文件若被记事本之类存成带 BOM 的 UTF-8，按普通 utf-8
+    读会多出一个 ``\\ufeff`` 前缀，``literal_eval`` 直接抛异常 —— 表现为「呼号明明填了，
+    程序却当成没填」（属性里退成系统用户名、新建日志的己方呼号为空）。
+    解析优先 ``ast.literal_eval``（只认字面量，安全），退路才是 ``eval``（兼容旧文件）。
     """
     try:
-        with open(app_path('file/m_xml.txt'), 'r', encoding='utf-8') as f:
-            call = (eval(f.read()).get('m_call') or '').strip().upper()
-        if call:
-            return call
+        with open(app_path('file/m_xml.txt'), 'r', encoding='utf-8-sig') as f:
+            text = f.read()
     except Exception:
-        pass
+        return {}
+    for parse in (ast.literal_eval, eval):
+        try:
+            data = parse(text)
+        except Exception:
+            continue
+        if isinstance(data, dict):
+            return data
+    return {}
+
+
+def my_call():
+    """设置里填写的「我的呼号」（大写、去空白）；没填或读不到时返回空串。"""
+    val = load_settings().get('m_call')
+    return str(val).strip().upper() if val is not None else ''
+
+
+def current_editor():
+    """当前操作者 = 设置里自己填的呼号；**没填呼号才退回系统用户名**。
+
+    呼号（``m_call``）是用户在设置界面填的身份，比机器上的 Windows 用户名更能说明
+    「谁创建 / 编辑的」；只有呼号为空（或设置文件读不出来）时才用系统用户名兜底，
+    再取不到就返回空串（属性留空，而不是写个假的）。
+    """
+    call = my_call()
+    if call:
+        return call
     try:
-        return getpass.getuser()
+        return (getpass.getuser() or '').strip()
     except Exception:
         return ''
 
@@ -214,7 +262,159 @@ def normalize_meta(meta=None):
         out['format_version'] = int(out.get('format_version') or FORMAT_VERSION)
     except (TypeError, ValueError):
         out['format_version'] = FORMAT_VERSION
+    # 字段顺序 / 字段属性只在「用户真的调整过」时才存在（缺省不写，保持文件干净）
+    if 'field_order' in out:
+        order = out.get('field_order')
+        out['field_order'] = [str(k) for k in order] if isinstance(order, (list, tuple)) else []
+    if 'field_meta' in out:
+        out['field_meta'] = normalize_field_meta(out.get('field_meta'))
     return out
+
+
+# -------------------------- 字段定义（顺序 / 必填 / 主页显示） --------------------------
+# 2026-10-17：自定义字段不再让用户填「字段键」，只填**名称**（键 = 首次创建时的名称）；
+# 另外支持调整**全部字段**（含标准 20 个）的显示顺序、以及自定义字段的「必填」「在主页显示」。
+# 落在 .fhla 属性块里的两个**可选**键（用户没调整过就不写，保持文件干净）：
+#
+#   field_order  [字段键, …]  全部字段的显示顺序（「新建日志 / 更多信息」的行序；
+#                             主表里自定义列的先后也用它）
+#   field_meta   {字段键: {'required': bool, 'main': bool}}
+#                required = 新建/编辑时必填；main = 是否作为一列显示在主页表格
+#
+# 2026-10-17（第二轮）：**标准字段的 required / main 也允许改**。没写进 field_meta 的键
+# 一律沿用历史默认（下面的 STANDARD_REQUIRED_KEYS / MAIN_DEFAULT_KEYS），只有用户真的
+# 改成非默认值才落一个覆盖项 —— 没动过的文件不会多出一堆冗余键。
+FIELD_META_KEYS = ('required', 'main')
+STANDARD_REQUIRED_KEYS = ('date', 'time', 'm_call', 'o_call', 'freq', 'mode',
+                          'm_rst', 'o_rst')
+# 主页表格的历史 12 个数据列（顺序 = 旧版列序，不能动）；其余标准字段默认不上主页，
+# 但用户在「自定义日志字段」里勾上「在主页显示」就会作为额外列追加在后面。
+MAIN_DEFAULT_KEYS = ('date', 'time', 'm_call', 'o_call', 'freq', 'mode', 'prop_mode',
+                     'sat_name', 'm_rst', 'o_rst', 'm_qth', 'o_qth')
+# 上面 12 列的历史列宽（与旧版 14 列逐个对齐，改动一个字都会让界面不一致）
+MAIN_COL_WIDTHS = {'date': 80, 'time': 70, 'm_call': 90, 'o_call': 90, 'freq': 70,
+                   'mode': 80, 'prop_mode': 90, 'sat_name': 90, 'm_rst': 80,
+                   'o_rst': 80, 'm_qth': 120, 'o_qth': 120}
+# 主表表头与录入窗口标签唯一的差别：prop_mode 在两处历史上就叫得不一样
+MAIN_COL_HEADERS = {'prop_mode': '传播模式'}
+# 非「12 个历史列」的字段（标准里的 m_dig/notes… 与全部自定义字段）上主页时的列宽
+EXTRA_COL_WIDTH = 90
+CUSTOM_COL_WIDTH = 110
+
+
+def normalize_field_meta(meta=None):
+    """把 field_meta 规范成 ``{键: {'required'?: bool, 'main'?: bool}}``。
+
+    **只保留确实写了的那几项**（不补 False）：标准字段要靠「键在不在」区分
+    「没调整过（沿用历史默认）」和「显式改成某值」，补默认值会把这个信息抹平。
+    取值时缺项按 False 处理，与旧行为一致。
+    """
+    out = {}
+    for k, v in dict(meta or {}).items():
+        v = dict(v) if isinstance(v, dict) else {}
+        out[str(k)] = {n: bool(v[n]) for n in FIELD_META_KEYS if n in v}
+    return out
+
+
+def standard_field_keys():
+    """标准 20 个字段的键（顺序即历史默认顺序）。"""
+    return list(DIALOG_FIELDS.keys())
+
+
+def field_override(field_meta, key):
+    """取某个字段的显式覆盖值 ``{'required': bool, 'main': bool}``（没有就空 dict）。
+
+    只认**确实写在文件里**的键：这样「标准字段没被调整过」和「显式设成历史默认值」
+    能区分开（前者沿用默认，后者等同没改，落盘时也会被丢掉）。
+    """
+    v = (field_meta or {}).get(key)
+    if not isinstance(v, dict):
+        return {}
+    return {k: bool(v[k]) for k in FIELD_META_KEYS if k in v}
+
+
+def standard_field_default(key):
+    """标准字段的历史默认 ``(required, main)``。"""
+    return key in STANDARD_REQUIRED_KEYS, key in MAIN_DEFAULT_KEYS
+
+
+def fields_from_meta(meta=None):
+    """把属性块整理成 ``[(key, label, required, main, is_custom), …]``（按显示顺序）。
+
+    * 顺序：``field_order`` 里登记的先后；没登记的标准字段按历史顺序补在自定义字段**之前**，
+      没登记的自定义字段按 ``other_item`` 的顺序补在最后；认不出的键丢弃。
+    * 标准字段的 label 取 ``FIELD_LABELS``；自定义字段的 label 取 ``other_item``。
+    * ``required`` / ``main``：自定义字段看 ``field_meta``（缺省 False）；标准字段看
+      ``field_meta`` 有没有显式覆盖，没有就用历史默认（哪些必填、哪些列上主页）。
+    * ``meta`` 为 None / 空 → 就是「标准 20 行 + 默认顺序 + 无自定义字段」。
+    """
+    m = normalize_meta(meta)
+    labels = m.get('other_item') or {}
+    fmeta = normalize_field_meta(m.get('field_meta'))
+    entries, seen = [], set()
+    for key in list(m.get('field_order') or []) + standard_field_keys() + list(labels):
+        key = str(key)
+        if key in seen:
+            continue
+        seen.add(key)
+        if key in FIELD_LABELS:
+            ov = field_override(fmeta, key)
+            d_req, d_main = standard_field_default(key)
+            entries.append((key, FIELD_LABELS[key],
+                            ov.get('required', d_req), ov.get('main', d_main), False))
+        elif key in labels:
+            fm = fmeta.get(key) or {}
+            entries.append((key, str(labels[key]), bool(fm.get('required')),
+                            bool(fm.get('main')), True))
+    return entries
+
+
+def fields_to_meta(meta, entries):
+    """把 ``fields_from_meta`` 的 entries 写回属性块（返回新的 meta dict，不落盘）。
+
+    标准字段只在**偏离历史默认**时才写进 ``field_meta``（改回默认就等于删掉覆盖项，
+    文件不会因为开一次对话框就多出 20 条无意义的记录）。同理，顺序若正好等于历史默认
+    （且没有自定义字段），``field_order`` 也整个省掉 —— 「恢复默认」之后文件回到出厂状态。
+    """
+    out = normalize_meta(meta)
+    entries = list(entries or [])
+    out['other_item'] = {k: lb for k, lb, _r, _m, c in entries if c}
+    order = [k for k, *_ in entries]
+    if order == standard_field_keys():
+        out.pop('field_order', None)
+    else:
+        out['field_order'] = order
+    fmeta = {}
+    for key, _lb, req, main, is_custom in entries:
+        if is_custom:
+            fmeta[key] = {'required': bool(req), 'main': bool(main)}
+            continue
+        d_req, d_main = standard_field_default(key)
+        if bool(req) != d_req or bool(main) != d_main:
+            fmeta[key] = {'required': bool(req), 'main': bool(main)}
+    if fmeta:
+        out['field_meta'] = fmeta
+    else:
+        out.pop('field_meta', None)
+    return out
+
+
+def make_field_key(label, taken=()):
+    """由「字段名称」生成一个不冲突的字段键（用户不再手填键）。
+
+    名称本身就是键（记录里可读、导出友好）；与已有键撞了（例如名称就是 ``notes``
+    或重名）才追加 ``_2``、``_3``…。空名称返回空串，由调用方拒绝。
+    """
+    base = str(label or '').strip()
+    if not base:
+        return ''
+    taken = {str(t) for t in (taken or ())} | set(FIELD_LABELS)
+    if base not in taken:
+        return base
+    n = 2
+    while f'{base}_{n}' in taken:
+        n += 1
+    return f'{base}_{n}'
 
 
 def ordered_meta(meta=None):
@@ -223,15 +423,23 @@ def ordered_meta(meta=None):
     out = {'format': meta.pop('format'), 'format_version': meta.pop('format_version')}
     for k in META_KEYS:
         out[k] = meta.pop(k)
+        if k == 'other_item':      # 字段顺序 / 字段属性紧跟在自定义字段之后，便于阅读
+            for extra in ('field_order', 'field_meta'):
+                if extra in meta:
+                    out[extra] = meta.pop(extra)
     out.update(meta)
     return out
 
 
 def other_item_text(other_item):
-    """自定义记录项目的单行描述（供界面展示）：``键（标签）、键（标签）``。"""
+    """自定义记录项目的单行描述（供界面展示）。
+
+    新字段的键就是名称（只填名称，键自动生成）→ 键与名称相同时只显示一次，
+    别写成「接收功率（接收功率）」；老字段（wx/天气）键和名称不同才两个都显示。
+    """
     if not other_item:
         return '无'
-    return '、'.join(f'{k}（{v}）' for k, v in other_item.items())
+    return '、'.join(v if k == v else f'{k}（{v}）' for k, v in other_item.items())
 
 
 def describe_meta(meta=None, other_item=None, path=''):
@@ -546,20 +754,32 @@ def save_project_file(file_path, records, key=None, meta=None, editor=None, touc
 
 
 # -------------------------- 保存对话框：格式由用户当场选 --------------------------
-# 「保存 / 另存为」一律给**两条过滤器**（.fhl 与 .fhla 各一条），让用户自己选存成
+# 「保存 / 另存为」一律给**两条过滤器**（.fhla 与 .fhl 各一条），让用户自己选存成
 # 哪种格式；合并成一条 `(*.fhl *.fhla)` 时用户没得选，且输入不带扩展名的文件名会
 # 落盘成「无扩展名」文件——再打开时按 .fhl 处理，属性就全丢了。
+# **默认 = 第一条 = `.fhla`**（新建 / 另存为默认都存带属性的 F HamLog 项目）。
 # 「打开」类对话框仍用合并的一条（一次就能看到两种文件，更好用）。
-SAVE_FILTER_FHL = 'F HamLog项目 (*.fhl)'
-SAVE_FILTER_FHLA = 'F HamLog项目（带属性） (*.fhla)'
+#
+# 显示名（定稿 2026-10-17）：
+#   .fhla = F HamLog 项目（带属性块的新格式，默认）
+#   .fhl  = F HamLog 兼容项目（纯记录的老格式，老的 F HamLog 也能打开）
+SAVE_FILTER_FHL = 'F HamLog 兼容项目 (*.fhl)'
+SAVE_FILTER_FHLA = 'F HamLog 项目 (*.fhla)'
+# 「打开」用的合并过滤器：两种文件一次就看全，名字取中性的「项目」。
+OPEN_FILTER_BOTH = 'F HamLog 项目 (*.fhla *.fhl)'
+OPEN_FILTER_BOTH_ALL = 'F HamLog 项目 (*.fhla *.fhl);;All Files (*)'
+# 只认 .fhl 的场合（导出纯记录文件）沿用「兼容项目」这个名字。
+OPEN_FILTER_FHL = SAVE_FILTER_FHL
 
 
 def project_save_filters():
     """保存对话框的过滤器字符串（两条，用户选的哪条决定落盘格式）。
 
+    顺序即默认：**第一条 `.fhla` 是默认项**（新建 / 另存为都默认存带属性的 .fhla），
+    想存纯记录的 .fhl 时用户自己切到第二条。
     逐段 ``i18n.tr`` 后再拼——整条拼完再翻会漏翻（见 i18n 约定）。
     """
-    return ';;'.join((i18n.tr(SAVE_FILTER_FHL), i18n.tr(SAVE_FILTER_FHLA)))
+    return ';;'.join((i18n.tr(SAVE_FILTER_FHLA), i18n.tr(SAVE_FILTER_FHL)))
 
 
 def complete_project_suffix(path, selected_filter=''):
@@ -567,14 +787,134 @@ def complete_project_suffix(path, selected_filter=''):
 
     Qt 的静态保存对话框**不会**替我们加后缀（自绘对话框尤其如此），用户只输入
     ``123`` 就会得到一个没有扩展名的文件。规则：已经有 .fhl / .fhla 扩展名
-    （大小写不敏感）时原样返回；否则按所选过滤器补 .fhla 或 .fhl（默认 .fhl）。
+    （大小写不敏感）时原样返回；否则按所选过滤器补 .fhla 或 .fhl
+    ——**默认 .fhla**（与默认过滤器一致），只有明确选了纯 .fhl 那条才补 .fhl。
     """
     path = str(path or '')
     low = path.lower()
     if low.endswith(FHL_SUFFIX) or low.endswith(FHLA_SUFFIX):
         return path
-    use_fhla = FHLA_SUFFIX in str(selected_filter or '').lower()
-    return path + (FHLA_SUFFIX if use_fhla else FHL_SUFFIX)
+    sel = str(selected_filter or '').lower()
+    # 注意 '*.fhl' 是 '*.fhla' 的前缀，不能只看「含 .fhl」；先判 .fhla 再判 .fhl。
+    use_fhl = (FHLA_SUFFIX not in sel) and (FHL_SUFFIX in sel)
+    return path + (FHL_SUFFIX if use_fhl else FHLA_SUFFIX)
+
+
+# -------------------------- .fhl → .fhla 迁移提示 --------------------------
+# 定稿（2026-10-17）：**每次**打开 .fhl 都提示一句「可迁移为 F HamLog 项目（.fhla）」，
+# 不做「不再提示」的记忆、也不留设置开关（用户明确要求「每次」）。
+# 只在「用户主动打开某个项目文件」时问；启动时自动加载的默认日志
+# （`file/main.fhl`，见 main.quick_project）不问，否则每次开机都弹一次。
+# 迁移 = **另存一份**同名 .fhla，原 .fhl 保留不动（别把用户唯一的文件改坏）。
+
+def fhla_sibling_path(file_path):
+    """同名 .fhla 路径：``a/b/c.fhl`` → ``a/b/c.fhla``（已是 .fhla 则原样返回）。"""
+    path = str(file_path or '')
+    low = path.lower()
+    if low.endswith(FHLA_SUFFIX):
+        return path
+    if low.endswith(FHL_SUFFIX):
+        return path[:-len(FHL_SUFFIX)] + FHLA_SUFFIX
+    return path + FHLA_SUFFIX
+
+
+def migrate_fhl_to_fhla(file_path, records, key=None, editor=None, overwrite=False,
+                        remove_source=True):
+    """把已读出的 .fhl 记录写成同名 .fhla，返回 ``(新路径, 属性块)``；失败返回 ``(None, None)``。
+
+    * 目标已存在且 ``overwrite=False`` → 不写，返回 ``(None, None)``。
+    * ``key`` 沿用打开时的密钥：加密的 .fhl 迁移后仍是加密的 .fhla（同一套 AES-GCM）。
+    * 创建者 / 创建时间 = 本次操作者（.fhl 里本来没有这些信息，从迁移这一刻开始记）。
+    * ``remove_source=True``（**定稿行为**）：迁移成功后**删除原 .fhl**，避免同一份日志
+      在目录里留两个副本、之后又反复提示迁移。删除前先把新文件读回来校验一遍
+      （条数必须一致）——删除不可逆，宁可留下源文件也不能删。
+    """
+    target = fhla_sibling_path(file_path)
+    if not target or os.path.abspath(target) == os.path.abspath(str(file_path or '')):
+        return None, None
+    if (not overwrite) and os.path.exists(target):
+        return None, None
+    try:
+        proj = write_fhla_file(target, records, key=key, meta=empty_meta(),
+                               editor=editor if editor is not None else current_editor())
+    except Exception as e:
+        try:
+            QMessageBox.warning(None, i18n.tr('迁移失败'),
+                                i18n.tr('没能写入 {}：\n{}').format(target, e))
+        except Exception:
+            pass
+        return None, None
+    if remove_source:
+        ok_count = False
+        try:
+            back = read_fhla_file(target, key=key, ask_key=False)[0]
+            ok_count = back is not None and len(back.get_fhl()) == len(records or [])
+        except Exception:
+            ok_count = False
+        if not ok_count:
+            _warn(i18n.tr('迁移失败'), i18n.tr('新文件校验未通过，原 .fhl 已保留。'))
+            return None, None
+        try:
+            os.remove(file_path)
+        except Exception as e:
+            _warn(i18n.tr('删除源文件失败'), i18n.tr('{}：\n{}').format(file_path, e))
+    return target, proj.get_xml()
+
+
+def ask_migrate_fhl(parent=None, file_path=''):
+    """问一句「要不要迁移成 .fhla」；返回 True = 用户选了迁移。
+
+    两个按钮：迁移（默认）/ 暂不迁移。Esc = 暂不迁移。
+    同名 .fhla 已存在时在提示里说明「迁移会覆盖它」——用户已经在同一个对话框里
+    点过「迁移」，就不再单独弹一次覆盖确认。
+    """
+    target = fhla_sibling_path(file_path)
+    exists = os.path.exists(target)
+    box = QMessageBox(parent)
+    box.setIcon(QMessageBox.Question)
+    box.setWindowTitle(i18n.tr('迁移项目格式'))
+    box.setText(i18n.tr('这是 F HamLog 兼容项目（.fhl）文件。'))
+    tip = i18n.tr('F HamLog 项目（.fhla）在此之外还保存项目属性'
+                  '（创建者、最后编辑者、创建与编辑时间、上次打开所用版本、加密状态）'
+                  '和自定义日志字段。')
+    if exists:
+        tip += '\n\n' + i18n.tr('同名 .fhla 已存在，迁移会覆盖它：') + '\n' + os.path.basename(target)
+    else:
+        tip += '\n\n' + i18n.tr('迁移会在同一目录另存为：') + '\n' + os.path.basename(target)
+    tip += '\n' + i18n.tr('迁移成功后，原 .fhl 文件会被删除。')
+    box.setInformativeText(tip)
+    b_migrate = box.addButton(i18n.tr('迁移'), QMessageBox.AcceptRole)
+    b_keep = box.addButton(i18n.tr('暂不迁移'), QMessageBox.RejectRole)
+    box.setDefaultButton(b_migrate)
+    box.setEscapeButton(b_keep)
+    box.exec()
+    return box.clickedButton() is b_migrate
+
+
+def offer_migration(parent, file_path, records, key=None, meta=None):
+    """打开 .fhl 后的一站式处理：提示 → 迁移 → 返回 ``(实际要打开的路径, 属性块)``。
+
+    * ``.fhla`` / 用户选「暂不迁移」/ 迁移失败 → 原样返回 ``(file_path, meta)``，
+      打开流程不受影响（迁移只是顺手做的优化，不能挡住打开）。
+    * 迁移成功 → 返回 ``(新 .fhla 路径, 新属性块)``，窗口直接对着 .fhla 工作
+      （原 .fhl 已删除，见 ``migrate_fhl_to_fhla``）。
+    """
+    if is_fhla_path(file_path) or not str(file_path or '').lower().endswith(FHL_SUFFIX):
+        return file_path, meta
+    try:
+        if not ask_migrate_fhl(parent, file_path):
+            return file_path, meta
+    except Exception:
+        return file_path, meta
+    new_path, new_meta = migrate_fhl_to_fhla(file_path, records, key=key, overwrite=True)
+    if not new_path:
+        return file_path, meta
+    try:
+        toast_tip.show_toast(i18n.tr('已迁移为 {}（原 .fhl 已删除）')
+                             .format(os.path.basename(new_path)), parent)
+    except Exception:
+        pass
+    return new_path, new_meta
 
 
 def _fhla_selftest():
@@ -1259,7 +1599,7 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
              'dirty': False}
 
     def _fhla_editor():
-        """本次编辑的操作者：优先设置里的「己方呼号」，其次系统用户名。"""
+        """本次编辑的操作者：设置里自己填的呼号；没填呼号才退回系统用户名。"""
         return current_editor()
 
     def _fhla_meta_for_write():
@@ -1268,30 +1608,34 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
             _fhla['meta'] = empty_meta()
         return _fhla['meta']
 
-    # ---------- 自定义日志字段（.fhla 属性块里的 other_item） ----------
+    # ---------- 日志字段定义（自定义字段 + 顺序 / 必填 / 主页显示） ----------
     # 字段定义随项目走，且**只属于 .fhla**（存在 xml 属性块里，改完立即写盘）；
     # .fhl 没有属性块 → 不受支持：管理窗口拒绝打开，custom_fields() 恒为空，
     # 「新建日志 / 更多信息」也就只显示标准 20 行（不为没有归宿的字段留位置）。
-    def custom_fields():
-        """当前项目的自定义字段：``{字段键: 显示标签}``（没有 / 不受支持则空 dict）。
+    def field_entries():
+        """当前项目的字段定义（按显示顺序）：``[(key, label, required, main, is_custom)]``。
 
-        自定义字段是 .fhla 的特性（定义存在属性块 other_item 里）；.fhl 是纯记录格式、
-        没有属性块 → 一律当「没有自定义字段」（录入窗口也只显示标准 20 行），
-        否则另存为 .fhl 之后还会冒出一批其实无处保存的字段行。
+        .fhl（不受支持的格式）→ 只有标准 20 行、历史顺序（自定义字段一律不出现）。
         """
         if _fhla['meta'] is None or not is_fhla_path(save_path):
-            return {}
-        return dict(normalize_meta(_fhla['meta']).get('other_item') or {})
+            return fields_from_meta(None)
+        return fields_from_meta(_fhla['meta'])
 
-    def set_custom_fields(fields):
-        """整体替换自定义字段；.fhla 项目立即落盘（属性只存在 .fhla 里，不落盘等于丢）。
+    def custom_fields():
+        """当前项目的自定义字段：``{字段键: 显示名称}``（没有 / 不受支持则空 dict）。"""
+        return {k: lb for k, lb, _r, _m, is_c in field_entries() if is_c}
+
+    def custom_main_fields():
+        """要显示在主页表格里的自定义字段：``[(键, 名称)]``，顺序随字段顺序。"""
+        return [(k, lb) for k, lb, _r, m, is_c in field_entries() if is_c and m]
+
+    def set_field_defs(entries):
+        """整体替换字段定义（顺序 / 名称 / 必填 / 主页显示），并立即落盘。
 
         走统一写入口，既刷新属性（编辑者 / 时间 / 版本 / 加密状态），也保证
         「改了字段定义」被记成一次编辑（_fhla['dirty']，见 _write_project_file）。
         """
-        meta = normalize_meta(_fhla['meta'] or empty_meta())
-        meta['other_item'] = {str(k): str(v) for k, v in dict(fields or {}).items()}
-        _fhla['meta'] = meta
+        _fhla['meta'] = fields_to_meta(_fhla['meta'] or empty_meta(), entries)
         _fhla['dirty'] = True
         if save_path and is_fhla_path(save_path) and _rc() is None:
             _write_project_file(save_path)
@@ -1536,17 +1880,37 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         a7 = QAction('重做', window); a7.triggered.connect(redo); menu.addAction(a7)
         menu.exec(table.viewport().mapToGlobal(pos))
 
-    # 表格列定义：(表头, 取值函数)。取值函数直接读 file 里的记录 dict。
-    # 注意：表头顺序与宽度必须与「搜索结果」窗口保持一致（下方 table_r 亦复用本常量）。
-    _TABLE_HEADERS = ["选择", "日期", "时间", "己方呼号", "对方呼号", "频率",
-                      "调制模式", "传播模式", "卫星名称", "己方接收信号", "对方接收信号",
-                      "己方QTH", "对方QTH", "更多"]
-    _TABLE_COL_WIDTHS = [45, 80, 70, 90, 90, 70, 80, 90, 90, 80, 80, 120, 120, 80]
-    # 数据列（1..12）对应的记录字段；列 0 = 勾选、列 13 = 更多按钮，不走文本
-    _TABLE_FIELDS = ['date', 'time', 'm_call', 'o_call', 'freq', 'mode', 'prop_mode',
-                     'sat_name', 'm_rst', 'o_rst', 'm_qth', 'o_qth']
+    # 表格两端的固定列（「选择」/「更多」）：不参与字段定义，永远在首尾。
+    # 现在真实列序由「字段定义」决定，见 _main_cols()；其余列宽见模块级 MAIN_COL_WIDTHS。
+    _CHECK_HEADER, _CHECK_COL_WIDTH = "选择", 45
+    _MORE_HEADER, _MORE_COL_WIDTH = "更多", 80
     # 行数达到该值以上时，重建表格期间显示等待光标（几百毫秒的操作有明显感知）
     _BUSY_CURSOR_THRESHOLD = 2000
+
+    def _main_cols():
+        """主表当前的列定义 ``(headers, fields, widths)``。
+
+        列序**完全等于「字段定义」的顺序**（即「自定义日志字段」里排的队、也就是
+        「新建日志 / 更多信息」的行序）：两处顺序一致，用户在管理窗口里上移/下移
+        一个字段，主页表格跟着走，不用分别记两套顺序。
+        「选择」永远在第一列、「更多」永远在最后一列；只显示 main=True 的字段。
+        每列都显式设宽（不启用 stretchLastSection），沿用旧版各处宽度。
+        """
+        headers = [_CHECK_HEADER]
+        fields, widths = [], [_CHECK_COL_WIDTH]
+        for key, label, _req, main, is_custom in field_entries():
+            if not main:
+                continue
+            if is_custom:
+                headers.append(label)
+                widths.append(CUSTOM_COL_WIDTH)
+            else:
+                headers.append(MAIN_COL_HEADERS.get(key) or label)
+                widths.append(MAIN_COL_WIDTHS.get(key, EXTRA_COL_WIDTH))
+            fields.append(key)
+        headers.append(_MORE_HEADER)
+        widths.append(_MORE_COL_WIDTH)
+        return headers, fields, widths
 
     def _new_table(rows, parent=None, on_toggle=None):
         """按统一列定义创建一个已配好列宽/委托的表格（主表与搜索结果表共用）。
@@ -1555,13 +1919,14 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         （同步 _checked_rows）；搜索结果窗口传入自己的处理函数（同步到主表）。
 
         关键性能点：先冻结刷新、批量填充、最后统一解冻，避免每 setItem 都触发重绘。
-        UI 与旧实现保持一致：不使用 stretchLastSection，14 列全部显式设宽（含末列），
+        UI 与旧实现保持一致：不使用 stretchLastSection，每列都显式设宽（含末列），
         行高沿用 Qt 默认（旧代码的 setDefaultSectionSize 本就是注释掉的）。
         """
-        tbl = QTableWidget(rows, len(_TABLE_HEADERS))
+        headers = _main_cols()[0]
+        tbl = QTableWidget(rows, len(headers))
         if parent is not None:
             tbl.setParent(parent)
-        tbl.setHorizontalHeaderLabels(_TABLE_HEADERS)
+        tbl.setHorizontalHeaderLabels(headers)
         tbl.setEditTriggers(QAbstractItemView.NoEditTriggers)
         tbl.setSelectionBehavior(QAbstractItemView.SelectRows)
         tbl.setSelectionMode(QAbstractItemView.ExtendedSelection)
@@ -1573,7 +1938,7 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         if on_toggle is None:
             on_toggle = _tbl_check_toggle
         tbl.setItemDelegateForColumn(0, CheckColumnDelegate(tbl, on_toggle=on_toggle))
-        tbl.setItemDelegateForColumn(len(_TABLE_HEADERS) - 1, MoreButtonDelegate(tbl))
+        tbl.setItemDelegateForColumn(len(headers) - 1, MoreButtonDelegate(tbl))
         return tbl
 
     def _fill_rows(tbl, rows, more_cb):
@@ -1581,11 +1946,11 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
 
         more_cb(row) 接收行号——「更多」委托按点击到的 index.row() 回调，无需逐行设回调。
         """
-        more_item = tbl.itemDelegateForColumn(len(_TABLE_HEADERS) - 1)
+        _headers, fields, widths = _main_cols()
+        more_item = tbl.itemDelegateForColumn(len(_headers) - 1)
         if more_item is not None and more_cb is not None:
             more_item.set_click(more_cb)
-        fields = _TABLE_FIELDS
-        last_col = len(_TABLE_HEADERS) - 1
+        last_col = len(_headers) - 1
         set_item = tbl.setItem       # 局部绑定，省去 14 万次属性查找
         for r, pair in enumerate(rows):
             rec = pair[0]
@@ -1599,8 +1964,8 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
                 set_item(r, c, QTableWidgetItem('' if val is None else str(val)))
             # 末列「更多」：委托绘制按钮，点击按行号回调
             set_item(r, last_col, QTableWidgetItem())
-        # 列宽：与旧实现完全一致（14 列全部显式设宽，末列也是 80）
-        for c, w in enumerate(_TABLE_COL_WIDTHS):
+        # 列宽：与旧实现完全一致（每列全部显式设宽，末列也是 80）
+        for c, w in enumerate(widths):
             tbl.setColumnWidth(c, w)
 
     def table_update(delete=True, persist=True, scroll_to_bottom=False):
@@ -1661,8 +2026,7 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
                 QApplication.restoreOverrideCursor()
 
     def new(preset=None):
-            with open(app_path('file/m_xml.txt'), 'r', encoding='utf-8') as f:
-                xml_dict = eval(f.read())
+            xml_dict = load_settings()   # 与「操作者」同一套读取（容忍 BOM / 坏内容）
             global project_others_window,file
             index = len(file)
             date = time_.strftime("%Y-%m-%d", time_.localtime())
@@ -1670,7 +2034,7 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
             file_app = {
                 'date': date,
                 'time': time,
-                'm_call': xml_dict.get('m_call', '').upper(),
+                'm_call': (xml_dict.get('m_call') or '').strip().upper(),
                 'o_call': '',
                 'freq': '',
                 'freq_rx': '',
@@ -1679,9 +2043,9 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
                 'sat_name': '',
                 'm_rst': '59',
                 'o_rst': '59',
-                'm_qth': xml_dict.get('m_qth', ''),
+                'm_qth': (xml_dict.get('m_qth') or ''),
                 'o_qth': '',
-                "m_dig": xml_dict.get('m_dig', ''),
+                "m_dig": (xml_dict.get('m_dig') or ''),
                 'o_dig': '',
                 'm_ant': '',
                 'o_ant': '',
@@ -1699,64 +2063,47 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
             project_others_window = QMainWindow()
             project_others_window.resize(410, 680)
             project_others_window.setWindowTitle('新建日志')
-            translation_dict = DIALOG_FIELDS
-            custom = custom_fields()   # 本项目自定义字段：追加在标准 20 行之后
-            rows = len(translation_dict) + len(custom)
-            table_others = QTableWidget(rows, 2)
+            # 行序 = 项目的字段定义顺序（标准 20 行 + 自定义字段，可被用户重排）
+            entries = field_entries()
+            keys_list = [k for k, *_ in entries]
+            labels_list = [lb for _k, lb, *_ in entries]
+            table_others = QTableWidget(len(entries), 2)
             table_others.setColumnWidth(0, 100)  # 设置第1列宽度为100
             table_others.setColumnWidth(1, 250)
             table_others.setHorizontalHeaderLabels(["项目", "内容"])
 
-            row = 0
-            for i in translation_dict.keys():
-                item = QTableWidgetItem(translation_dict[i])
+            for row, (key, label, _req, _main, _is_custom) in enumerate(entries):
+                item = QTableWidgetItem(label)
                 item.setFlags(item.flags() & ~Qt.ItemIsEditable)  # 禁止编辑
                 table_others.setItem(row, 0, item)
-                item2 = QTableWidgetItem(cell_text(file_app.get(i, '')))  # 第2列可以编辑
-                table_others.setItem(row, 1, item2)
-                row += 1
-            for k, label in custom.items():
-                item = QTableWidgetItem(label)
-                item.setFlags(item.flags() & ~Qt.ItemIsEditable)
-                table_others.setItem(row, 0, item)
-                table_others.setItem(row, 1, QTableWidgetItem(cell_text(file_app.get(k, ''))))
-                row += 1
-            # 己方呼号(行2)与对方呼号(行3)单元格编辑时实时转大写
+                table_others.setItem(row, 1,
+                                     QTableWidgetItem(cell_text(file_app.get(key, ''))))
+            # 己方/对方呼号所在行编辑时实时转大写——按 key 找行号（行序可被重排）
             _call_del = call_upper.UpperCallDelegate()
-            table_others.setItemDelegateForRow(2, _call_del)
-            table_others.setItemDelegateForRow(3, _call_del)
+            for _call_key in ('m_call', 'o_call'):
+                if _call_key in keys_list:
+                    table_others.setItemDelegateForRow(keys_list.index(_call_key), _call_del)
             table_others._upper_call_delegate = _call_del  # 保持引用，防止被回收
             # 字段名写在「单元格」里（不是表头），translate_widget 只翻表头不会翻它，
             # 故显式接入翻译；每次按中文原文重设，中英来回切都能正确还原。
-            i18n.bind_cell_texts(project_others_window, table_others,
-                                 list(translation_dict.values()) + list(custom.values()), col=0)
+            i18n.bind_cell_texts(project_others_window, table_others, labels_list, col=0)
             central_widget = QWidget()
             project_others_window.setCentralWidget(central_widget)
             layout_others = QVBoxLayout(central_widget)
             layout_others.addWidget(table_others)
 
             def save_changes():
-                # 获取表格数据并更新到 file 结构（自定义字段排在标准字段之后）
-                keys_list = list(translation_dict.keys()) + list(custom.keys())
-                for row in range(len(keys_list)):
-                    key = keys_list[row]
-
-                    if key == 'date':
-                        if not re.search(r'^\d{4}-\d{2}-\d{2}$', table_others.item(row, 1).text()):
-                                QMessageBox.warning(project_others_window, "格式错误", f"日期格式错误，应为YYYY-MM-DD")
-                                return
-                    elif key == 'time':
-                        if not re.search(r'^\d{2}:\d{2}?$', table_others.item(row, 1).text()):
-                            QMessageBox.warning(project_others_window, "格式错误", f"时间格式错误，应为HH:MM")
-                            return
-                    elif key in ('m_call', 'o_call', 'freq', 'mode', 'm_rst', 'o_rst'):
-                        if table_others.item(row, 1).text() == '':
-                            QMessageBox.warning(project_others_window, "格式错误", f"缺少 {DIALOG_FIELDS.get(key, key)} (必填)")
-                            return
-
-                    item = table_others.item(row, 1)  # 第二列是可编辑的内容
-                    if item!=None:
-                        write_back_field(file_app, key, item.text(), key in custom)
+                # 逐行校验：必填项来自字段定义（标准字段的默认必填 + 用户勾的「必填」）
+                for row, (key, label, req, _main, is_custom) in enumerate(entries):
+                    cell = table_others.item(row, 1)
+                    if cell is None:
+                        continue
+                    text = cell.text()
+                    err = validate_field_text(key, label, text, req)
+                    if err is not None:
+                        QMessageBox.warning(project_others_window, "格式错误", err)
+                        return
+                    write_back_field(file_app, key, text, is_custom)
                 project_others_window.close()
 
                 snapshot_before()
@@ -1774,70 +2121,52 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         project_others_window = QMainWindow()
         project_others_window.resize(410, 690)
         project_others_window.setWindowTitle('更多信息')
-        translation_dict = DIALOG_FIELDS
-        custom = custom_fields()   # 本项目自定义字段：追加在标准 20 行之后
-        rows = len(translation_dict) + len(custom)
-        table_others = QTableWidget(rows, 2)
+        # 行序 = 项目的字段定义顺序（标准 20 行 + 自定义字段，可被用户在
+        # 「自定义日志字段」里重排；.fhl 只有标准 20 行、历史顺序）。
+        entries = field_entries()
+        keys_list = [k for k, *_ in entries]
+        labels_list = [lb for _k, lb, *_ in entries]
+        table_others = QTableWidget(len(entries), 2)
         table_others.setColumnWidth(0, 100)  # 设置第1列宽度为100
         table_others.setColumnWidth(1, 250)
         table_others.setHorizontalHeaderLabels(["项目", "内容"])
 
-        row = 0
-        for i in translation_dict.keys():
-            item = QTableWidgetItem(translation_dict[i])
+        for row, (key, label, _req, _main, _is_custom) in enumerate(entries):
+            item = QTableWidgetItem(label)
             item.setFlags(item.flags() & ~Qt.ItemIsEditable)  # 禁止编辑
             table_others.setItem(row, 0, item)
-            item2 = QTableWidgetItem(cell_text(file[index].get(i, '')))  # 第2列可以编辑
-            table_others.setItem(row, 1, item2)
-            row += 1
-        for k, label in custom.items():
-            item = QTableWidgetItem(label)
-            item.setFlags(item.flags() & ~Qt.ItemIsEditable)
-            table_others.setItem(row, 0, item)
-            table_others.setItem(row, 1, QTableWidgetItem(cell_text(file[index].get(k, ''))))
-            row += 1
-        # 己方呼号(行2)与对方呼号(行3)单元格编辑时实时转大写
+            # 第2列可以编辑
+            table_others.setItem(row, 1, QTableWidgetItem(cell_text(file[index].get(key, ''))))
+        # 己方/对方呼号所在行编辑时实时转大写——**按 key 找行号**（行序可被用户重排，
+        # 不能再写死行 2 / 行 3）
         _call_del = call_upper.UpperCallDelegate()
-        table_others.setItemDelegateForRow(2, _call_del)
-        table_others.setItemDelegateForRow(3, _call_del)
+        for _call_key in ('m_call', 'o_call'):
+            if _call_key in keys_list:
+                table_others.setItemDelegateForRow(keys_list.index(_call_key), _call_del)
         table_others._upper_call_delegate = _call_del  # 保持引用，防止被回收
         # 字段名写在「单元格」里（不是表头），translate_widget 只翻表头不会翻它，
         # 故显式接入翻译；每次按中文原文重设，中英来回切都能正确还原。
-        i18n.bind_cell_texts(project_others_window, table_others,
-                             list(translation_dict.values()) + list(custom.values()), col=0)
+        i18n.bind_cell_texts(project_others_window, table_others, labels_list, col=0)
         central_widget = QWidget()
         project_others_window.setCentralWidget(central_widget)
         layout_others = QVBoxLayout(central_widget)
         layout_others.addWidget(table_others)
         def save_changes():
-            # 获取表格数据并更新到 file 结构（自定义字段排在标准字段之后）
-            keys_list = list(translation_dict.keys()) + list(custom.keys())
-            # 先校验所有字段，校验不通过则不记录撤销点
-            for row in range(len(keys_list)):
-                key = keys_list[row]
+            # 先校验所有字段（必填项来自字段定义），校验不通过则不记录撤销点
+            for row, (key, label, req, _main, _is_custom) in enumerate(entries):
                 cell = table_others.item(row, 1)
                 if cell is None:
                     continue  # 该行由 cell widget 承载（非文本单元格），跳过校验与写回
-                text = cell.text()
-                if key == 'date':
-                    if not re.search(r'^\d{4}-\d{2}-\d{2}$', text):
-                        QMessageBox.warning(project_others_window, "格式错误", f"日期格式错误，应为YYYY-MM-DD")
-                        return
-                elif key == 'time':
-                    if not re.search(r'^\d{2}:\d{2}$', text):
-                        QMessageBox.warning(project_others_window, "格式错误", f"时间格式错误，应为HH:MM")
-                        return
-                elif key in ('m_call', 'o_call', 'freq', 'mode', 'm_rst', 'o_rst'):
-                    if text == '':
-                        QMessageBox.warning(project_others_window, "格式错误", f"缺少 {DIALOG_FIELDS.get(key, key)} (必填)")
-                        return
+                err = validate_field_text(key, label, cell.text(), req)
+                if err is not None:
+                    QMessageBox.warning(project_others_window, "格式错误", err)
+                    return
             # 校验通过，记录撤销点后再写入
             snapshot_before()
-            for row in range(len(keys_list)):
-                key = keys_list[row]
+            for row, (key, _label, _req, _main, is_custom) in enumerate(entries):
                 item = table_others.item(row, 1)  # 第二列是可编辑的内容
                 if item!=None:
-                    write_back_field(file[index], key, item.text(), key in custom)
+                    write_back_field(file[index], key, item.text(), is_custom)
             project_others_window.close()
             table_update()
         def del_log(index):
@@ -1889,8 +2218,8 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         sp, sel = QFileDialog.getSaveFileName(
             window,
             i18n.tr("保存恢复的文件"),
-            os.path.join(desktop_dir(), '恢复的项目.fhl'),
-            project_save_filters())   # 两种格式各一条：由用户当场选 .fhl / .fhla
+            os.path.join(desktop_dir(), '恢复的项目.fhla'),
+            project_save_filters())   # 默认 .fhla；想存纯记录切到 .fhl 那条
         if sp == '':
             return False
         sp = complete_project_suffix(sp, sel)
@@ -1982,7 +2311,7 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
             window,  # 父窗口，可以是None或者您的主窗口
             i18n.tr("另存为文件"),  # 对话框标题
             desktop_dir(),  # 初始目录：桌面，默认文件名为空
-            project_save_filters()  # 两种格式各一条：.fhl 只存记录 / .fhla 附带属性
+            project_save_filters()  # 默认 .fhla（带属性）；想存纯记录切到 .fhl 那条
         )
         if sp == '':
             return False
@@ -2101,7 +2430,7 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
             window,
             i18n.tr("导出选中日志为FHL文件"),
             desktop_dir(),
-            project_save_filters()      # 两种格式各一条，由用户当场选
+            project_save_filters()      # 默认 .fhla；想存纯记录切到 .fhl 那条
         )
         if not save_path:
             return
@@ -2135,7 +2464,7 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
             window,  # 父窗口，可以是None或者您的主窗口
             i18n.tr("新建文件"),  # 对话框标题
             desktop_dir(),  # 初始目录：桌面，默认文件名为空
-            project_save_filters()  # 两种格式各一条：由用户当场选 .fhl / .fhla
+            project_save_filters()  # 默认 .fhla；想存纯记录切到 .fhl 那条
         )
         if save_path == '':
             return
@@ -2211,7 +2540,7 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
     file_menu.addSeparator()
 
     def show_project_props():
-        """「项目属性」（Alt+Enter）：展示 .fhla 的属性（创建者 / 最后编辑者 / 时间 / 版本 / 加密状态）。
+        """「项目属性」（Alt+I）：展示 .fhla 的属性（创建者 / 最后编辑者 / 时间 / 版本 / 加密状态）。
 
         属性保存在 .fhla 的 xml 块里（见本文件「.fhla 文件格式」一节）；.fhl 是纯记录格式、
         没有这块 → 直接提示「不支持的格式」，不做半展示（避免把内存状态当成文件属性看）。
@@ -2231,20 +2560,24 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         QMessageBox.information(window, '项目属性', '\n'.join(lines))
 
     props_action = QAction('项目属性', window)
-    # Alt+Enter：Return（主键盘）与 Enter（小键盘区）在 Qt 里是两个不同的键，
-    # 两个都收下，用户按哪个都能打开（Windows 上「Enter」通常指主键盘那个）。
-    props_action.setShortcuts([QKeySequence('Alt+Return'), QKeySequence('Alt+Enter')])
+    props_action.setShortcut(QKeySequence('Alt+I'))
     props_action.triggered.connect(show_project_props)
     file_menu.addAction(props_action)
 
     def manage_custom_fields():
-        """「自定义日志字段」：增删改本项目的自定义字段（存在 .fhla 属性块 other_item 里）。
+        """「自定义日志字段」：维护字段名称 / 顺序 / 必填 / 是否在主页显示（只属于 .fhla）。
 
-        字段定义只存在于 .fhla 的 xml 块里 → .fhl 属**不受支持的格式**，直接提示并拒绝打开
-        （与「项目属性」同一套口径，不做「只在内存生效」的半支持）。
-        字段键要写进记录的 JSON 当键用，所以必须能当键：字母 / 数字 / 下划线、不以数字开头，
-        且不能与标准字段重名（标准字段的标签由 FIELD_LABELS 决定，另存为不会覆盖它）。
-        「添加字段」按既定风格插入空行直接内联编辑，不弹二级对话框。
+        交互照「编辑卫星转发器」那套来：一句说明 + 一张表 + 添加/删除/上移/下移/保存/关闭。
+        * **只填字段名称，不填字段键**：键在首次创建时按名称自动生成（撞名自动加 _2），
+          之后改名只改显示名称、记录里的键不动 —— 改名不会丢数据。
+        * 标准 20 个字段也在表里（名称灰、不可改、不可删），但**可以一起排队**
+          （上移/下移），「新建日志 / 更多信息」的行序就按这张表的顺序来。
+        * 「必填」= 新建/编辑这条日志时该字段不能空；「在主页显示」= 该字段作为一列
+          出现在主页表格。**标准字段和自定义字段一样都能改**（改回默认值等于取消覆盖）。
+        * 主页列序 = 这张表的顺序（两处顺序一致，排一次两边都跟着走）。
+        * 「恢复默认」把表格换回出厂默认（标准 20 行 / 历史顺序 / 默认必填与主页列、
+          不留任何自定义字段）；只重置表格，点「保存更改」才落盘。
+        * 字段定义只存在于 .fhla 的 xml 块里 → .fhl 属**不受支持的格式**，直接提示并拒绝打开。
         """
         global custom_fields_window
         if not is_fhla_path(save_path):
@@ -2260,83 +2593,191 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         dlg = QMainWindow()
         custom_fields_window = dlg
         dlg.setWindowTitle('自定义日志字段')
-        dlg.resize(470, 500)
+        dlg.resize(620, 560)
         central = QWidget()
         dlg.setCentralWidget(central)
         lay = QVBoxLayout(central)
 
-        tbl = QTableWidget(0, 2)
-        tbl.setHorizontalHeaderLabels(['字段键', '显示名称'])
-        tbl.setColumnWidth(0, 160)
-        tbl.setColumnWidth(1, 250)
+        hint = QLabel('只填字段名称即可（保存时自动生成数据用的键）。'
+                      '标准字段灰显不可改名，但和自定义字段一样可以改「必填」「在主页显示」，'
+                      '也能一起用「上移 / 下移」调整顺序——主页的列序就按这里的顺序来。')
+        hint.setWordWrap(True)
+        lay.addWidget(hint)
+
+        KEY_ROLE = Qt.UserRole      # 行上记字段键（空串 = 还没保存过的新字段）
+        tbl = QTableWidget(0, 3)
+        tbl.setHorizontalHeaderLabels(['字段名称', '必填', '在主页显示'])
+        # 名称列拉伸填满，两个勾选列固定宽：窗口变宽（英文按钮更长）也不会留大片空白
+        _hdr = tbl.horizontalHeader()
+        _hdr.setSectionResizeMode(0, QHeaderView.Stretch)
+        _hdr.setSectionResizeMode(1, QHeaderView.Interactive)
+        _hdr.setSectionResizeMode(2, QHeaderView.Interactive)
+        tbl.setColumnWidth(1, 70)
+        tbl.setColumnWidth(2, 100)
         tbl.setSelectionBehavior(QAbstractItemView.SelectRows)
         tbl.setSelectionMode(QAbstractItemView.ExtendedSelection)
-        lay.addWidget(tbl)
+        tbl.setEditTriggers(QAbstractItemView.DoubleClicked | QAbstractItemView.EditKeyPressed
+                            | QAbstractItemView.AnyKeyPressed)
+        lay.addWidget(tbl, 1)       # 拉伸因子 1：表格纵向填满窗口
 
-        def add_row(field='', label=''):
+        def _check_item(checked, editable):
+            """勾选单元格；editable=False 时只画状态、不给点。"""
+            it = QTableWidgetItem()
+            if editable:
+                it.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+            else:
+                it.setFlags(Qt.ItemIsUserCheckable)
+            it.setCheckState(Qt.Checked if checked else Qt.Unchecked)
+            return it
+
+        def _checked(r, col):
+            it = tbl.item(r, col)
+            return it is not None and it.checkState() == Qt.Checked
+
+        def _add_row(key, label, required, main, is_custom):
             r = tbl.rowCount()
             tbl.insertRow(r)
-            tbl.setItem(r, 0, QTableWidgetItem(field))
-            tbl.setItem(r, 1, QTableWidgetItem(label))
+            name_item = QTableWidgetItem(label)
+            name_item.setData(KEY_ROLE, key)
+            if not is_custom:
+                # 标准字段：名称不可编辑、颜色走主题的次要文字色（跟随深浅色）；
+                # 但「必填」「在主页显示」照样可点（用户要求：不管什么字段都能改）
+                name_item.setFlags(name_item.flags() & ~Qt.ItemIsEditable)
+                name_item.setForeground(QBrush(theme.hint_color()))
+            tbl.setItem(r, 0, name_item)
+            tbl.setItem(r, 1, _check_item(required, True))
+            tbl.setItem(r, 2, _check_item(main, True))
+            return r
 
-        for _k, _v in custom_fields().items():
-            add_row(_k, _v)
-
-        def add_field():
-            add_row('', '')
-            tbl.setCurrentCell(tbl.rowCount() - 1, 0)
-            tbl.editItem(tbl.item(tbl.rowCount() - 1, 0))
-
-        def del_rows():
-            rows = sorted({i.row() for i in tbl.selectedIndexes()}, reverse=True)
-            for r in rows:
-                tbl.removeRow(r)
-
-        btn_add = QPushButton('添加字段')
-        btn_add.clicked.connect(add_field)
-        btn_del = QPushButton('删除选中')
-        btn_del.clicked.connect(del_rows)
-        btn_row = QHBoxLayout()
-        btn_row.setSpacing(10)
-        btn_row.addWidget(btn_add)
-        btn_row.addWidget(btn_del)
-        btn_row.addStretch(1)
-        lay.addLayout(btn_row)
+        for _key, _label, _req, _main, _is_custom in field_entries():
+            _add_row(_key, _label, _req, _main, _is_custom)
 
         def warn(msg):
             QMessageBox.warning(dlg, '格式错误', msg)
 
+        def add_field():
+            r = tbl.rowCount()
+            tbl.insertRow(r)
+            it = QTableWidgetItem('')
+            it.setData(KEY_ROLE, '')
+            tbl.setItem(r, 0, it)
+            tbl.setItem(r, 1, _check_item(False, True))
+            tbl.setItem(r, 2, _check_item(False, True))
+            tbl.setCurrentCell(r, 0)
+            tbl.editItem(tbl.item(r, 0))
+
+        def del_rows():
+            rows = sorted({i.row() for i in tbl.selectedIndexes()}, reverse=True)
+            if not rows:
+                return
+            std = [tbl.item(r, 0).text() for r in rows
+                   if tbl.item(r, 0) is not None
+                   and tbl.item(r, 0).data(KEY_ROLE) in FIELD_LABELS]
+            if std:   # 标准字段不许删（改了主表/录入窗口就残了）
+                warn(i18n.tr('标准字段不能删除：') + '、'.join(std))
+                return
+            for r in rows:
+                tbl.removeRow(r)
+
+        def move(delta):
+            """上移（delta=-1）/ 下移（+1）：整行换位（键与勾选状态跟着走）。"""
+            r = tbl.currentRow()
+            nr = r + delta
+            if r < 0 or nr < 0 or nr >= tbl.rowCount():
+                return
+            for col in range(tbl.columnCount()):
+                a, b = tbl.takeItem(r, col), tbl.takeItem(nr, col)
+                tbl.setItem(r, col, b)
+                tbl.setItem(nr, col, a)
+            tbl.setCurrentCell(nr, 0)
+
+        def reset_defaults():
+            """「恢复默认」：把表格换回出厂默认（标准 20 行 / 历史顺序 / 默认勾选、无自定义字段）。
+
+            **只重置表格，不写盘**：恢复默认会一次丢掉所有自定义字段定义（记录里的值仍在，
+            只是不再显示），这么重的操作不该「点一下就落盘」。用户可以接着微调，
+            点「保存更改」才真正生效；直接关窗口等于什么都没做。
+            """
+            tbl.setRowCount(0)
+            for _k, _lb, _req, _main, _is_custom in fields_from_meta(None):
+                _add_row(_k, _lb, _req, _main, _is_custom)
+            tbl.setCurrentCell(0, 0)
+            toast_tip.show_toast(i18n.tr('已恢复默认，点「保存更改」后生效。'), dlg)
+
         def save_fields():
             global custom_fields_window
-            fields = {}
+            rows, taken = [], list(FIELD_LABELS)
             for r in range(tbl.rowCount()):
-                k_item, v_item = tbl.item(r, 0), tbl.item(r, 1)
-                key = (k_item.text() if k_item else '').strip()
-                label = (v_item.text() if v_item else '').strip()
-                if key == '' and label == '':
-                    continue          # 整行空白（点了「添加字段」又没填）→ 忽略
-                if not CUSTOM_FIELD_KEY_RE.match(key):
-                    warn(i18n.tr('字段键只能用字母、数字、下划线，且不能以数字开头：') + key)
-                    return
+                name_item = tbl.item(r, 0)
+                key = ((name_item.data(KEY_ROLE) if name_item is not None else '') or '').strip()
+                name = (name_item.text() if name_item is not None else '').strip()
                 if key in FIELD_LABELS:
-                    warn(i18n.tr('该字段键是标准字段，不能作为自定义字段：')
-                         + f'{key}（{FIELD_LABELS[key]}）')
+                    # 标准行：名称固定，但「必填」「在主页显示」按表里勾选的真实状态保存
+                    rows.append([key, FIELD_LABELS[key], _checked(r, 1), _checked(r, 2), False])
+                    continue
+                if not name:
+                    if not key:
+                        continue        # 整行空白（点了「添加字段」又没填）→ 忽略
+                    warn(i18n.tr('字段名称不能为空。'))
                     return
-                if label == '':
-                    warn(i18n.tr('缺少显示名称：') + key)
+                rows.append([key, name, _checked(r, 1), _checked(r, 2), True])
+            # 校验：不能与标准字段重名、自定义字段之间也不能重名
+            seen = set()
+            for e in rows:
+                key, name = e[0], e[1]
+                if not e[4]:                 # 标准字段
+                    if name in seen:
+                        warn(i18n.tr('字段名称重复：') + name)
+                        return
+                    seen.add(name)
+                    continue
+                if name in FIELD_LABELS.values() or name in FIELD_LABELS:
+                    warn(i18n.tr('不能与标准字段重名：') + name)
                     return
-                if key in fields:
-                    warn(i18n.tr('字段键重复：') + key)
+                if name in seen:
+                    warn(i18n.tr('字段名称重复：') + name)
                     return
-                fields[key] = label
-            set_custom_fields(fields)
+                seen.add(name)
+                if not key:                  # 新字段：键按名称自动生成（唯一）
+                    key = make_field_key(name, taken=taken)
+                    e[0] = key
+                taken.append(key)
+            _h0, _f0, _w0 = _main_cols()
+            old_cols = (tuple(_h0), tuple(_f0), tuple(_w0))
+            set_field_defs([tuple(e) for e in rows])
+            custom_count = sum(1 for e in rows if e[4])
             dlg.close()
             custom_fields_window = None
-            toast_tip.show_toast(f'已保存 {len(fields)} 个自定义字段。', window)
+            _h1, _f1, _w1 = _main_cols()
+            if (tuple(_h1), tuple(_f1), tuple(_w1)) != old_cols:
+                table_update()      # 主页列（表头 / 顺序 / 宽度）变了 → 重建
+            toast_tip.show_toast(i18n.tr('已保存 {} 个自定义字段。').format(custom_count), window)
 
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(10)
+        btn_add = QPushButton('添加字段')
+        btn_add.clicked.connect(add_field)
+        btn_del = QPushButton('删除选中')
+        btn_del.clicked.connect(del_rows)
+        btn_up = QPushButton('上移')
+        btn_up.clicked.connect(lambda: move(-1))
+        btn_down = QPushButton('下移')
+        btn_down.clicked.connect(lambda: move(1))
+        btn_reset = QPushButton('恢复默认')
+        btn_reset.clicked.connect(reset_defaults)
         btn_save = QPushButton('保存更改')
         btn_save.clicked.connect(save_fields)
-        lay.addWidget(btn_save)
+        btn_close = QPushButton('关闭')
+        btn_close.clicked.connect(dlg.close)
+        btn_row.addWidget(btn_add)
+        btn_row.addWidget(btn_del)
+        btn_row.addWidget(btn_up)
+        btn_row.addWidget(btn_down)
+        btn_row.addWidget(btn_reset)
+        btn_row.addStretch(1)
+        btn_row.addWidget(btn_save)
+        btn_row.addWidget(btn_close)
+        lay.addLayout(btn_row)
         dlg.show()
 
     custom_fields_action = QAction('自定义日志字段', window)
@@ -2737,7 +3178,7 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
                 return
             save_path, sel = QFileDialog.getSaveFileName(
                 research_window, i18n.tr("导出搜索结果为FHL文件"), desktop_dir(),
-                project_save_filters())     # 两种格式各一条，由用户当场选
+                project_save_filters())     # 默认 .fhla；想存纯记录切到 .fhl 那条
             if not save_path:
                 return
             save_path = complete_project_suffix(save_path, sel)
@@ -2868,8 +3309,10 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         table_r = _new_table(len(matches), on_toggle=_sr_toggle)
         # 搜索结果表在主表列定义之后追加一列「定位到此条」（仅搜索结果窗口有），
         # 故需在创建后覆盖表头与列宽，并给该列挂上定位委托。
-        _SR_HEADERS = _TABLE_HEADERS + ["定位到此条"]
-        _SR_COL_WIDTHS = _TABLE_COL_WIDTHS + [80]
+        # 列定义取 _main_cols()：主表可能因为「在主页显示」的自定义字段而多出若干列。
+        _MC_HEADERS, _MC_FIELDS, _MC_WIDTHS = _main_cols()
+        _SR_HEADERS = _MC_HEADERS + ["定位到此条"]
+        _SR_COL_WIDTHS = _MC_WIDTHS + [80]
         table_r.setColumnCount(len(_SR_HEADERS))
         table_r.setHorizontalHeaderLabels(_SR_HEADERS)
         locate_col = len(_SR_HEADERS) - 1
@@ -2881,8 +3324,8 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         # 局部绑定 setItem 与常量，省去数万次属性查找；search_checkboxes 预分配，
         # 按行号索引写回，避免逐行 append 的重复扩容。
         _set_item = table_r.setItem
-        _fields = _TABLE_FIELDS
-        last_col = len(_TABLE_HEADERS) - 1
+        _fields = _MC_FIELDS
+        last_col = len(_MC_HEADERS) - 1
         search_checkboxes = [None] * len(matches)
         clear_sr = _sr_checked_rows.clear
         clear_sr_idx = _sr_checked_rows_idx.clear
@@ -3827,14 +4270,19 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         '_set_title': _set_title,         # 供标题 * 标记冒烟脚本驱动
         '_bk_is_dirty': _bk_is_dirty,
         '_bk_tick': _bk_tick,
+        # 主表格本身（重建后是**新对象**，所以给的是取值函数）：冒烟脚本要用它断言
+        # 列数/表头（自定义字段勾了「在主页显示」时会多出列）
+        'main_table': lambda: table,
         'save': save,
         # .fhla 属性（创建者/编辑者/时间/版本/加密状态）：可读可写，供冒烟脚本断言
         'fhla_meta': _fhla,
         'fhla_editor': _fhla_editor,
         'show_project_props': show_project_props,
-        # 自定义日志字段（other_item）：定义读写 + 管理窗口，供冒烟脚本驱动
+        # 日志字段定义（自定义字段 + 顺序 / 必填 / 主页显示）：读写 + 管理窗口
         'custom_fields': custom_fields,
-        'set_custom_fields': set_custom_fields,
+        'field_entries': field_entries,
+        'custom_main_fields': custom_main_fields,
+        'set_field_defs': set_field_defs,
         'manage_custom_fields': manage_custom_fields,
         'custom_fields_window': lambda: custom_fields_window,
     }

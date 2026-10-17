@@ -24,7 +24,7 @@ from f_hamlog.paths import app_path
 from f_hamlog import data_factory as fhlgen
 
 N = int(sys.argv[1]) if len(sys.argv) > 1 else 200
-SETTINGS = app_path('file/m_xml.txt'))
+SETTINGS = app_path('file/m_xml.txt')
 BAK = SETTINGS + '.sc_bak'
 shutil.copyfile(SETTINGS, BAK)
 TMPDIR = tempfile.mkdtemp(prefix='fhl_scroll_')
@@ -57,7 +57,9 @@ import atexit
 atexit.register(_cleanup)
 
 # 期望的原始列宽（与 HEAD:project.py 逐行一致）
-EXPECT_WIDTHS = [45, 80, 70, 90, 90, 70, 80, 90, 90, 80, 80, 120, 120, 80]
+# 2026-10-17：主页列序改为跟随「字段定义」（=「新建日志 / 更多信息」的行序），
+# 故「传播模式 / 卫星名称 / 调制模式」三列按录入窗口的顺序排，宽度随字段走。
+EXPECT_WIDTHS = [45, 80, 70, 90, 90, 70, 90, 90, 80, 80, 80, 120, 120, 80]
 
 # 记录 scrollToBottom 调用次数：在 main 内部没法直接挂钩，改为监控 QTableView.scrollToBottom
 _scroll_calls = []
@@ -89,10 +91,10 @@ ok('表头 resize 模式 = Interactive',
 ok('行高为 Qt 默认（未被强制 24）',
    table.verticalHeader().defaultSectionSize() != 24,
    str(table.verticalHeader().defaultSectionSize()))
-ok('表头文本与旧实现一致',
+ok('表头文本与「更多信息」的行序一致',
    [table.horizontalHeaderItem(i).text() for i in range(14)] ==
-   ["选择", "日期", "时间", "己方呼号", "对方呼号", "频率", "调制模式", "传播模式",
-    "卫星名称", "己方接收信号", "对方接收信号", "己方QTH", "对方QTH", "更多"])
+   ["选择", "日期", "时间", "己方呼号", "对方呼号", "频率", "传播模式", "卫星名称",
+    "调制模式", "己方接收信号", "对方接收信号", "己方QTH", "对方QTH", "更多"])
 
 # 委托外观：勾选列与末列均挂了自绘委托
 d0 = table.itemDelegateForColumn(0)

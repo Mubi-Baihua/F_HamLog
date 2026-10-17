@@ -801,11 +801,12 @@ def main(window, preset=None, on_saved=None, preset_records=None, recovered=Fals
         grid.setColumnStretch(1, 1)
 
         def add_to_project():
+            from f_hamlog import project   # 延迟导入：project 亦以延迟方式引用本模块
             project_path, _ = QFileDialog.getOpenFileName(
                 finish_dialog,
                 i18n.tr('添加到 F HamLog项目'),
                 desktop_dir(),
-                i18n.tr('F HamLog项目 (*.fhl *.fhla)')
+                i18n.tr(project.OPEN_FILTER_BOTH)
             )
             if project_path == '':
                 return
@@ -822,7 +823,7 @@ def main(window, preset=None, on_saved=None, preset_records=None, recovered=Fals
                 finish_dialog,
                 i18n.tr('另存为 F HamLog项目'),
                 desktop_dir(),
-                project.project_save_filters()   # .fhl / .fhla 各一条，由用户当场选格式
+                project.project_save_filters()   # 默认 .fhla；想存纯记录切到 .fhl 那条
             )
             if save_path == '':
                 return

@@ -68,7 +68,7 @@ def main(file_list):
         None,
         i18n.tr("选择 F HamLog 项目文件"),
         desktop_dir(),
-        i18n.tr("F HamLog项目 (*.fhl *.fhla);;All Files (*)")
+        i18n.tr("F HamLog 项目 (*.fhla *.fhl);;All Files (*)")
     )
     if not file_path:
         return list(file_list or [])

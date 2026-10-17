@@ -23,8 +23,8 @@ os.chdir(ROOT)
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 sys.exit = lambda *a, **k: None
 
-REAL_TLE = app_path('file/amateur.tle'))
-REAL_SET = app_path('file/m_xml.txt'))
+REAL_TLE = app_path('file/amateur.tle')
+REAL_SET = app_path('file/m_xml.txt')
 
 
 def md5(path):
@@ -58,7 +58,7 @@ sp.TLE_CACHE = os.path.join(TMP, 'amateur.tle')
 sp.SETTINGS_PATH = os.path.join(TMP, 'm_xml.txt')
 sp.TLE_SOURCES_PATH = os.path.join(TMP, 'tle_sources.txt')
 shutil.copyfile(REAL_SET, sp.SETTINGS_PATH)
-shutil.copyfile(app_path('file/tle_sources.txt')), sp.TLE_SOURCES_PATH)
+shutil.copyfile(app_path('file/tle_sources.txt'), sp.TLE_SOURCES_PATH)
 
 from f_hamlog import backup
 backup.PROJECT_BACKUP = os.path.join(TMP, 'pb.fhl')

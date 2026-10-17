@@ -43,8 +43,8 @@ def by_key(text):
     return out
 
 
-TLE_CACHE = app_path(app_path('file/amateur.tle'))
-SETTINGS = app_path(app_path('file/m_xml.txt'))
+TLE_CACHE = app_path('file/amateur.tle')
+SETTINGS = app_path('file/m_xml.txt')
 backups = []
 for path in (TLE_CACHE, SETTINGS):
     if os.path.exists(path):

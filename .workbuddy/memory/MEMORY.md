@@ -1,178 +1,95 @@
 # F HamLog 项目长期记忆
 
-> 可复现细节**一律见同目录 `DETAILS.md`**（文件结构/设置键/打包/卫星 API/加密/发布/i18n 机制/离屏坑）；
-> 逐次改动见 `YYYY-MM-DD.md`。本文件只留**约定、决策与踩坑**，新增细节写进 `DETAILS.md`。
+> **可复现细节一律见 `DETAILS.md`**（文件结构 / 设置键 / 打包 / 卫星 API / 加密协议 / 发布 /
+> i18n 机制 / 离屏坑）；逐次改动见 `YYYY-MM-DD.md`。本文件只留**约定、决策与踩坑**。
 
 ## 基本约定
-- PySide6 桌面应用，Nuitka 打包独立 exe；**现代 src 结构**（包 `src/f_hamlog/`，入口 `__main__.py`）。
-  `__main__.py` 需兼容 `python -m f_hamlog` 与 `python src/f_hamlog/__main__.py`（后者把 `src/` 入 `sys.path` 后 `from f_hamlog.main import main` 取**函数**；`f_hamlog.main` 仍是模块，勿在包根改语义）。
-- **开发环境用 `pip install -e .`（定稿 2026-10-06）**：包内模块**不加** sys.path 守卫
-  （2026-10-05 加过的 23 处已于 10-06 全撤；只留 `__main__.py` 那一处——Nuitka `--main=` 走直跑路径）。
-  直跑 `python src/f_hamlog/xxx.py` 依赖已装好的 editable 包，**换 venv / 换机器 / 别人 clone 后要重装**。
-  `pyproject.toml` 用**显式** `packages` + `package-data` 白名单（不再 `packages.find`），README「从源码运行」有说明；
-  细节与坑见 `DETAILS.md`。
-- **版本单一来源 = `src/f_hamlog/__init__.py.__version__`**：`pyproject.toml` 用 `dynamic=["version"]`+`attr`；
-  界面/插件等一切版本号一律取它，**禁止硬编码**（i18n 模板用 `{}` 占位）。
-- **应用退出前必须停掉所有后台 `QThread`**（否则退出时线程被 GC → Qt 崩溃，Windows 表现「Python 停止运行」）；
-  `main.py` 用 `app.aboutToQuit.connect(satellite_auto_updater.stop)`，`stop()` 内 `requestInterruption→wait→terminate` 兜底。
-- 本机 shell 部分可用（shim 缺 `dirname`/`cat`）：`ls/head/tail/wc/rm/git` 可用。
-- 文件读写优先 Glob/Grep/Read/Edit；项目 venv：`D:\F-Dev\BIG\F_HamLog\.venv\Scripts\python.exe`（绝对路径）。
-- **数据目录解析顺序 = `F_HAMLOG_DATA_DIR` → exe 目录 → 模块目录 → cwd（垫底）**（`paths.py`）：
-  **绝对不要相信 cwd**——任何进程/脚本都能在 cwd 下造出（甚至带标记文件的）`file/`，
-  2026-10-16 因此踩了两次坑；要指定数据目录用环境变量覆盖。
-  **数据文件一律走 `app_path('file/…')` 绝对路径，禁止用 cwd 相对路径写**。
-- **不主动 git commit/push**，除非用户明确要求。
-- 分支：`main`（默认/发版）、`develop`（开发）、`develop-English`（英文翻译）。
+- PySide6 桌面应用，Nuitka 打包；**src 结构**（包 `src/f_hamlog/`，入口 `__main__.py`，
+  兼容 `-m f_hamlog` 与直跑）。开发用 `pip install -e .`，**包内模块不加 sys.path 守卫**（只 `__main__.py` 一处）。
+- **版本单一来源 = `__init__.py.__version__`**（pyproject 用 `dynamic`+`attr`），一切版本号禁止硬编码（i18n 用 `{}`）。
+- **退出前必须停掉所有后台 `QThread`**（`app.aboutToQuit` → `AutoTleUpdater.stop()`：
+  `requestInterruption→wait→terminate`），否则 GC 时 Qt 崩溃（Windows「Python 停止运行」）。
+- **数据目录 = `F_HAMLOG_DATA_DIR` → exe 目录 → 模块目录 → cwd（垫底）**（`paths._app_base_dir()`
+  只认带标记文件的候选）。**绝不相信 cwd**：数据文件一律 `app_path('file/…')` 绝对路径，
+  禁止 cwd 相对路径写（`backup.py` 曾造出假 `file/` → 主窗打不开，2026-10-16）。
+- 本机 shell 部分可用（`ls/head/tail/wc/rm/git`；缺 `dirname`/`cat`）；venv
+  `D://F-Dev//BIG//F_HamLog//.venv//Scripts//python.exe`；文件优先 Glob/Grep/Read/Edit。
+- **不主动 git commit/push**；分支 `main`（发版）/ `develop` / `develop-English`。
 
-## 项目文件格式：`.fhl` / `.fhla`（2026-10-16 定稿，细节见 `DETAILS.md`）
-- `.fhl` 不变 = 纯 `list[dict]` 记录；`.fhla` = `{"xml": 属性块, "project": 记录列表}`。
-  **读写统一走 `project.read_project_file` / `save_project_file`（按扩展名分派）**，
-  别在调用处直接 `fhl_rw.*`（会漏掉属性块，且 `.fhla` 会被写成纯 list 丢属性）。
-  **实现就在 `project.py` 里**（`FIELD_LABELS` 之后那段）——原来的独立模块 `fhla_rw.py`
-  已于 2026-10-16 并入 `project.py` 并删除；接口名没变，只是命名空间改成 `project.*`。
-- 属性：`other_item`（**自定义日志字段**，扩展 FIELD_LABELS）+ 创建者 / 最后编辑者 / 创建时间 /
-  最后编辑时间 / 上次打开所用版本（= `__version__`）/ 加密状态。**上传送三元组 `(records, key, meta)`**，
-  `.fhl` 的 meta 恒为 `None`。回写时必须把 meta 原样带回，否则属性被重置。
-- `encrypted` 只是声明，**以字节能否 UTF-8 解为准**；「创建者」只认第一次落盘的人（幂等）；
-  **「打开即自动保存」不算一次编辑**（`project.py` 用打开时的内容快照比对决定 `touch`；
-  改自定义字段则靠 `_fhla['dirty']` 单独记一笔）。
-- **「项目属性」= `Alt+Enter`**（`Alt+Return` + `Alt+Enter` 两个都挂）；**`.fhl` 项目直接提示
-  「不支持的格式」**（`.fhl` 没有属性块，不做半展示）。
-- **自定义日志字段**：管理入口「文件 → 自定义日志字段」（两列内联编辑，添加=插入空行）；
-  **在「新建日志 / 更多信息」两窗中追加在标准 20 行之后**（行序常量 `DIALOG_FIELDS`，
-  行 2/3 的呼号大写委托不能动；`bind_cell_texts` 要带上自定义标签）。
-  **`.fhl` 属不受支持的格式：管理窗口拒绝打开（提示不支持的格式），`custom_fields()` 恒空，
-  录入窗口只显示标准 20 行**——不做「内存生效」半支持。
-  **绝不进主表 14 列**（主表必须与旧版逐项一致，勿擅自加列）。
-- **保存对话框让用户当场选格式**：`project.project_save_filters()`（两条过滤器：
-  `*.fhl` / `*.fhla`）+ `project.complete_project_suffix(path, sel)`（补扩展名，Qt 不补）。
-  默认选中第一条 → 默认 `.fhl`。**「打开」对话框仍用合并的一条**。
-- ⚠️ **数据目录解析的坑（2026-10-16）**：`paths._app_base_dir()` 只认「`file/` 里有标记文件
-  （m_xml.txt / main.fhl / amateur.tle / pack_list.txt）」的候选；**任何代码都不许往 cwd 相对
-  路径写数据**（`backup.py` 曾写 `file/project_backup.fhl`，凭空造出假 `file/` 把 DATA_DIR
-  带偏 → 主窗打不开）。新加数据文件时一律 `app_path('file/xxx')`。详见 `DETAILS.md`。
+## 文件格式 `.fhl` / `.fhla`
+- `.fhl` = 纯 `list[dict]`；`.fhla` = `{"xml": 属性块, "project": 记录}`。**读写统一走
+  `project.read_project_file` / `save_project_file`**（按扩展名分派，上传送三元组 `(records, key, meta)`，
+  `.fhl` 的 meta 恒 None；回写必须把 meta 原样带回）。实现在 `project.py`，原 `fhla_rw.py` 已并入删除。
+- **显示名定稿**：`.fhla` = **F HamLog 项目**，`.fhl` = **F HamLog 兼容项目**（常量 `SAVE_FILTER_*` /
+  `OPEN_FILTER_BOTH*`）。菜单动作「另存为 / 添加到 F HamLog项目」不改（动作名不是格式名）。
+- **保存默认 `.fhla`**：`project_save_filters()`（第一条即默认）+ `complete_project_suffix(path, sel)`
+  （Qt 不补后缀，`sel` 为空也补 `.fhla`；判 sel 时 `*.fhl` 是 `*.fhla` 前缀，**先判 `.fhla`**）。
+- **打开 `.fhl` 每次都问「迁移 / 暂不迁移」**（无「不再提示」、无开关）：`offer_migration(...)` →
+  `(实际路径, 属性块)`；迁移 = 写同名 `.fhla`（**读回校验条数**）→ **删原 `.fhl`**，沿用密钥，
+  创建者 = 本次操作者；失败不挡打开。默认日志也问：`main.default_quick_project_path()`
+  **优先 `main.fhla`** → `main.fhl` → 新装即 `.fhla`。
+- `encrypted` 只是声明，**以字节能否 UTF-8 解为准**；创建者只认第一次落盘（幂等）；
+  **「打开即自动保存」不算编辑**（打开时快照比对；改字段定义靠 `_fhla['dirty']`）。
+- **操作者 = 设置里的呼号**（`m_call` 大写去空白），没填才退回系统用户名（`current_editor()`）；
+  `load_settings()` 用 `utf-8-sig` + `literal_eval`（BOM 会让旧 `eval` 静默读不到呼号）。
+- **项目属性 = `Alt+I`**；`.fhl` 直接提示「不支持的格式」（无属性块，不做半展示）。
 
-## 主题系统（theme.py）——基线 = 6d48024
-- 浅/深**一律采用平台原生调色板**，不自建兜底色；应用保持**系统原生样式（windows11）**。
-- `5e9fcbe` 的「自建调色板 + 全局 QSS 覆盖」与 `Fusion` 样式**均已被用户否决**。
-- 界面颜色一律走 `theme.py`（`hint_css()`/`warn_css()`/`link_color()`/`watch_theme()`），**禁止写死**；
-  **验证颜色必须看渲染像素**（`grab()`），不能只读 `palette()`。
-- 设置持久化：`file/m_xml.txt`（`eval` 字面量 dict）；各模块只改自己的键、保留其它键。
+## 自定义日志字段（`.fhla` 专属）
+- 入口「文件 → 自定义日志字段」：说明 + 表格 + 添加/删除/上移/下移/**恢复默认**/保存更改/关闭。
+  **只填字段名称**（键 = 首次创建时的名称，撞名 `_2`；改名只改显示名，记录键不动 → 不丢数据）。
+- 整表含**标准 20 行**（名称灰显不可改/删，但可一起排队）；**这张表的顺序 = 「新建日志 / 更多信息」
+  行序 = 主页列序**（一处排序三处跟着走）→ 呼号大写委托**按 key 找行号，不能写死行 2/3**。
+- 「必填」「在主页显示」**所有字段都能改**（默认值 = 历史行为 `STANDARD_REQUIRED_KEYS` /
+  `MAIN_DEFAULT_KEYS`）；改回默认即删覆盖项，**xml 里只记偏离默认的键**。
+- 落盘：`other_item`（键→名称）+ `field_order` + `field_meta`（可选键）。**「恢复默认」只重置表格，
+  点「保存更改」才写盘**；顺序回到历史默认时 `field_order` 整个省掉（文件回到出厂状态）。
+- **`.fhl` 一律不给**：管理窗口拒绝、`custom_fields()` 恒空、录入窗口只 20 行。
 
-## 多语言（i18n）——基线 = develop-English
-- **中文是源语言**，不做 `tr()` 侵入式改造：文字在**显示时**查词表翻译。
-  `i18n.py`（机制）+ `i18n_zh_en.py`（`TRANSLATIONS` 约 600 条）。
-- 三层 = 词表 → `translate_widget()`（**只翻表头，不翻单元格**）→ `install(app)` 事件过滤器
-  （`Show` 翻顶层窗、`LanguageChange` 重译）。
-- 模板值里写 `{}` 表示动态片段；**捕获片段要递归再翻**，**不要按「是否含汉字」短路**。
-- **切语言 = 立即原地重译**：`set_language`（+`save_language` 落盘），不重建窗口、不丢数据；
-  `translate()` 幂等，中英来回切可还原。
-- **新增界面代码零改动**即可跟随；**动态文案**要不走「漏斗函数」要不**逐段 `i18n.tr` 后再拼**
-  ——**整条拼完再翻会漏翻**（多段中文抢同一模板）。
-- **写在单元格里的固定文案**（表头之外）必须 `i18n.bind_cell_texts(win, table, texts, col=0)`：
-  按**中文原文**重设 + 跟随语言、幂等还原。已接入 `project.new()` / `project.project_others()`。
-- **冻结列 x = 竖向表头宽度**，随**行标签文字**变化；**只在 `resizeEvent` 重算不够**（宽窗切语言
-  不触发 resize）→ 监听表头几何/`headerDataChanged` + `QTimer.singleShot(0)` **延后一轮**再同步。
-- **文件对话框必须调用处翻**（原生静态 `QFileDialog.get*` 不走控件树）；Qt 标准按钮由 `qtbase_*.qm` 负责。
-- 词表键 = 源码中文**逐字符一致**；`%d`/`%.2f` 拼的写成渲染后形状（占位符统一 `{}`）。
-- **窗口尺寸随语言**：中文严格历史基准、英文按内容放宽（`fit_window`/`fit_min_width`）；
-  **必须在 `show()` 之后量**（Show 事件才触发翻译）。
-- 验证：`__i18n_smoke.py`（9 窗三阶段，漏翻/裁切/压扁须全 0）+ `__project_new_window_i18n_probe.py`
-  / `__project_more_info_i18n_probe.py` / `__set_lang_row_smoke.py`。设置页
-  **「颜色模式」+「语言」+「保存更改」同一行**（颜色在语言左侧）。
+## 主题 / 对话框 / i18n（细节见 `DETAILS.md`）
+- 浅深**一律平台原生调色板**，不建兜底色、不上全局 QSS、不用 `Fusion`（`5e9fcbe` 已被否决）。
+  颜色走 `theme.hint_css()/warn_css()/link_color()/watch_theme()`，禁止写死；**验证颜色看 `grab()` 像素**。
+- 设置持久化 `file/m_xml.txt`（`eval` 字面量 dict），各模块只改自己的键。
+- **文件对话框一律原生静态调用**（自绘 + 汉化已被否决）；`dialog_defaults.desktop_dir()` 默认桌面、文件名为空。
+- i18n：中文是源语言，显示时查词表（`i18n.py` + `i18n_zh_en.py`）；**动态文案逐段 `i18n.tr` 后再拼**
+  （整条拼完再翻会漏翻）；单元格固定文案用 `bind_cell_texts`；文件对话框必须**调用处**翻；
+  切语言原地重译、`translate()` 幂等；**窗口尺寸在 `show()` 之后量**；**词表别加重复键**。
 
-## 文件对话框——定稿：一律原生
-- 调用处静态调 `QFileDialog.getOpen/SaveFileName(...)`；`dialog_defaults.py` 只有 `desktop_dir()`
-  （默认打开桌面、默认文件名为空）。
-- **Qt 自绘 + 汉化已被否决**（丢中文/快速访问/缩略图）；本机 Qt 6.11 无原生 `#32770`。
-
-## 卫星功能（细节、API、打包见 `DETAILS.md`）
-- `satellite_pred.py`（skyfield+numpy 离线）；数据路径一律走 `satellite_pred.app_path()`。
-- 上限：预测 `MAX_PREDICT_HOURS=240`；自选 `MAX_SELECTED_SATELLITES=250`（排序后取前 N）。
-- **星历数据源 = 独立文件 `file/tle_sources.txt` + 独立窗口 `tle_source_window.py`**（入口 `set.py`）；
-  读取顺序：独立文件 → 旧键 `sat_tle_sources`（仅兼容读）→ `DEFAULT_TLE_SOURCES`。
-  **定稿**：「添加」=插入空行进内联编辑（不弹框）；`#` 前缀即禁用且**全禁用返回空列表**；
-  数据源一视同仁无 URL 特判；延迟自动探测（无按钮）只进 `_ROLE_DELAY`，**不写 `item.text()`**；
-  下载/导入**按 NORAD 编号增量更新**（旧的保留），「导入星历」**不自动勾选**。
-- 入口：project「卫星→通联预测」(Ctrl+Shift+E)；main「卫星过境」「通联预测」。
-- 地图与来源**单向同步**；**改卫星名匹配规则时两处须同步**（选择框搜索 + `lookup_transponder` 兜底）。
-- 选择对话框：**隐藏行必须 `setRowHidden`**（`setHidden()` 不触发重排）；超限 `accept()` 不关闭
-  → `reset_requested=True`+`reject()`，调用方 `while True:` 重开。
-
-## 主表格（project.py）——长日志性能定稿
-- **勾选/「更多」列一律用自绘委托**，**禁止逐行 `setCellWidget`**（万行=2 万控件→卡死）。
-- **勾选状态唯一权威 = 闭包集合 `_checked_rows`**；委托只回调 `on_toggle(row, checked)`，**不直接改 model**。
-- **UI 必须与旧版逐项一致（用户硬要求）**：14 列**全部显式设宽**
-  `[45,80,70,90,90,70,80,90,90,80,80,120,120,80]`；**不启用 `stretchLastSection`**；**不强制行高**。
-  **改表格前先 `git show HEAD:project.py` 对照原实现，别自行加「优化」。**
-- **重建必须还原滚动位置**：重建前记 `vbar.value()`，重建后 `QTimer.singleShot(0, ...)` 延迟设回；
-  `scrollToBottom` 同理需延迟。
-- **`table_update(...)`**：`scrollToBottom()` 仅 `scroll_to_bottom=True` 时执行
-  （恰好三处：首开/新建保存/批量记录保存回调）；其余重建不得跳底。
-- **`save()` 有「未变更跳过」**（`_last_written`），**首次保存必须执行**；写文件统一 `_write_project_file(path)`。
-- **`fhl_rw.write_fhl_file` 必须 `json.dumps` 后一次性 `f.write`**，**禁止 `json.dump`**。
+## 主表格（长日志性能）
+- 勾选/「更多」列**一律自绘委托**，**禁止逐行 `setCellWidget`**；勾选唯一权威 = `_checked_rows`。
+- **不启用 `stretchLastSection`**、不强制行高；每列显式设宽（`MAIN_COL_WIDTHS` / `CUSTOM_COL_WIDTH`）。
+  「选择」45 恒首列、「更多」80 恒末列。改表格前先 `git show HEAD:project.py` 对照。
+- 重建要**还原滚动位置**（`QTimer.singleShot(0, …)`）；`table_update(scroll_to_bottom=True)` 仅三处调用。
+- `save()` 有「未变更跳过」（`_last_written`），首次必须执行；`fhl_rw.write_fhl_file` 必须
+  `json.dumps` 后一次性 `f.write`（禁止 `json.dump`）。
 
 ## 提示与通知
-- **2026-09-29：所有 `.setToolTip(...)` 已整段注释**（6 文件共 47 处），便于日后启用。
-  ⚠️ 因此 `test/__sat_window_smoke.py`「刷新星历提示列出数据源」一项**必然失败**（`toolTip()` 为空）
-  ——既有状态，与 i18n 无关。
-- `toast_tip.py` 是动作型通知（非悬停提示）：非模态、无边框、置顶、不抢焦点、跟随主题、1 秒关、可堆叠。
-  **Windows 分层窗口绝不能加 `QGraphicsDropShadowEffect`**（脏矩形越界），用 1px 边框；
-  **宽度自适口径见 `DETAILS.md`，改宽度只改 `toast_tip.py` 顶部常量区**（别退回 `label.width()`）。
-- 结果反馈用 `toast_tip.show_toast`；二次确认/`QFileDialog`/格式错误/加解密/搜索/统计等仍用对话框。
-- **2026-10-02：删除日志已取消二次确认（定稿）**——两处都**直接删除 + `show_toast("已删除 N 条日志。")`**，
-  安全网是删除前的 `snapshot_before()`（Ctrl+Z 整表还原）。**不要再加回 `QMessageBox.question`**。
-  删除后须处理 `_checked_rows`：批量删除**清空**，单条删除**行号整体前移**。
+- 所有 `.setToolTip(...)` 已整段注释（2026-09-29，47 处）→ `__sat_window_smoke` 的「提示列出数据源」
+  **必然失败**（既有状态，与 i18n 无关）。
+- `toast_tip.show_toast(text, parent)`：非模态、无边框、置顶、1 秒关、可堆叠、跟随主题；
+  **Windows 分层窗口禁止 `QGraphicsDropShadowEffect`**（脏矩形越界），用 1px 边框；
+  改宽度只改该文件顶部常量区。
+- **删除日志无二次确认**（定稿）：直接删 + toast，安全网是 `snapshot_before()`（Ctrl+Z 整表还原）；
+  删除后处理 `_checked_rows`（批量清空 / 单条行号前移）。**别再改回 `QMessageBox.question`**。
 
-## 呼号统一大写（call_upper.py）
-- `UpperCallDelegate` + `connect_callsign_upper(edit, field_getter)`（仅 m_call/o_call）；挂完
-  `setItemDelegateForRow` 须 `table._upper_call_delegate = delegate` 保引用。
-
-## 多人日志（协议与实现细节见 `DETAILS.md`）
-- 密码只做身份验证；密钥程序自主生成、非对称分发后再对称加密；**全帧加密**；首次连接核对指纹。
-  **`remote_crypto.py`（纯 `cryptography`）是密码学唯一出处**。
-- **密钥根 `_data_dir(fhl_path, key_dir)`**：显式 `key_dir` > `fhl_path` 目录 > cwd；
-  **换端口即换身份**（同端口不同来源也是两把密钥）。
-- 重放防护用 **nonce 滑动窗口**（须支持乱序），**不要**用序号计数器做 AAD（广播合法跳帧→全 `InvalidTag`）。
-- **服务端必须先说话**（先发 HELLO 再读），否则互等 2 秒超时；握手失败回退旧明文 `AUTH`。
-- 引擎 `remote_server.LogServer`（纯标准库）；客户端在 project.py；独立服务端目录**自带两份副本
-  ——改协议/密码学须三份同步**（根+该目录+打包脚本）。
-- **退出必走 `RemoteConnection.shutdown()`，顺序不可换**；**Qt 关窗只隐藏、不触发 `destroyed`**
-  （资源在 `backup.install_close_guard` 的 `on_close` 释放；`destroyed` 仅兜底，**回调里禁止界面操作**；
-  判活 `_qt_alive()`）。
-- **`main.py` 只保留一个 `project_window` 引用**；改动窗口管理必须保留 `_confirm_replace_session()`。
-- **本机数据文件不是测试 playground**（`file/project_backup.fhl` 是真实数据）：测试前备份字节、finally 还原。
-
-## 独立服务端（F_HamLog_Remote_Log_Server_2.0.0）——细节见 `DETAILS.md`
-- 启动即自动创建 `keys/`、`main.fhl`、`password_xml.txt`；分发只需一个 exe。
-- `_app_dir()` **不能信 `sys.executable`/`__file__`**（onefile 指向 `%TEMP%`）；`main.py` 必须自己
-  `import remote_crypto`。
-- 该 exe 带 `--windows-uac-admin`：端到端验证须另打**去掉 uac-admin** 的临时包（不覆盖 `dist/`）。
-
-## 验证环境（离屏 GUI 冒烟）——细节见 `DETAILS.md`
-- venv 可 `QT_QPA_PLATFORM=offscreen` 真实冒烟；主窗/卫星窗/互通窗/批量/独立服务端/地图**均可离屏**。
-- **三条必记的坑**：① 槽里 `sys.exit()` 会直接终止进程 → 测试前 `sys.exit = lambda *a, **k: None`；
-  ② 静态 `QFileDialog.get*`/`QMessageBox.*` 自带模态循环，**替换 `QDialog.exec` 拦不住**，必须替换
-  静态方法本身；③ `os._exit()` 跳过 flush → 日志逐行写盘 + `faulthandler` 看门狗。
-- 脚本统一放 `test/`（`__*_smoke.py`/`__*_probe.py`/`test_*.py`，结果 `__*_out.txt`，已 `.gitignore`）；
-  **优先 monkeypatch 路径常量到临时文件**（`sp.TLE_SOURCES_PATH`/`sp.SETTINGS_PATH`/`smw.MARKERS_PATH`）。
-  ⚠️ **只 patch `sp.SETTINGS_PATH` 不够**：`set.py`/`project.py`/`batch_project.py` 读设置用**硬编码
-  相对路径 `file/m_xml.txt`**（绕过 `theme.settings_path()`）→ 还需 `os.chdir(临时目录)` 或备份字节还原。
-- **绝不能 `git checkout -- file/…` 还原 `file/` 数据文件**（用户正在用，可能已手工改）；测完核对并还原。
-- **`project.main()` 不触碰星历**（`test/__tle_write_probe.py` 可复现）：`.tle`/`m_xml.txt` md5 不变；
-  **唯一星历自动更新入口是 `main.py` 的 `satellite_auto_update.AutoTleUpdater`**。
-  若发现 `amateur.tle` 被重写，先怀疑**用户本机开着的应用实例**。
-
-## Git 合并 file/ 数据文件
-- `.tle` 冲突几乎总是「不同时刻同一批数据」：比三侧行数，**取更完整/更新一侧**。
-- `m_xml.txt` 冲突通常只差 `sat_last_update` 时间戳 → 取较新值。
-- `.workbuddy/memory/*.md` 追加型 → **双方内容全保留**，只删标记行。
-- `project.py` 的 `_bk_snapshot(...)` 冲突 → 合并为 `_bk_snapshot(snap)` + 各自提示调用。
-
-## 发布流程（GitHub Actions）——细节见 `DETAILS.md`
-- 仓库 `github.com/Mubi-Baihua/F_HamLog`，默认分支 `main`；**只有三个文件**：`main.yml`
-  （手动发布，**唯一能发 Release**）、`preview.yml`（cron 定时预览→Artifact，**无 push**）、
-  `.github/inno/F HamLog 2.iss`。**没有** `releases.yml`/`preview-cleanup.yml`（已被否）。
-- **`workflow_dispatch`/`schedule` 只认默认分支上的工作流** → `preview.yml` 必须存在于 `main` 才生效。
-- 本机**无 `gh` CLI、无 token** → 查/删 run 只能 CI 内用 `GITHUB_TOKEN`。
-- ⚠️ **取产物脚本必须双位置回退**（先 `兼容版/` 再仓库根——历史产物布局不同）。
+## 卫星 / 多人日志 / 服务端 / 验证 / 发布
+- 卫星：`satellite_pred.py`（skyfield 离线）；`MAX_PREDICT_HOURS=240`、`MAX_SELECTED_SATELLITES=250`；
+  数据源 = `file/tle_sources.txt` + 独立窗口（`#` 禁用、延迟自动探测只进 `_ROLE_DELAY`、按 NORAD 增量更新）；
+  入口 project「卫星→通联预测」Ctrl+Shift+E / main「卫星过境」「通联预测」；
+  **改卫星名匹配规则时两处同步**；选择框**隐藏行必须 `setRowHidden`**，超限靠 `reset_requested`+`while True` 重开。
+- 多人日志：**`remote_crypto.py` 是密码学唯一出处**（全帧加密、nonce 滑动窗口防重放、服务端先说话）；
+  **退出必走 `RemoteConnection.shutdown()`**；Qt 关窗只隐藏不触发 `destroyed`（资源在 `install_close_guard`）；
+  独立服务端目录**自带两份副本 → 改协议须三份同步**；`main.py` 只保留一个 `project_window` 引用，
+  改窗口管理必须保留 `_confirm_replace_session()`。
+- 服务端 exe：启动即建 `keys/`、`main.fhl`、`password_xml.txt`；`_app_dir()` **不能信 `sys.executable`**；
+  带 `--windows-uac-admin`，端到端验证须另打**去掉 uac-admin** 的临时包。
+- 验证：`QT_QPA_PLATFORM=offscreen` 可真实冒烟（主窗/卫星/互通/批量/服务端/地图）。**四个坑**：
+  ① 槽里 `sys.exit()` 终止进程；② 静态 `QFileDialog.*`/`QMessageBox.*` 自带模态循环（换 `QDialog.exec` 拦不住）；
+  ③ `os._exit()` 跳过 flush；④ **加密文件不给 `key` 去读会弹密钥框挂死**。
+  测试放 `test/`（`__*_smoke.py` 等，结果 `__*_out.txt` 已 gitignore）；`set.py`/`project.py` 读设置用
+  **硬编码 `file/m_xml.txt`**，只 patch 常量不够（需 chdir 或字节还原）；**绝不能 `git checkout -- file/…`**；
+  `project.main()` 不触碰星历（唯一自动更新入口是 `main.py` 的 `AutoTleUpdater`）。
+- 发布：仓库 `github.com/Mubi-Baihua/F_HamLog`，默认分支 `main`，只有 `main.yml`（手动发布，唯一能发
+  Release）/ `preview.yml`（cron 预览，必须在 `main`）/ `.github/inno/F HamLog 2.iss`；本机无 `gh`、无 token；
+  **取产物脚本双位置回退**（先 `兼容版/` 再仓库根）。
+- 合并 `file/` 数据文件：`.tle` 取更完整一侧；`m_xml.txt` 只差 `sat_last_update` 取较新；
+  `.workbuddy/memory/*.md` **双方全保留**。
