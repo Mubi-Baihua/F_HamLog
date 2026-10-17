@@ -62,6 +62,22 @@
 - `save()` 有「未变更跳过」（`_last_written`），首次必须执行；`fhl_rw.write_fhl_file` 必须
   `json.dumps` 后一次性 `f.write`（禁止 `json.dump`）。
 
+## 运行日志（app_log.py）——2026-10-17 新增
+- **入口装配**：`__main__.py`（import main **之前**）与 `main.main()` 开头各调一次
+  `app_log.setup()`（幂等）。落盘 `app_path('file/log')`，按天一个文件
+  `F_HamLog_YYYY-MM-DD.log`，**只留三天**（今天/昨天/前天，启动时清更早的）；
+  C 层崩溃栈单独 `F_HamLog_crash_YYYY-MM-DD.log`（faulthandler 常开句柄）。
+- **四路来源**：根 logger + `sys.stdout/stderr` 换成 `_StreamTee`（print 也进日志，
+  stdout=INFO、stderr=ERROR）+ `sys.excepthook`/`threading.excepthook`（完整 traceback）
+  + `faulthandler`/`qInstallMessageHandler`（Qt 警告）。
+- 两条硬约束：**日志自己不能把程序带崩**（全部 try 兜住、`logging.raiseExceptions=False`、
+  Tee 用 `threading.local` 防「写失败 → stderr 回灌 → 再失败」的递归）；
+  **窗口版 exe 下 `sys.stdout` 是 None**，Tee 必须支持原流为 None（只记日志）。
+- `_excepthook` 只调用**定制**的旧钩子；默认钩子改为直接写 `sys.__stderr__`，
+  否则同一段 traceback 会经 Tee 在日志里出现两遍。
+- 打包命令加 `--noinclude-data-files="file/log/*.log"`（别把开发日志打进包）；
+  `.gitignore` 已忽略 `src/f_hamlog/file/log/`。验证：`tests/__app_log_smoke.py`（21 项）。
+
 ## 提示与通知
 - 所有 `.setToolTip(...)` 已整段注释（2026-09-29，47 处）→ `__sat_window_smoke` 的「提示列出数据源」
   **必然失败**（既有状态，与 i18n 无关）。

@@ -29,6 +29,9 @@ keys/
 
 # 多人日志房间的会话日志：每次「开放多人日志」新建一份，属运行时数据
 src/f_hamlog/file/remote_rooms/
+# 运行日志（app_log 写的 file/log/，按天切分只留三天，属运行时数据）
+src/f_hamlog/file/log/
+file/log/
 F_HamLog_Remote_Log_Server_2.0.0/main.fhl
 F_HamLog_Remote_Log_Server_2.0.0/keys/
 # 独立服务端的密码存储（明文密码，且由程序自动创建，绝不入库）

@@ -91,6 +91,14 @@ def load_quick_project_data(path):
 
 
 def main():
+    # 装配运行日志（幂等：__main__ 已经装过就直接返回）。
+    # stdout/stderr、未捕获异常、线程异常、Qt 消息、C 层崩溃栈都落到 file/log/，保留三天。
+    try:
+        from f_hamlog import app_log
+        app_log.setup()
+    except Exception:
+        pass
+
     # 启动时清理过期（默认 3 天）的多人日志房间文件
     _cleanup_remote_rooms(days=1)
 
