@@ -128,12 +128,19 @@ Source: "{#SourceDistDir}\file\world_land.json";   DestDir: "{app}\file"; Flags:
 ;    tle_sources.txt / sat_map_markers.txt 这类数据时忘了改脚本 → 全新安装就是缺文件。
 ;    现在新增数据文件会自动补装（仍然不覆盖用户已有内容，安全方向一致）。
 ;    排除项 = ②里已单独处理过的 + ④的种子 + 开发机残留（python-*.exe / 未保存备份）+ 运行时目录。
-Source: "{#SourceDistDir}\file\*"; DestDir: "{app}\file"; Flags: onlyifdoesntexist recursesubdirs createallsubdirs; Excludes: "F_HamLog.ico,sat_radio_dict.txt,tqsl_dict.txt,world_land.json,amateur.tle,main.fhl,m_xml.txt,tle_sources.txt,sat_map_markers.txt,python-*.exe,*backup.fhl,log\*,keys\*,remote_rooms\*,pypack\*"
+Source: "{#SourceDistDir}\file\*"; DestDir: "{app}\file"; Flags: onlyifdoesntexist recursesubdirs createallsubdirs; Excludes: "F_HamLog.ico,sat_radio_dict.txt,tqsl_dict.txt,world_land.json,amateur.tle,main.fhl,main.fhla,m_xml.txt,tle_sources.txt,sat_map_markers.txt,python-*.exe,*backup.fhl,log\*,keys\*,remote_rooms\*,pypack\*"
 
 ; ---- ④ 用户数据 / 可写状态的「种子」 ---------------------------------------
 ;    全新安装才写入；升级一律保留用户现有内容。
 Source: "{#SourceDistDir}\file\amateur.tle";        DestDir: "{app}\file"; Flags: onlyifdoesntexist
-Source: "{#SourceDistDir}\file\main.fhl";           DestDir: "{app}\file"; Flags: onlyifdoesntexist
+;    ⚠️ 默认日志的种子文件是 **main.fhla**（2.x 起默认项目格式，见 src/f_hamlog/file/）：
+;       dist 里已经没有 main.fhl，以前这里写死 main.fhl → ISCC 直接
+;       「Source file ... main.fhl does not exist → Compile aborted」（2026-10-18 的发布失败）。
+;    ⚠️ Check: NeedSeedMainFhla —— 从旧版升级的用户 {app}\file 里已经有带数据的 main.fhl，
+;       此时**不能**再种一份空的 main.fhla：应用启动时优先打开 .fhla（main.default_quick_project_path），
+;       会把用户的旧日志「隐藏」掉（数据还在，但界面像被清空，也不会再提示迁移）。
+;       没有旧 .fhl 时才种 .fhla，有旧 .fhl 时让它照常被打开并走「迁移为 F HamLog 项目」。
+Source: "{#SourceDistDir}\file\main.fhla";          DestDir: "{app}\file"; Flags: onlyifdoesntexist; Check: NeedSeedMainFhla
 Source: "{#SourceDistDir}\file\m_xml.txt";          DestDir: "{app}\file"; Flags: onlyifdoesntexist
 Source: "{#SourceDistDir}\file\tle_sources.txt";    DestDir: "{app}\file"; Flags: onlyifdoesntexist
 Source: "{#SourceDistDir}\file\sat_map_markers.txt"; DestDir: "{app}\file"; Flags: onlyifdoesntexist
@@ -156,3 +163,14 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: de
 ; 这里只要一行：Inno 的 [INI] 走 WritePrivateProfileString，同 section+key 是覆盖语义，
 ; 重复运行不会堆叠。以前写了两行一模一样的（第二行没有 flags），纯属冗余，已删。
 Filename: "{app}\file\version.txt"; Section: "version"; Key: "version"; String: "{#MyAppVersion}"; Flags: uninsdeleteentry createkeyifdoesntexist
+
+[Code]
+{ ④ 里 main.fhla 种子文件的写入条件：**只有不存在旧版 main.fhl 时才种**。
+  旧安装（2.x 早期版本）的默认日志叫 main.fhl，里面是用户的真实记录；若同时种一份
+  空的 main.fhla，应用会优先打开它（main.default_quick_project_path），用户会以为
+  记录丢了。所以有 main.fhl 就跳过种 .fhla —— 让旧文件被正常打开、正常提示迁移。 }
+function NeedSeedMainFhla(): Boolean;
+begin
+  Result := not FileExists(ExpandConstant('{app}\file\main.fhl'));
+end;
+

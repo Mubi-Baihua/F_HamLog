@@ -592,6 +592,25 @@ sat_dur(1~240) / sat_sats / mu_sats / **theme_mode**。
 
 ## 发布流程：`.iss` 与 PowerShell 补充
 - `.iss` 用 `DefaultDirName={autopf}\{#MyAppName}` + **显式 `PrivilegesRequired=admin`**。
+- **`[Files]` 的 `Source` 必须与 dist 里真实存在的文件一致，否则 ISCC 直接 `Compile aborted`**
+  （2026-10-18 事故：默认日志已从 `main.fhl` 改成 `main.fhla`，`.iss` ④ 的种子仍写 `main.fhl`
+  → 「Source file ... main.fhl does not exist」，白跑 54 分钟构建才失败）。
+  改动 `src/f_hamlog/file/` 里被 `[Files]` 点名的文件后，必须同步 `.iss`。
+- **默认日志种子的运行时条件**：④ 的 `main.fhla` 种子带 `Check: NeedSeedMainFhla`，
+  `[Code]` 里 `Result := not FileExists(ExpandConstant('{app}\file\main.fhl'))` ——
+  升级用户已有带数据的 `main.fhl` 时不再种空 `.fhla`（否则 `main.default_quick_project_path()`
+  优先 `.fhla`，用户会以为记录被清空，也不再触发迁移提示）。② 的排除表同时也排除了 `main.fhl,main.fhla`。
+- **本机试编译（不打包、不安装）**：用
+  `C:\Users\13577\AppData\Local\Programs\Inno Setup 6\ISCC.exe`，先造一个「与 CI 同形的假 dist」
+  （`<tmp>/dist/F HamLog 2.exe` + `dist/file/` 放 `main.fhla`、**不要放** `main.fhl`），再
+  `/DSourceDistDir=<tmp>\dist /DOutputDirPath=<tmp>\out /DRepoRoot=<repo>` 编译。
+  Git Bash 下必须 `export MSYS2_ARG_CONV_EXCL="*"`，否则 `/D...` 参数会被当路径转换 →
+  「You may not specify more than one script filename」。
+- **运行时验证 `Check:` 是否生效**：复制一份 `.iss` 把 `PrivilegesRequired` 改成 `lowest`、删掉
+  `[Icons]` 两行与 `[INI]` 行（避免写开始菜单/注册表），`/DChineseMessagesFile=<repo>\.github\inno\ChineseSimplified.isl`
+  编译，然后 `setup.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /NOICONS /DIR=<tmp>\A`：
+  A（空目录）应出现 `file\main.fhla`；B（预置 `file\main.fhl`）应**没有** `main.fhla` 且 `main.fhl` 保留。
+  测完用 `unins000.exe /VERYSILENT` 卸载再删目录。
 
 ## Git 合并 `file/` 数据文件（冲突处理口径）
 - `.tle` 冲突几乎总是「不同时刻同一批数据」：比三侧行数，**取更完整/更新一侧**。
@@ -599,3 +618,49 @@ sat_dur(1~240) / sat_sats / mu_sats / **theme_mode**。
 - `.workbuddy/memory/*.md` 是追加型 → **双方内容全保留**，只删 `<<<<<<<`/`=======`/`>>>>>>>` 标记行。
 - `project.py` 的 `_bk_snapshot(...)` 冲突 → 合并为 `_bk_snapshot(snap)` + 各自提示调用。
 - **绝不能 `git checkout -- file/…`** 还原数据文件（用户正在用，可能已手工改）。
+
+## 运行日志（app_log.py）——2026-10-17 新增
+- **入口装配**：`__main__.py`（import main **之前**）与 `main.main()` 开头各调一次 `app_log.setup()`（幂等）。
+  落盘 `app_path('file/log')`，按天一个文件 `F_HamLog_YYYY-MM-DD.log`，**只留三天**（启动时清更早的）；
+  C 层崩溃栈单独 `F_HamLog_crash_YYYY-MM-DD.log`（faulthandler 常开句柄）。
+- **四路来源**：根 logger + `sys.stdout/stderr` 换成 `_StreamTee`（print 也进日志，stdout=INFO、stderr=ERROR）
+  + `sys.excepthook` / `threading.excepthook`（完整 traceback）+ `faulthandler` / `qInstallMessageHandler`。
+- 两条硬约束：**日志自己不能把程序带崩**（全部 try 兜住、`logging.raiseExceptions=False`、Tee 用
+  `threading.local` 防「写失败 → stderr 回灌 → 再失败」的递归）；**窗口版 exe 下 `sys.stdout` 是 None**，
+  Tee 必须支持原流为 None（只记日志）。
+- `_excepthook` 只调用**定制**的旧钩子；默认钩子改为直接写 `sys.__stderr__`，否则同一段 traceback 会经
+  Tee 在日志里出现两遍。
+- 打包命令加 `--noinclude-data-files="file/log/*.log"`；`.gitignore` 已忽略 `src/f_hamlog/file/log/`。
+  验证：`tests/__app_log_smoke.py`（21 项）。
+
+## 过境 / 通联视图（satellite_sky_window.py，2026-10-18 素色定稿）
+- 极坐标天空图。两个预测窗口的**行内「视图」按钮**是唯一数据入口。
+- 布局 = 「素色天空图（1 或 2 张并排）+ 右侧 `PANEL_W` 面板『过境数据』（方位角 / 仰角 / 距离 / 高度 +
+  进度条 + 图例）」；数据走普通 QLabel，圆盘只画图。
+- **配色一律从 `QPalette` 混合**：Highlight 给轨迹 / 箭头 / 卫星，WindowText 给文字，Base 给盘底，
+  `theme.blend` 出网格与太阳；**禁止写死颜色**；换主题靠 `theme.watch_theme` 重取。
+- **素色定稿**：不做阴影 / 光晕 / 渐变 / 圆角；状态只用一个着色文字，进度条方头，面板无描边无底色，
+  可通联只是把线画粗（2.4× 线宽，不压暗其余轨迹）。
+- `QTimer` 每秒 `follow` 刷新，拖滑块即退出实时。数据层 `sp.sky_track()`（一次矢量算 240 点）+
+  `sp.sun_altaz()` / `sp.moon_altaz()`（纯解析，无 bsp 星历）；**skyfield 没有 `ts.utc(jd=...)`**，
+  JD 一律 `ts.from_datetime(jd_to_datetime(jd))`，`Time.utc_datetime()` 对数组返回 ndarray。
+- 通联视图的「双方全部过境」：入口传 `emphasis=(可通联起,止)` + `auto_spans=True`，每站用 `_pass_span()`
+  求自己的 AOS→LOS 取轨迹，时间轴取并集（轨迹算完再按采样点扩一次轴，因为 `jd_to_datetime` 只到微秒）；
+  可通联段加粗（2.4× 线宽，无光晕），图例多一行「可通联」。
+- 两个窗口工具栏的「过境视图」：有选中用选中行，没有就自动取最近一次（优先未结束的最近一次，否则刚过去
+  的那次）并 `selectRow()` 高亮；只有表格为空才弹「还没有过境结果」。
+- **窗口是独立顶层窗口**（`SkyWindow(None, ...)`，来源窗口只存 `_source` 用来定初始位置）：有父对象就会
+  变成「被拥有的窗口」，Windows 下最小化来源窗口时会跟着一起最小化（`MapWindow(None, ...)` 同理）。
+- **经纬度 0° 是合法坐标**（赤道 / 本初子午线）：不得用「经纬度均为 0 → 视为未设置」去拦截
+  （曾各弹一个 QMessageBox，2026-10-18 移除）。
+
+## 自定义日志字段：落盘键与行为（配合 §日志字段定义）
+- 入口「文件 → 自定义日志字段」：说明 + 表格 + 添加 / 删除 / 上移 / 下移 / **恢复默认** / 保存更改 / 关闭。
+  **只填字段名称**（键 = 首次创建时的名称，撞名 `_2`；改名只改显示名，记录键不动 → 不丢数据）。
+- 整表含**标准 20 行**（名称灰显不可改 / 删，但可一起排队）；**这张表的顺序 = 「新建日志 / 更多信息」行序
+  = 主页列序**（一处排序三处跟着走）→ 呼号大写委托**按 key 找行号，不能写死行 2/3**。
+- 「必填」「在主页显示」**所有字段都能改**（默认值 = `STANDARD_REQUIRED_KEYS` / `MAIN_DEFAULT_KEYS`）；
+  改回默认即删覆盖项，**xml 里只记偏离默认的键**。
+- 落盘：`other_item`（键→名称）+ `field_order` + `field_meta`。**「恢复默认」只重置表格，点「保存更改」
+  才写盘**；顺序回到历史默认时 `field_order` 整个省掉（文件回到出厂状态）。
+- **`.fhl` 一律不给**：管理窗口拒绝、`custom_fields()` 恒空、录入窗口只 20 行。
