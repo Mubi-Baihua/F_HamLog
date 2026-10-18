@@ -209,6 +209,44 @@ FHL 文件格式为 json 文件。编码使用 utf-8。
 }
 ```
 
+#### FHLA 文件格式（.fhla）
+
+`.fhla` 是 F HamLog 的**默认项目格式**（文件对话框中显示为「F HamLog 项目」），在 `.fhl` 纯记录格式之外，额外保存项目属性与自定义字段。
+
+结构为顶层两个键的 JSON（`utf-8` 编码）：
+
+```json
+{
+  "xml": {
+    "creator": "BI8SQL",
+    "created_time": "2026-10-18 10:00:00",
+    "last_editor": "BI8SQL",
+    "last_edit_time": "2026-10-18 10:30:00",
+    "last_version": "2.7.0",
+    "encrypted": false,
+    "format": "fhla",
+    "format_version": 1,
+    "other_item": {"wx": "天气"},
+    "field_order": ["date", "time", "m_call", "o_call", "freq", "freq_rx", "mode", "prop_mode", "sat_name", "m_rst", "o_rst", "m_qth", "o_qth", "m_dig", "o_dig", "m_ant", "o_ant", "m_pow", "o_pow", "notes"],
+    "field_meta": {"wx": {"required": false, "main": true}}
+  },
+  "project": [
+    { "date": "2026-01-27", "time": "11:27", "m_call": "BI8SQL", "o_call": "BD8SE", "freq": "438.7", "freq_rx": "438.7", "mode": "FM", "prop_mode": "SAT", "sat_name": "SO-50", "m_rst": "59", "o_rst": "59", "m_qth": "昆明", "o_qth": "成都", "m_dig": "UV-K5", "o_dig": "DM9100", "m_ant": "原装", "o_ant": "原装", "m_pow": "H", "o_pow": "H", "notes": "中继点名" }
+  ]
+}
+```
+
+- `project`：**与 `.fhl` 完全相同的记录数组**，每条记录的字段含义见上表；旧版 F HamLog 也读得懂 `.fhl`。
+- `xml`（项目属性块）：
+  - `creator` / `created_time`：创建者与创建时间（只记第一次落盘的人，之后不变）；
+  - `last_editor` / `last_edit_time`：最后编辑者与时间；
+  - `last_version`：上次打开所用的 F HamLog 版本；
+  - `encrypted`：加密状态（`true` 时整份文件为 AES-GCM 密文，不再是上面的明文 JSON）；
+  - `format` / `format_version`：固定为 `"fhla"` / `1`；
+  - `other_item`：自定义字段「键 → 显示名」映射；`field_order`：全部字段的顺序（含标准字段）；`field_meta`：各字段的「必填 / 是否主页显示」，仅记录偏离默认的项。
+- 项目属性（Alt+I）与自定义日志字段只在 `.fhla` 上可用；`.fhl` 不含这些，打开时会提示「不支持的格式」。
+- 兼容性：把 `.fhl` **改名**为 `.fhla` 后即可被识别（内容一个字节未变，程序会把纯记录自动包成 `{xml:{}, project:[...]}`）；但属性块会在首次保存前保持为空，保存一次后补全。也可在打开 `.fhl` 时按提示「迁移」为 `.fhla`（迁移成功会删除原 `.fhl`）。
+
 ##### Coded by [BI8SQL](https://mubi-baihua.pages.dev/)
 
 ---
@@ -423,5 +461,43 @@ Chinese meanings of the dictionary fields:
     "notes": "Notes"
 }
 ```
+
+#### FHLA File Format (.fhla)
+
+`.fhla` is the **default project format** of F HamLog (shown as "F HamLog Project" in the file dialog). On top of the plain-record `.fhl` format, it additionally stores project properties and custom fields.
+
+It is a JSON file (utf-8) with two top-level keys:
+
+```json
+{
+  "xml": {
+    "creator": "BI8SQL",
+    "created_time": "2026-10-18 10:00:00",
+    "last_editor": "BI8SQL",
+    "last_edit_time": "2026-10-18 10:30:00",
+    "last_version": "2.7.0",
+    "encrypted": false,
+    "format": "fhla",
+    "format_version": 1,
+    "other_item": {"wx": "Weather"},
+    "field_order": ["date", "time", "m_call", "o_call", "freq", "freq_rx", "mode", "prop_mode", "sat_name", "m_rst", "o_rst", "m_qth", "o_qth", "m_dig", "o_dig", "m_ant", "o_ant", "m_pow", "o_pow", "notes"],
+    "field_meta": {"wx": {"required": false, "main": true}}
+  },
+  "project": [
+    { "date": "2026-01-27", "time": "11:27", "m_call": "BI8SQL", "o_call": "BD8SE", "freq": "438.7", "freq_rx": "438.7", "mode": "FM", "prop_mode": "SAT", "sat_name": "SO-50", "m_rst": "59", "o_rst": "59", "m_qth": "昆明", "o_qth": "成都", "m_dig": "UV-K5", "o_dig": "DM9100", "m_ant": "原装", "o_ant": "原装", "m_pow": "H", "o_pow": "H", "notes": "中继点名" }
+  ]
+}
+```
+
+- `project`: **the same record array as `.fhl`** — each record's fields are listed in the table above; older F HamLog versions can still read `.fhl`.
+- `xml` (project property block):
+  - `creator` / `created_time`: creator and creation time (set only on first save, then immutable);
+  - `last_editor` / `last_edit_time`: last editor and edit time;
+  - `last_version`: the F HamLog version used when last opened;
+  - `encrypted`: encryption flag (when `true`, the whole file is an AES-GCM ciphertext instead of the plain JSON above);
+  - `format` / `format_version`: fixed to `"fhla"` / `1`;
+  - `other_item`: custom-field "key → display name" map; `field_order`: order of all fields (including the standard ones); `field_meta`: per-field "required / shown on home page" flags, recording only entries that differ from the default.
+- Project properties (Alt+I) and custom log fields are available only on `.fhla`; `.fhl` lacks them and will show an "unsupported format" message when opened.
+- Compatibility: **renaming** a `.fhl` to `.fhla` makes it recognizable immediately (the content is unchanged — the app wraps the plain list into `{xml:{}, project:[...]}` automatically). However, the property block stays empty until the first save, after which it is filled in. You can also choose "migrate" when opening a `.fhl` to convert it to `.fhla` (the original `.fhl` is deleted after a successful migration).
 
 ##### Coded by [BI8SQL](https://mubi-baihua.pages.dev/)
