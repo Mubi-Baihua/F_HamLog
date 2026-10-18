@@ -433,10 +433,10 @@ TRANSLATIONS = {
     '迁移项目格式': 'Convert project format',
     '这是 F HamLog 兼容项目（.fhl）文件。': 'This is an F HamLog compatible project (.fhl) file.',
     'F HamLog 项目（.fhla）在此之外还保存项目属性'
-    '（创建者、最后编辑者、创建与编辑时间、上次打开所用版本、加密状态）'
+    '（上一次编辑者、上一次编辑时间、上次打开所用版本、加密状态）'
     '和自定义日志字段。':
         'An F HamLog project (.fhla) additionally stores project properties '
-        '(creator, last editor, created/edited time, last opened version, '
+        '(last editor, last edited time, last opened version, '
         'encryption state) and custom log fields.',
     '同名 .fhla 已存在，迁移会覆盖它：':
         'A .fhla file with the same name already exists and will be overwritten:',
@@ -807,15 +807,13 @@ TRANSLATIONS = {
     'YYYY-MM-DD HH:MM（如 2026-07-27 17:45）': 'YYYY-MM-DD HH:MM (e.g. 2026-07-27 17:45)',
 
     # ------------------------------------------------------------------
-    #  .fhla 项目属性（创建者 / 编辑者 / 时间 / 版本 / 加密状态）
+    #  .fhla 项目属性（上一次编辑者 / 上一次编辑时间 / 版本 / 加密状态）
     #  注：属性窗口用 QMessageBox 展示，文本不经过控件树，故这里只作词表留存；
     #      菜单项「项目属性」由事件过滤器按控件文字翻译，可直接生效。
     # ------------------------------------------------------------------
     '项目属性': 'Project properties',
-    '创建者（第一次编辑的人）': 'Creator (first editor)',
-    '最后一次编辑的人': 'Last editor',
-    '创建时间': 'Created',
-    '最后一次编辑时间': 'Last edited',
+    '上一次编辑的人': 'Last editor',
+    '上一次编辑时间': 'Last edited',
     '上次打开所用版本': 'Version last opened with',
     '加密状态': 'Encryption',
     '已加密': 'Encrypted',
@@ -831,8 +829,8 @@ TRANSLATIONS = {
     # ------------------------------------------------------------------
     '不支持的格式：当前项目不是 .fhla 文件。':
         'Unsupported format: this project is not a .fhla file.',
-    '.fhl 是纯记录格式，不含创建者、编辑者、时间、版本、加密状态等属性。':
-        '.fhl is a records-only format; it carries no creator/editor/time/version/encryption '
+    '.fhl 是纯记录格式，不含编辑者、编辑时间、版本、加密状态等属性。':
+        '.fhl is a records-only format; it carries no editor/edited-time/version/encryption '
         'properties.',
     '请「另存为」带属性的 .fhla 项目文件后再查看。':
         'Please use "Save As" to write a .fhla project file first, then check again.',

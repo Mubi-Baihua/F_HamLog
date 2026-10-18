@@ -7,8 +7,8 @@
   B 主窗口（真实调用链）：
       1) 打开 .fhla（属性随文件带进来）
       2) 「打开即自动保存」不算一次编辑——只刷「上次打开所用版本」，
-         创建者与最后编辑时间不变
-      3) 真改一条后再保存 → 最后编辑者/最后编辑时间被刷新，创建者仍是最初的人
+         上一次编辑者/时间不变（且不记录「创建者/创建时间」这类第一次编辑属性）
+      3) 真改一条后再保存 → 上一次编辑的人/时间被刷新
       4) 加密保存 → 文件变密文、属性里 encrypted=True、无密钥读不出
       5) 「项目属性」窗口文案（QMessageBox 静态方法按 Qt 行为必须整体替换）
       6) .fhl 项目格式不变（仍是纯记录列表），属性窗口给出「保存为 .fhla 才落盘」提示
@@ -119,8 +119,8 @@ fhla_rw.write_fhla_file(FHLA, proj, editor='BD0AAA')
 back, back_key = fhla_rw.read_fhla_file(FHLA, ask_key=False)
 ok('A1 记录原样往返（含自定义字段）', back.get_fhl() == recs)
 ok('A2 自定义记录项目往返', back.get_other_item() == {'wx': '天气'}, str(back.get_other_item()))
-ok('A3 创建者 / 创建时间已写入', back.creator == 'BD0AAA' and bool(back.created_time),
-   f'{back.creator} / {back.created_time}')
+ok('A3 上一次编辑的人 / 时间已写入', back.last_editor == 'BD0AAA' and bool(back.last_edit_time),
+   f'{back.last_editor} / {back.last_edit_time}')
 ok('A4 last_version = 当前版本', back.last_version == fhla_rw.current_version(), back.last_version)
 ok('A5 明文文件 encrypted=False 且探测一致',
    back.encrypted is False and fhla_rw.detect_encrypted(FHLA) is False)
@@ -132,8 +132,8 @@ ok('A7 field_labels = 标准 + 自定义',
    proj.field_labels().get('o_call') == '对方呼号' and proj.field_labels().get('wx') == '天气')
 
 # 逐属性读写
-proj.write_meta('creator', 'X1')
-ok('A8 write_meta 生效', proj.creator == 'X1')
+proj.write_meta('last_editor', 'X1')
+ok('A8 write_meta 生效', proj.last_editor == 'X1')
 proj.write_other_item({'rig': '电台'})
 ok('A9 write_other_item 整体替换', proj.get_other_item() == {'rig': '电台'})
 proj.remove_other_item('rig')
@@ -159,7 +159,7 @@ ok('A17 .fhl 磁盘内容就是 list', isinstance(raw, list))
 ok('A18 classify: is_fhla_path 大小写不敏感',
    fhla_rw.is_fhla_path('a.FHLA') and not fhla_rw.is_fhla_path('a.fhl'))
 ok('A19 缺键的旧 fhla 能补默认值',
-   fhla_rw.fhla_project({'project': []}).get_xml()['creator'] == '')
+   fhla_rw.fhla_project({'project': []}).get_xml().get('last_editor') == '')
 ok('A20 结构不对时明确报错', _raises(lambda: fhla_rw.fhla_project({'foo': 1})))
 
 
@@ -169,29 +169,31 @@ ok('A20 结构不对时明确报错', _raises(lambda: fhla_rw.fhla_project({'foo
 print('--- B 主窗口 ---', flush=True)
 from f_hamlog import project as pj
 
-# 造一份「别人建好的」.fhla：创建者 BD0AAA、带自定义记录项目
+# 造一份「别人建好的」.fhla：上一次编辑者 BD0AAA、带自定义记录项目
 proj = fhla_rw.fhla_project({'xml': {}, 'project': _recs(3, 'B')})
 proj.add_other_item('wx', '天气')
 fhla_rw.write_fhla_file(FHLA, proj, editor='BD0AAA')
+_, _, m0 = fhla_rw.read_project_file(FHLA)   # 打开前的属性（作为基线）
 
 data, key, meta = fhla_rw.read_project_file(FHLA)
-ok('B1 打开 .fhla 读到属性块', isinstance(meta, dict) and meta.get('creator') == 'BD0AAA')
+ok('B1 打开 .fhla 读到属性块', isinstance(meta, dict) and meta.get('last_editor') == 'BD0AAA')
 
 win = QtWidgets.QMainWindow()
 pj.main(win, filee=data, save_path=FHLA, key_=key, fhla_meta=meta)
 win.show()
 pump(6)
 api = win._perf_api
-ok('B2 窗口持有属性块', (api['fhla_meta'].get('meta') or {}).get('creator') == 'BD0AAA')
+ok('B2 窗口持有属性块', (api['fhla_meta'].get('meta') or {}).get('last_editor') == 'BD0AAA')
 editor = api['fhla_editor']()
 ok('B3 编辑者取自设置呼号或系统用户名', bool(editor), editor)
 ok('B4 未保存时无未保存标记的误报', api['_bk_is_dirty']() is False)
 
 _, _, m1 = fhla_rw.read_project_file(FHLA)
-ok('B5 「打开即自动保存」保住创建者', m1['creator'] == 'BD0AAA', m1['creator'])
-ok('B6 「打开即自动保存」不算编辑（编辑时间未被刷）',
-   m1['last_edit_time'] == m1['created_time'],
-   f"{m1['created_time']} -> {m1['last_edit_time']}")
+ok('B5 「打开即自动保存」保留上一次编辑者（不刷新）',
+   m1['last_editor'] == m0['last_editor'] == 'BD0AAA', m1['last_editor'])
+ok('B6 「打开即自动保存」不算编辑（上一次编辑时间未被刷）',
+   m1['last_edit_time'] == m0['last_edit_time'],
+   f"{m0['last_edit_time']} -> {m1['last_edit_time']}")
 ok('B7 写回了「上次打开所用版本」', m1['last_version'] == fhla_rw.current_version(),
    m1['last_version'])
 
@@ -214,8 +216,11 @@ ok('B10 编辑后 最后编辑者 = 当前操作者', m2['last_editor'] == edito
    f"{m2['last_editor']} vs {editor}")
 ok('B11 编辑后 最后编辑时间被刷新', m2['last_edit_time'] > before_edit,
    f"{before_edit} -> {m2['last_edit_time']}")
-ok('B12 创建者仍是最初的人', m2['creator'] == 'BD0AAA', m2['creator'])
-ok('B13 创建时间未被改', m2['created_time'] == m1['created_time'])
+ok('B12 打开即自动保存未记录「创建者 / 创建时间」',
+   'creator' not in m2 and 'created_time' not in m2, str(m2.get('creator')))
+ok('B13 上一次编辑时间晚于打开时（编辑被记为一次编辑）',
+   m2['last_edit_time'] > m1['last_edit_time'],
+   f"{m1['last_edit_time']} -> {m2['last_edit_time']}")
 ok('B14 自定义记录项目仍在', m2['other_item'] == {'wx': '天气'}, str(m2['other_item']))
 
 # —— 「项目属性」窗口（.fhla）——
@@ -241,10 +246,12 @@ finally:
     QMessageBox.information = _orig_info
 text = captured.get('text', '')
 ok('B16 属性窗口标题', captured.get('title') == '项目属性', str(captured.get('title')))
-for frag in ('创建者（第一次编辑的人）：BD0AAA', '最后一次编辑的人：' + editor,
-             '创建时间：', '最后一次编辑时间：', '上次打开所用版本：F HamLog',
-             '加密状态：未加密', '自定义记录项目：wx（天气）', 'fhla v1'):
+for frag in ('上一次编辑的人：' + editor, '上一次编辑时间：',
+             '上次打开所用版本：F HamLog', '加密状态：未加密',
+             '自定义记录项目：wx（天气）', 'fhla v1'):
     ok(f'B17 属性文案含「{frag}」', frag in text, text.replace('\n', ' | ')[:160])
+ok('B17b 属性文案不再含「创建者 / 创建时间」',
+   '创建者' not in text and '创建时间' not in text, text.replace('\n', ' | ')[:160])
 
 # —— 应用内加密保存 ——
 pj.key = 'pwd123'
@@ -254,8 +261,8 @@ ok('B18 加密保存后文件是密文', fhla_rw.detect_encrypted(FHLA) is True)
 enc = fhla_rw.read_fhla_file(FHLA, key='pwd123')[0]
 ok('B19 加密后属性 encrypted=True', enc is not None and enc.encrypted is True)
 ok('B20 加密后记录与属性完整',
-   enc is not None and len(enc.get_fhl()) == 4 and enc.creator == 'BD0AAA'
-   and enc.get_other_item() == {'wx': '天气'})
+   enc is not None and len(enc.get_fhl()) == 4 and enc.last_editor == editor
+   and enc.get_other_item() == {'wx': '天气'}, enc.last_editor)
 ok('B21 无密钥读不出', fhla_rw.read_fhla_file(FHLA, ask_key=False)[0] is None)
 
 QMessageBox.information = _fake_info
@@ -313,7 +320,9 @@ ok('C2 另存为 .fhla 后文件存在', os.path.exists(FHLA2))
 if os.path.exists(FHLA2):
     c_recs, c_key, c_meta = fhla_rw.read_project_file(FHLA2)
     ok('C3 .fhl 项目转存后记录完整', len(c_recs) == 2, str(len(c_recs)))
-    ok('C4 新 .fhla 的创建者 = 本次操作者', c_meta['creator'] == editor, str(c_meta['creator']))
+    ok('C4 新 .fhla 记录「上次打开版本」且未编辑则不上一次编辑者',
+       c_meta.get('last_version') == fhla_rw.current_version()
+       and not c_meta.get('last_editor'), str(c_meta.get('last_editor')))
     ok('C5 新 .fhla 记下版本', c_meta['last_version'] == fhla_rw.current_version())
     ok('C6 明文（未加密项目另存仍为明文）', fhla_rw.detect_encrypted(FHLA2) is False)
 
@@ -335,7 +344,7 @@ api3 = win3._perf_api
 ok('D1 记录被接收（没被当成空项目）', api3['get_table']().rowCount() == 4,
    str(api3['get_table']().rowCount()))
 ok('D2 属性块被一并接住',
-   (api3['fhla_meta'].get('meta') or {}).get('creator') == 'BD0AAA')
+   (api3['fhla_meta'].get('meta') or {}).get('last_editor') == 'BD0AAA')
 d_recs, _, d_meta = fhla_rw.read_project_file(FHLA3)
 ok('D3 落盘后记录仍是 4 条（无数据丢失）', len(d_recs) == 4, str(len(d_recs)))
 ok('D4 自定义记录项目随属性保留', d_meta.get('other_item') == {'wx': '天气'})
@@ -508,7 +517,7 @@ try:
 finally:
     QMessageBox.information = _orig_info_h
 ok('H4b Alt+I 真按键能打开属性窗口',
-   '创建者（第一次编辑的人）' in captured.get('text', ''),
+   '上一次编辑的人' in captured.get('text', ''),
    captured.get('text', '').replace('\n', ' | ')[:80])
 
 # —— H5 管理窗口（界面照「编辑卫星转发器」）：标准行 + 自定义行同表，只填名称 ——
@@ -589,8 +598,8 @@ _, _, mH = fhla_rw.read_project_file(HF)
 ok('H9 .fhla 里立即落盘（不用再手动保存）',
    mH['other_item'] == {'wx': '天气', '接收功率': '接收功率'}, str(mH['other_item']))
 ok('H10 改字段定义也算一次编辑（编辑者/时间已刷）',
-   mH['last_edit_time'] >= mH['created_time'] and mH['last_editor'] == editor,
-   f"{mH['created_time']} -> {mH['last_edit_time']} by {mH['last_editor']}")
+   bool(mH['last_edit_time']) and mH['last_editor'] == editor,
+   f"-> {mH['last_edit_time']} by {mH['last_editor']}")
 
 # —— H11~H14 校验：重名 / 删标准行 / 空行 ——
 for tag, name, frag in (
@@ -1018,9 +1027,9 @@ ok('F4 备份默认路径是绝对路径且落在数据目录里',
    os.path.isabs(_DEFAULT_PROJECT_BACKUP) and os.path.isabs(_DEFAULT_BATCH_BACKUP)
    and os.path.dirname(_DEFAULT_PROJECT_BACKUP) == os.path.join(REAL_DATA_DIR, 'file'),
    _DEFAULT_PROJECT_BACKUP)
-ok('F5 主窗依赖的数据文件都能解析到（main.fhl / pack_list.txt）',
-   os.path.exists(_app_path('file/main.fhl')) and os.path.exists(_app_path('file/pack_list.txt')),
-   _app_path('file/pack_list.txt'))
+ok('F5 主窗依赖的数据文件都能解析到（main.fhla / pack_list.txt）',
+   os.path.exists(_app_path('file/main.fhla')) and os.path.exists(_app_path('file/pack_list.txt')),
+   _app_path('file/main.fhla'))
 
 # 标记文件本身不可靠：假 file/ 里也会长出标记（跑一个「按相对路径写 file/」的遗留测试就会），
 # 所以真正的保险是**解析顺序**——应用自己的目录（exe 旁 / 包目录）优先于 cwd。
@@ -1132,17 +1141,18 @@ finally:
 ok('I5 迁移后返回同名 .fhla 且文件已落盘',
    p_new == TGT and os.path.exists(TGT), p_new)
 recs_t, key_t, meta_t = fhla_rw.read_project_file(TGT)
-_who = pj.current_editor()          # 迁移时的操作者（.fhl 里没有创建者，从迁移这一刻开始记）
+_who = pj.current_editor()          # 迁移时的操作者（.fhl 里没有这些属性，迁移后由上一次编辑者承载）
 ok('I6 记录一条不少（顺序也一致）',
    [r['time'] for r in recs_t] == [r['time'] for r in recs_i] and len(recs_t) == 3,
    '%d 条' % len(recs_t))
-ok('I7 属性块就位（创建者 / 创建时间 / 版本 / 加密状态）',
-   meta_t['creator'] == _who and bool(meta_t['created_time'])
+ok('I7 属性块就位（上一次编辑者 / 版本 / 加密状态，不再记创建者）',
+   meta_t['last_editor'] == _who
    and meta_t['last_version'] == fhla_rw.current_version()
-   and meta_t['encrypted'] is False, str(meta_t))
+   and meta_t['encrypted'] is False
+   and 'creator' not in meta_t and 'created_time' not in meta_t, str(meta_t))
 ok('I8 迁移成功后原 .fhl 已被删除（自动删源文件）', not os.path.exists(MIG))
 ok('I9 新属性块一并返回给打开流程',
-   isinstance(meta_new, dict) and meta_new.get('creator') == _who, str(meta_new))
+   isinstance(meta_new, dict) and meta_new.get('last_editor') == _who, str(meta_new))
 
 # —— I10 已是 .fhla 就不再问（一次都不能弹）——
 def _boom_ask(*a, **k):

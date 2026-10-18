@@ -113,12 +113,12 @@ def validate_field_text(key, label, text, required=False):
 #
 #   other_item      自定义日志字段：{字段键: 显示标签}，等价于把 FIELD_LABELS
 #                   扩展一份（只加不改，标准字段不被覆盖）
-#   creator         创建者（第一次编辑的人）
-#   last_editor     最后一次编辑的人
-#   created_time    创建时间
-#   last_edit_time  最后一次编辑的时间
+#   last_editor     上一次编辑的人
+#   last_edit_time  上一次编辑的时间
 #   last_version    上次打开（保存）该文件所用的 F HamLog 版本
 #   encrypted       加密状态（文件是否以 AES-GCM 加密落盘）
+#
+#   （注：不再记录「创建者 / 创建时间」这类「第一次编辑」相关的属性。）
 #
 # 磁盘结构（未加密时就是一份普通 UTF-8 JSON，缩进 4）::
 #
@@ -127,9 +127,7 @@ def validate_field_text(key, label, text, required=False):
 #             "format": "fhla",
 #             "format_version": 1,
 #             "other_item": {"wx": "天气"},
-#             "creator": "BI8SQL",
 #             "last_editor": "BI8SQL",
-#             "created_time": "2026-10-16 22:40:11",
 #             "last_edit_time": "2026-10-16 22:40:11",
 #             "last_version": "2.7.0",
 #             "encrypted": false
@@ -160,9 +158,9 @@ FORMAT_VERSION = 1
 TIME_FMT = '%Y-%m-%d %H:%M:%S'
 
 # 属性键（顺序 = 「项目属性」窗口与 JSON 里的展示顺序）
-META_KEYS = ('other_item', 'creator', 'last_editor', 'created_time',
-             'last_edit_time', 'last_version', 'encrypted')
-_TEXT_KEYS = ('creator', 'last_editor', 'created_time', 'last_edit_time', 'last_version')
+# 注意：不再记录「创建者 / 创建时间」这类「第一次编辑」相关的属性（2026-10-18 决定）。
+META_KEYS = ('other_item', 'last_editor', 'last_edit_time', 'last_version', 'encrypted')
+_TEXT_KEYS = ('last_editor', 'last_edit_time', 'last_version')
 
 
 # -------------------------- 基础工具 --------------------------
@@ -451,10 +449,8 @@ def describe_meta(meta=None, other_item=None, path=''):
     if path:
         rows.append(('文件', os.path.basename(path)))
     rows += [
-        ('创建者（第一次编辑的人）', m['creator'] or '—'),
-        ('最后一次编辑的人', m['last_editor'] or '—'),
-        ('创建时间', m['created_time'] or '—'),
-        ('最后一次编辑时间', m['last_edit_time'] or '—'),
+        ('上一次编辑的人', m['last_editor'] or '—'),
+        ('上一次编辑时间', m['last_edit_time'] or '—'),
         ('上次打开所用版本', f"F HamLog {m['last_version']}" if m['last_version'] else '—'),
         ('加密状态', '已加密' if m['encrypted'] else '未加密'),
         ('自定义记录项目', other_item_text(m['other_item'] if other_item is None else other_item)),
@@ -471,7 +467,7 @@ class fhla_project:
 
         proj = fhla_project({'xml': meta, 'project': records})
         proj.add_other_item('wx', '天气')          # 自定义记录项目
-        proj.mark_edited('BI8SQL')                 # 记一次编辑（含创建者/创建时间）
+        proj.mark_edited('BI8SQL')                 # 记一次编辑（刷新上一次编辑者 / 上一次编辑时间）
         write_fhla_file('a.fhla', proj)
     """
 
@@ -559,16 +555,8 @@ class fhla_project:
 
     # ---------- 属性便捷读写 ----------
     @property
-    def creator(self):
-        return self.xml.get('creator', '')
-
-    @property
     def last_editor(self):
         return self.xml.get('last_editor', '')
-
-    @property
-    def created_time(self):
-        return self.xml.get('created_time', '')
 
     @property
     def last_edit_time(self):
@@ -583,18 +571,12 @@ class fhla_project:
         return bool(self.xml.get('encrypted', False))
 
     # ---------- 属性维护 ----------
-    def mark_created(self, editor=None, at=None):
-        """写入创建者与创建时间；**已有创建者时不覆盖**（创建者只认第一次编辑的人）。"""
-        if self.creator:
-            return False
-        self.xml['creator'] = '' if editor is None else str(editor)
-        self.xml['created_time'] = at or now_str()
-        return True
-
     def mark_edited(self, editor=None, at=None):
-        """记一次编辑：刷新最后编辑者 / 最后编辑时间；文件尚无创建者则同时补创建者。"""
+        """记一次编辑：刷新上一次编辑者 / 上一次编辑时间。
+
+        注：不再记录「创建者 / 创建时间」这类「第一次编辑」相关的属性。
+        """
         at = at or now_str()
-        self.mark_created(editor=editor, at=at)
         self.xml['last_editor'] = '' if editor is None else str(editor)
         self.xml['last_edit_time'] = at
         return self.xml
@@ -703,9 +685,9 @@ def write_fhla_file(file_path, data, key=None, meta=None, editor=None, touch=Tru
     * ``data``：记录列表 / ``{'xml':…, 'project':…}`` / fhla_project 均可。
     * ``meta``：属性块；非空时覆盖 ``data`` 自带的属性（用于把调用方持有的最新属性写回）。
     * ``key``：非空则 AES-GCM 加密落盘，并把 ``encrypted`` 置 True。
-    * ``touch=True``：算一次编辑——刷新最后编辑者 / 最后编辑时间。
+    * ``touch=True``：算一次编辑——刷新上一次编辑者 / 上一次编辑时间。
       ``touch=False``：**不算编辑**（例如「打开项目即自动保存一次」这种写入），
-      只补创建者与创建时间、并刷新「上次打开所用版本」。
+      只刷新「上次打开所用版本」，不更新上一次编辑者 / 上一次编辑时间。
       导入导出这类不以编辑为语义的写入也可传 False。
     """
     editor = editor if editor is not None else current_editor()
@@ -713,9 +695,6 @@ def write_fhla_file(file_path, data, key=None, meta=None, editor=None, touch=Tru
     proj.set_encrypted(bool(key))
     if touch:
         proj.mark_edited(editor)
-    else:
-        # 即使这一次不算编辑，文件第一次落盘也要留下创建者（创建者只认第一次，幂等）
-        proj.mark_created(editor)
     proj.mark_opened()
 
     payload = proj.output_fhla_project()
@@ -826,7 +805,8 @@ def migrate_fhl_to_fhla(file_path, records, key=None, editor=None, overwrite=Fal
 
     * 目标已存在且 ``overwrite=False`` → 不写，返回 ``(None, None)``。
     * ``key`` 沿用打开时的密钥：加密的 .fhl 迁移后仍是加密的 .fhla（同一套 AES-GCM）。
-    * 创建者 / 创建时间 = 本次操作者（.fhl 里本来没有这些信息，从迁移这一刻开始记）。
+    * 迁移生成的 .fhla 不再记录「创建者 / 创建时间」这类「第一次编辑」相关的属性；
+      其项目属性（Alt+I）只展示上一次编辑者 / 上一次编辑时间 / 上次打开版本等。
     * ``remove_source=True``（**定稿行为**）：迁移成功后**删除原 .fhl**，避免同一份日志
       在目录里留两个副本、之后又反复提示迁移。删除前先把新文件读回来校验一遍
       （条数必须一致）——删除不可逆，宁可留下源文件也不能删。
@@ -877,7 +857,7 @@ def ask_migrate_fhl(parent=None, file_path=''):
     box.setWindowTitle(i18n.tr('迁移项目格式'))
     box.setText(i18n.tr('这是 F HamLog 兼容项目（.fhl）文件。'))
     tip = i18n.tr('F HamLog 项目（.fhla）在此之外还保存项目属性'
-                  '（创建者、最后编辑者、创建与编辑时间、上次打开所用版本、加密状态）'
+                  '（上一次编辑者、上一次编辑时间、上次打开所用版本、加密状态）'
                   '和自定义日志字段。')
     if exists:
         tip += '\n\n' + i18n.tr('同名 .fhla 已存在，迁移会覆盖它：') + '\n' + os.path.basename(target)
@@ -939,7 +919,6 @@ def _fhla_selftest():
     back, _ = read_fhla_file(plain)
     assert back.get_fhl() == records, '记录未原样往返'
     assert back.get_other_item() == {'wx': '天气'}, '自定义记录项目丢失'
-    assert back.creator == 'BI8SQL' and back.created_time, '创建者 / 创建时间缺失'
     assert back.last_version == current_version(), '版本未记录'
     assert back.encrypted is False and detect_encrypted(plain) is False
 
@@ -951,7 +930,7 @@ def _fhla_selftest():
     assert read_fhla_file(locked, ask_key=False)[0] is None, '无密钥应返回 None'
 
     r2, k2, meta2 = read_project_file(plain)
-    assert r2 == records and meta2 and meta2['creator'] == 'BI8SQL'
+    assert r2 == records and meta2 and meta2.get('last_editor') == 'BI8SQL'
     for k, v in describe_meta(meta2, path=plain):
         print(f'  {k}：{v}')
     print('.fhla 自检通过：', tmp)
@@ -1530,7 +1509,7 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
          remote=None, is_host=False, server=None, fhla_meta=None):
     """打开主日志窗。
 
-    fhla_meta：打开 ``.fhla`` 项目时由调用方传入的属性块（创建者 / 编辑者 / 时间 /
+    fhla_meta：打开 ``.fhla`` 项目时由调用方传入的属性块（上一次编辑者 / 上一次编辑时间 /
     版本 / 加密状态）；``.fhl`` 传入 None 即可。详见本文件「.fhla 文件格式」一节。
     """
     global file,key
@@ -1600,14 +1579,13 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
     # 又不会误跳过首次保存（详见 save() 内注释）。
     _last_written = {'path': None, 'snap': None}
 
-    # ---------- .fhla 扩展格式的属性（创建者 / 编辑者 / 时间 / 版本 / 加密状态） ----------
+    # ---------- .fhla 扩展格式的属性（上一次编辑者 / 上一次编辑时间 / 上次打开版本 / 加密状态） ----------
     # 属性只在「保存成 .fhla」时写入磁盘；.fhl 保持原样，不给老文件引入新结构
     # （实现见本文件「.fhla 文件格式」一节）。
-    # meta 由调用方（main.py 打开 .fhla 时）传入；直接调用 / 另存为 .fhla 时新建一份，
-    # 创建者就认「本次首次落盘的操作者」——不在写盘时去读目标文件里的旧属性，
-    # 否则「把本项目另存到别人建的 .fhla 上」会把对方的创建者身份抄过来。
+    # 注：不再记录「创建者 / 创建时间」这类「第一次编辑」相关的属性（2026-10-18 决定）。
+    # meta 由调用方（main.py 打开 .fhla 时）传入；直接调用 / 另存为 .fhla 时新建一份。
     # open_snap：打开时的内容快照——与它一致说明「这次写入只是打开后的自动保存」，
-    # 不刷「最后编辑者 / 最后编辑时间」；真有改动才算一次编辑（详见 write_fhla_file）。
+    # 不刷「上一次编辑者 / 上一次编辑时间」；真有改动才算一次编辑（详见 write_fhla_file）。
     # dirty：**属性块**（目前只有自定义字段 other_item）被用户改过的标记。记录列表之外的
     # 改动同样算一次编辑，但 open_snap 只看记录，所以要单独记一笔（见 _write_project_file）。
     _fhla = {'meta': dict(fhla_meta) if isinstance(fhla_meta, dict) else None,
@@ -2413,7 +2391,7 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
     def _write_project_file(path, snap=None):
         """把当前 file 写到 path，并记录「本会话已写入」的路径与内容（供 save() 跳过重复写）。
 
-        .fhla → 连同属性块写（创建者 / 最后编辑者 / 时间 / 版本 / 加密状态），
+        .fhla → 连同属性块写（上一次编辑者 / 上一次编辑时间 / 版本 / 加密状态），
         其余（.fhl 等）→ 与旧版完全一致，只写记录列表。
 
         snap：调用方已算好的值快照；传了就复用，省掉一次整份拷贝（5 万条约 20 ms）。
@@ -2672,7 +2650,7 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
     file_menu.addSeparator()
 
     def show_project_props():
-        """「项目属性」（Alt+I）：展示 .fhla 的属性（创建者 / 最后编辑者 / 时间 / 版本 / 加密状态）。
+        """「项目属性」（Alt+I）：展示 .fhla 的属性（上一次编辑者 / 上一次编辑时间 / 版本 / 加密状态）。
 
         属性保存在 .fhla 的 xml 块里（见本文件「.fhla 文件格式」一节）；.fhl 是纯记录格式、
         没有这块 → 直接提示「不支持的格式」，不做半展示（避免把内存状态当成文件属性看）。
@@ -2683,7 +2661,7 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
             QMessageBox.information(
                 window, '项目属性',
                 i18n.tr('不支持的格式：当前项目不是 .fhla 文件。') + '\n\n'
-                + i18n.tr('.fhl 是纯记录格式，不含创建者、编辑者、时间、版本、加密状态等属性。') + '\n'
+                + i18n.tr('.fhl 是纯记录格式，不含编辑者、编辑时间、版本、加密状态等属性。') + '\n'
                 + i18n.tr('请「另存为」带属性的 .fhla 项目文件后再查看。'))
             return
         meta = normalize_meta(_fhla['meta'] or empty_meta())
@@ -3831,7 +3809,7 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
                 toast_tip.show_toast('保存失败：' + str(e), window, kind='warning')
         else:
             if save_path:
-                # 经统一写入口落盘：.fhla 会顺带刷新属性（创建者/编辑者/时间/版本/加密状态）
+                # 经统一写入口落盘：.fhla 会顺带刷新属性（上一次编辑者/上一次编辑时间/版本/加密状态）
                 _write_project_file(save_path)
             else:
                 # 恢复项目 / 尚未落盘的新建项目：没有目标文件可写 → 交给统一的保存流程
@@ -4425,7 +4403,7 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         # 列数/表头（自定义字段勾了「在主页显示」时会多出列）
         'main_table': lambda: table,
         'save': save,
-        # .fhla 属性（创建者/编辑者/时间/版本/加密状态）：可读可写，供冒烟脚本断言
+        # .fhla 属性（上一次编辑者/上一次编辑时间/版本/加密状态）：可读可写，供冒烟脚本断言
         'fhla_meta': _fhla,
         'fhla_editor': _fhla_editor,
         'show_project_props': show_project_props,

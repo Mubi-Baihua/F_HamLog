@@ -171,7 +171,7 @@ def main():
         if not _confirm_replace_session():
             return
         print(save_path)
-        # 按扩展名分派：.fhla 连属性块（创建者/编辑者/时间/版本/加密状态）一起读出，
+        # 按扩展名分派：.fhla 连属性块（最后编辑者/最后编辑时间/版本/加密状态）一起读出，
         # .fhl 行为与旧版完全一致（meta 为 None）。实现见 project.py「.fhla 文件格式」。
         data, key, fhla_meta = project.read_project_file(save_path)
         if data == None:

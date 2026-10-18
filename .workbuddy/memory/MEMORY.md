@@ -34,9 +34,11 @@
   （Qt 不补后缀，`sel` 为空也补 `.fhla`；判 sel 时 `*.fhl` 是 `*.fhla` 前缀，**先判 `.fhla`**）。
 - **打开 `.fhl` 每次都问「迁移 / 暂不迁移」**（无「不再提示」、无开关）：`offer_migration(...)` →
   `(实际路径, 属性块)`；迁移 = 写同名 `.fhla`（**读回校验条数**）→ **删原 `.fhl`**，沿用密钥，
-  创建者 = 本次操作者；失败不挡打开。默认日志也问：`main.default_quick_project_path()`
+  失败不挡打开。默认日志也问：`main.default_quick_project_path()`
   **优先 `main.fhla`** → `main.fhl` → 新装即 `.fhla`。
-- `encrypted` 只是声明，**以字节能否 UTF-8 解为准**；创建者只认第一次落盘（幂等）；
+- `encrypted` 只是声明，**以字节能否 UTF-8 解为准**；
+  **不再记录「创建者 / 创建时间」这类「第一次编辑」属性**（2026-10-18 决定，迁移也不写）；
+  `.fhla` 仅记录 `last_editor` / `last_edit_time` / `last_version` / `encrypted` / 自定义字段相关键；
   **「打开即自动保存」不算编辑**（打开时快照比对；改字段定义靠 `_fhla['dirty']`）。
 - **操作者 = 设置里的呼号**（`m_call` 大写去空白），没填才退回系统用户名（`current_editor()`）；
   `load_settings()` 用 `utf-8-sig` + `literal_eval`（BOM 会让旧 `eval` 静默读不到呼号）。

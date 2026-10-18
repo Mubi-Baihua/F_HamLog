@@ -218,8 +218,6 @@ FHL 文件格式为 json 文件。编码使用 utf-8。
 ```json
 {
   "xml": {
-    "creator": "BI8SQL",
-    "created_time": "2026-10-18 10:00:00",
     "last_editor": "BI8SQL",
     "last_edit_time": "2026-10-18 10:30:00",
     "last_version": "2.7.0",
@@ -238,8 +236,7 @@ FHL 文件格式为 json 文件。编码使用 utf-8。
 
 - `project`：**与 `.fhl` 完全相同的记录数组**，每条记录的字段含义见上表；旧版 F HamLog 也读得懂 `.fhl`。
 - `xml`（项目属性块）：
-  - `creator` / `created_time`：创建者与创建时间（只记第一次落盘的人，之后不变）；
-  - `last_editor` / `last_edit_time`：最后编辑者与时间；
+  - `last_editor` / `last_edit_time`：上一次编辑的人与时间；
   - `last_version`：上次打开所用的 F HamLog 版本；
   - `encrypted`：加密状态（`true` 时整份文件为 AES-GCM 密文，不再是上面的明文 JSON）；
   - `format` / `format_version`：固定为 `"fhla"` / `1`；
@@ -471,8 +468,6 @@ It is a JSON file (utf-8) with two top-level keys:
 ```json
 {
   "xml": {
-    "creator": "BI8SQL",
-    "created_time": "2026-10-18 10:00:00",
     "last_editor": "BI8SQL",
     "last_edit_time": "2026-10-18 10:30:00",
     "last_version": "2.7.0",
@@ -491,8 +486,7 @@ It is a JSON file (utf-8) with two top-level keys:
 
 - `project`: **the same record array as `.fhl`** — each record's fields are listed in the table above; older F HamLog versions can still read `.fhl`.
 - `xml` (project property block):
-  - `creator` / `created_time`: creator and creation time (set only on first save, then immutable);
-  - `last_editor` / `last_edit_time`: last editor and edit time;
+  - `last_editor` / `last_edit_time`: the person and time of the last edit;
   - `last_version`: the F HamLog version used when last opened;
   - `encrypted`: encryption flag (when `true`, the whole file is an AES-GCM ciphertext instead of the plain JSON above);
   - `format` / `format_version`: fixed to `"fhla"` / `1`;

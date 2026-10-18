@@ -766,7 +766,7 @@ def main(window, preset=None, on_saved=None, preset_records=None, recovered=Fals
             return False
 
         def save_records_to_path(records, save_path, key=None, meta=None):
-            # 按扩展名分派：.fhla 连同属性块（创建者/编辑者/时间/版本/加密状态）一起写，
+            # 按扩展名分派：.fhla 连同属性块（最后编辑者/最后编辑时间/版本/加密状态）一起写，
             # 其余（.fhl 等）与旧版完全一致。实现见 project.py「.fhla 文件格式」一节。
             from f_hamlog import project   # 延迟导入：project 亦以延迟方式引用本模块
             project.save_project_file(save_path, records, key, meta=meta)
