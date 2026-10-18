@@ -70,6 +70,21 @@
 - `save()` 有「未变更跳过」（`_last_written`），首次必须执行；`fhl_rw.write_fhl_file` 必须
   `json.dumps` 后一次性 `f.write`（禁止 `json.dump`）。
 
+## 大项目性能口径（2026-10-18 第二轮）
+- **内容比较一律用「值快照」**：`_content_snap()` = `[dict(r) for r in file]`，基线存快照、
+  用 `==` 比（5 万条约 40 ms，JSON 字符串要 0.25 s；键序无关、脏时立即短路）。
+  **别再退回 `json.dumps(...) == ...`**——它被定时器（每 1.5 s）反复调用。
+- **单条编辑 / 少量删除禁止整表重建**：用 `table_refresh_row(r)` / `table_remove_rows(rows)`；
+  **date / time 变了必须走 `table_update()`**（顺序会变），列定义变了同理。
+- **撤销点用逐条浅拷贝**（值全是不可变标量），别用 `copy.deepcopy`；撤销栈按
+  「步数 + 记录总数」双重限流（大项目 300 步能吃掉几个 GB）。
+- `_fill_rows` 期间 `gc.disable()`（`finally` 恢复）；打开项目**只建一次表**
+  （历史上 `table_update(delete=False)` + `table_update(scroll_to_bottom=True)` 连建两遍）。
+- 度量脚本见 `DETAILS.md`「大型项目性能」：改任何表格/保存路径前先跑
+  `tests/__perf_tick_bench.py` 与 `__perf_long_fhl_bench.py` 拿前后对照。
+- **文件格式（`.fhl` / `.fhla`）与落盘函数不允许因性能原因改动**；验证用
+  `tests/__inplace_edit_smoke.py`（含「顶层仍是记录数组 / 字段集合不变」断言）。
+
 ## 运行日志（app_log.py）——2026-10-17 新增
 - **入口装配**：`__main__.py`（import main **之前**）与 `main.main()` 开头各调一次
   `app_log.setup()`（幂等）。落盘 `app_path('file/log')`，按天一个文件

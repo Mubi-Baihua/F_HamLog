@@ -64,6 +64,13 @@ def timeit(label, fn, rounds=3):
 
 
 timeit('table_update 重建', api['table_update'])
+
+# 就地对齐路径（大项目里「更多信息 → 保存更改 / 删一行」走这两条）
+if 'table_refresh_row' in api:
+    timeit('table_refresh_row 刷新一行', lambda: api['table_refresh_row'](len(records) // 2))
+    timeit('_bk_is_dirty 判脏', api['_bk_is_dirty'])
+    timeit('_bk_tick 定时器一次', api['_bk_tick'])
+    timeit('save 未变化（跳过写盘）', lambda: api['save'](message=False))
 print('', flush=True)
 
 timeit('全选 (10000 行)', lambda: api['set_all_rows_checked'](True))
@@ -75,6 +82,15 @@ api['set_all_rows_checked'](True)
 timeit('读取勾选行(已全选)', api['get_selected_row_indexes'])
 timeit('导出读取记录(已全选)', api['get_selected_records'])
 api['set_all_rows_checked'](False)
+print('', flush=True)
+
+# 删一行（就地 removeRow）。放在最后：删完不补回，避免影响上面的测量。
+if 'table_remove_rows' in api:
+    mid = len(records) // 2
+    t = time.perf_counter()
+    ok = api['table_remove_rows']([mid])
+    print('%-26s: %s %.4f s' % ('table_remove_rows 删一行', ok,
+                                time.perf_counter() - t), flush=True)
 
 print('done', flush=True)
 

@@ -430,10 +430,61 @@ sat_dur(1~240) / sat_sats / mu_sats / **theme_mode**。
 - 离屏脚本应 `atexit` 还原 `file/m_xml.txt` 并清掉 `*.func_bak` 等临时备份。
 - `get_selected_records()` 在未勾选任何行时会弹模态 `QMessageBox.warning` → 离屏脚本会**卡死**；
   测试需临时 monkeypatch `QMessageBox.warning` 为 no-op。
-- `project_others()` 打开的「更多信息」QMainWindow 在 offscreen 下会阻塞事件循环 →
-  冒烟脚本**不要真去点「更多」列做 GUI 断言**，改为断言委托已挂载 + `_click_cb` 非空。
+- `project_others()` 打开的「更多信息」窗口在 offscreen 下**可以**驱动：调
+  `api['project_others'](row)` → `app.processEvents()` → 从 `app.topLevelWidgets()`
+  里按标题 `'更多信息'` 拿到窗口，改 `QTableWidget` 单元格再点「保存更改 / 删除日志」都可行
+  （`__delete_select_smoke.py`、`__inplace_edit_smoke.py` 都是这么做的）。
+  早前"会阻塞事件循环"的说法不成立，别按它绕过 GUI 断言。
 - **输出经管道（`| tail`/`head`）时的 SIGPIPE/SIGTERM 假象**：脚本其实跑完了，
   只是被管道提前关闭杀掉；判定结果请用 `grep` 抓 `RESULT=`/`通过` 行，别只看退出码。
+
+## 大型项目性能（2026-10-18 第二轮）
+
+**度量脚本（tests/，全部离屏、自动还原 `file/m_xml.txt`）**
+
+| 脚本 | 用途 |
+|---|---|
+| `__perf_long_fhl_bench.py [N]` | 打开 / 重建 / 全选反选 / 就地刷新 / 判脏 / tick / 保存 |
+| `__perf_tick_bench.py [N]` | 判脏、定时器、保存、撤销点拷贝的 A/B 对照（新旧版本各跑一次） |
+| `__perf_micro_bench.py [N]` | deepcopy vs 浅拷贝 vs json.dumps vs 排序 的裸成本 |
+| `__perf_profile_update.py [N]` / `__perf_profile_open.py [N]` | cProfile 火灾图（重建 / 打开） |
+| `__inplace_edit_smoke.py` | 就地刷新 / 就地删除 / 撤销 / 判脏 / 文件格式 回归（22 项） |
+
+**A/B 实测**（离屏，同一台机器）
+
+| 操作 | 1 万条 旧→新 | 5 万条 旧→新 |
+|---|---|---|
+| 打开项目（`main()` 含建表） | 1.51 s → 0.62 s | 8.77 s → 3.20 s |
+| `table_update` 整表重建 | 0.60 s → 0.44 s | 3.67 s → 2.80 s |
+| 编辑一条（保存更改） | ≈0.73 s → ≈0.02 s | ≈4.4 s → ≈0.05 s |
+| 删一条 | ≈0.73 s → 0.014 s | ≈4.4 s → ≈0.02 s |
+| 未保存自动备份定时器（每次 tick） | 108 ms → 7 ms | 558 ms → 41 ms |
+| `save()` 未变化（跳过写盘） | 54 ms → 15 ms | 288 ms → 166 ms |
+| 记一次撤销点 | 129 ms → 7.6 ms | 743 ms → 54 ms |
+
+**做了什么**
+
+1. **内容比较从 JSON 字符串换成值快照**：`_content_snap()` = `[dict(r) for r in file]`，
+   基线 `_bk_state['last'/'local']` / `_fhla['open_snap']` / `_last_written['snap']` 都存快照，
+   用 `==` 比（C 层深比较、键序无关、脏时立即短路）。恢复项目哨兵值 `''` → `None`。
+2. **`snapshot_before` / undo / redo 用逐条浅拷贝**替代 `copy.deepcopy`（值全是不可变标量）。
+3. **撤销栈双重限流**：步数 300 + 栈内记录总数 10 万（5 万条项目 300 步曾要 3.6 GB）。
+4. **就地刷新一行**（`table_refresh_row`）：改普通字段时只重写该行 14 个单元格；
+   **排序键 date/time 变了必须整表重建**（`project_others.save_changes` 负责判断）。
+5. **就地删行**（`table_remove_rows`）：≤200 行走 `removeRow`，超过走整表重建。
+6. **打开项目只建一次表**：原来 `table_update(delete=False)` + `table_update(scroll_to_bottom=True)`
+   连建两遍（1.4 s 里 1.2 s 是这两次建表）。
+7. **`_fill_rows` 微优化**：每行先建齐 item 再挂 + 填充期间 `gc.disable()`（+20%），
+   `finally` 里按原状态恢复。
+8. **远程同步比较**去掉两侧 `json.dumps(sort_keys=True)`，直接 `new_list == file`。
+
+**仍未做（有意的取舍）**：整表重建剩下的成本是 70 万个 `QTableWidgetItem` 构造，
+属 QTableWidget 固有；要再快只能换 `QAbstractTableModel + QTableView`，改动面涉及
+委托 / 勾选 / 搜索窗 / 复制粘贴，风险远大于收益，暂不碰。
+
+**硬约束**：文件格式（`.fhl` / `.fhla`）**一个字节都没改**——落盘仍走
+`write_fhl_file` / `write_fhla_file`，`__inplace_edit_smoke.py` 显式断言 `.fhl` 顶层
+仍是记录数组、字段集合不变；`__fhla_smoke.py` 属性块相关 173/174 与改动前完全一致。
 
 ## 多语言（i18n）实现细节
 
