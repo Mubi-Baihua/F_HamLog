@@ -86,6 +86,15 @@
 - 打包命令加 `--noinclude-data-files="file/log/*.log"`（别把开发日志打进包）；
   `.gitignore` 已忽略 `src/f_hamlog/file/log/`。验证：`tests/__app_log_smoke.py`（21 项）。
 
+## 布局 / 尺寸（启动器）
+- **`setFixedSize` 之后禁止再 `setMinimumHeight/setMaximumWidth`**：会把固定尺寸解成区间，
+  布局在 show() 的两遍排布里可能取不同值 → 界面「打开时跳一下」（`_style_btn` 曾如此）。
+- 竖向内容比窗口高时，**别用 `addSpacing(N)` 硬撑**：溢出的高度会被布局从可压缩的子项
+  （如网格）里挤，且挤压发生在 show() 之后 → 首帧与最终帧不同。改成
+  `QSpacerItem(…, QSizePolicy.Expanding)` 让它自己吸收；末尾也别再 `addStretch`。
+- 这类跳动的验证：`tests/__main_layout_settle_smoke.py`（show() 返回瞬间快照 → 300ms 再比，
+  有变化即 FAIL）。**必须 `QT_QPA_PLATFORM=windows`**，离屏字体小、复现不出来。
+
 ## 提示与通知
 - 所有 `.setToolTip(...)` 已整段注释（2026-09-29，47 处）→ `__sat_window_smoke` 的「提示列出数据源」
   **必然失败**（既有状态，与 i18n 无关）。

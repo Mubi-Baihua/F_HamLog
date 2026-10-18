@@ -310,7 +310,10 @@ def main():
 
     def _style_btn(btn, primary=False):
         if primary:
-            btn.setMinimumHeight(BTN_H)
+            # 高度已由调用处的 setFixedSize 定死（主按钮 46、其余 40）。
+            # 这里**不要**再 setMinimumHeight(BTN_H)：那会把固定高 46 改成
+            # 「最小 40 / 最大 46」的可伸缩区间，布局在 show() 的两遍排布里
+            # 可能一遍取 40、一遍取 46，主按钮位置就跟着上下跳 6px。
             #btn.setCursor(Qt.PointingHandCursor)
             btn.setStyleSheet(
                 "QPushButton{background:%s;color:#ffffff;border:none;"
@@ -336,9 +339,17 @@ def main():
     theme.watch_theme(window, _refresh_theme)
     main_layout.addWidget(title)
     main_layout.addWidget(sub)
-    main_layout.addSpacing(50)
-
-    main_layout
+    # 副标题与主按钮之间的留白：**可压缩**（首选 50px、最小 0）。
+    #
+    # 原来是 addSpacing(50)——固定 50px、不可压缩。而这一列内容的自然高度约
+    # 390px，窗口只有 375px，多出来的十几像素没地方去，布局只能从下面那个两列
+    # 网格里挤（行距从设计值 6px 被压成 3~4px，还不均匀），而且这次挤压发生在
+    # show() 之后（QSS 抛光会让布局再算一遍），于是第一帧和最终帧不一样，
+    # 打开主界面时内容会「上下跳一下」。
+    # 换成可压缩留白后，溢出的高度由它自己吸收：位置一次算到底，网格保持 6px
+    # 行距；窗口更高/英文界面下它仍然会长回 50px。
+    main_layout.addItem(QSpacerItem(20, 50, QSizePolicy.Minimum,
+                                    QSizePolicy.Expanding))
 
     # ---------- 主操作 ----------
     button_quick = QPushButton('通联日志')
@@ -401,7 +412,9 @@ def main():
     _style_btn(button_set)
     main_layout.addWidget(button_set, alignment=Qt.AlignHCenter)
 
-    main_layout.addStretch(1)
+    # 末尾不再 addStretch(1)：竖向余量全部交给上面那段可压缩留白吸收。
+    # 两个都可伸缩时，多余空间按 stretch 因子分给末尾这条，留白仍是 50px，
+    # 内容照样超高——等于没改。
 
     window.show()
 
