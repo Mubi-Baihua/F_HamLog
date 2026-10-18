@@ -250,7 +250,7 @@ def observe(satrec, jd_utc, observer):
     if isinstance(jd_utc, datetime):
         t = ts.from_datetime(jd_utc)
     else:
-        t = ts.utc(jd=float(jd_utc))
+        t = ts.from_datetime(jd_to_datetime(float(jd_utc)))
     lat, lon, alt = observer
     topos = wgs84.latlon(float(lat), float(lon), float(alt))
     alt_a, az_a, dist = (satrec._earth_sat - topos).at(t).altaz()
@@ -276,9 +276,207 @@ def subpoint(satrec, jd_utc):
     if isinstance(jd_utc, datetime):
         t = ts.from_datetime(jd_utc)
     else:
-        t = ts.utc(jd=float(jd_utc))
+        t = ts.from_datetime(jd_to_datetime(float(jd_utc)))
     g = satrec._earth_sat.at(t).subpoint()
     return float(g.latitude.degrees), float(g.longitude.degrees), float(g.elevation.km)
+
+
+def sky_track(satrec, observer, start_utc, end_utc, samples=240):
+    """一次算完一段时间内某观测站看到的地平坐标序列（供极坐标「过境视图」绘制）。
+
+    与逐点调用 observe() 相比，这里把整段时间做成时间数组一次性传播：
+    240 个采样点只花一次 skyfield 调用的代价（数十毫秒），界面可以放心在
+    每次打开过境视图时现算，不必缓存到磁盘。
+
+    参数：
+        start_utc / end_utc : 带 UTC 时区的 datetime，或 Julian Date 浮点数
+        samples             : 采样点数（含首尾），至少 2，默认 240
+
+    返回 list[dict]，按时间升序：
+        {'jd', 'time'(UTC datetime), 'azimuth', 'elevation',
+         'range_km', 'alt_km'}
+        alt_km 为星下点高度（WGS84 椭球高，即「卫星高度」读数）。
+    """
+    import numpy as np
+    ts = _get_timescale()
+    if isinstance(start_utc, datetime):
+        t0 = ts.from_datetime(start_utc)
+    else:
+        t0 = ts.from_datetime(jd_to_datetime(float(start_utc)))
+    if isinstance(end_utc, datetime):
+        t1 = ts.from_datetime(end_utc)
+    else:
+        t1 = ts.from_datetime(jd_to_datetime(float(end_utc)))
+
+    n = max(int(samples), 2)
+    times = ts.linspace(t0, t1, n)
+
+    lat, lon, alt = observer
+    topos = wgs84.latlon(float(lat), float(lon), float(alt))
+    diff = satrec._earth_sat - topos
+    alt_a, az_a, dist = diff.at(times).altaz()
+    sub = satrec._earth_sat.at(times).subpoint()
+
+    el = np.atleast_1d(np.asarray(alt_a.degrees, dtype=float))
+    az = np.atleast_1d(np.asarray(az_a.degrees, dtype=float))
+    rng = np.atleast_1d(np.asarray(dist.km, dtype=float))
+    hgt = np.atleast_1d(np.asarray(sub.elevation.km, dtype=float))
+    dts = times.utc_datetime()
+    # skyfield 对标量返回 datetime、对时间数组返回 ndarray（dtype=object）
+    if isinstance(dts, datetime):
+        dts = [dts]
+    else:
+        dts = list(dts)
+
+    out = []
+    for i in range(min(n, len(el), len(dts))):
+        out.append({
+            'jd': datetime_to_jd(dts[i]),
+            'time': dts[i],
+            'azimuth': float(az[i]),
+            'elevation': float(el[i]),
+            'range_km': float(rng[i]),
+            'alt_km': float(hgt[i]),
+        })
+    return out
+
+
+def _gmst_deg(jd):
+    """格林尼治平恒星时（度）。"""
+    T = (float(jd) - 2451545.0) / 36525.0
+    return (280.46061837
+            + 360.98564736629 * (float(jd) - 2451545.0)
+            + 0.000387933 * T * T
+            - T * T * T / 38710000.0) % 360.0
+
+
+def _equatorial_to_horizon(lat_deg, lon_deg, ra_deg, dec_deg, jd):
+    """赤道坐标 (ra, dec) → 地平坐标 (azimuth, elevation)，单位度。
+
+    az 自正北顺时针；太阳 / 月亮共用，避免两处各写一份三角函数。
+    """
+    import math
+    H = math.radians((_gmst_deg(jd) + float(lon_deg) - float(ra_deg)) % 360.0)
+    lat_r = math.radians(float(lat_deg))
+    dec_r = math.radians(float(dec_deg))
+    sin_el = (math.sin(lat_r) * math.sin(dec_r)
+              + math.cos(lat_r) * math.cos(dec_r) * math.cos(H))
+    el = math.degrees(math.asin(max(-1.0, min(1.0, sin_el))))
+    az = math.degrees(math.atan2(
+        -math.cos(dec_r) * math.sin(H),
+        math.sin(dec_r) * math.cos(lat_r)
+        - math.cos(dec_r) * math.sin(lat_r) * math.cos(H))) % 360.0
+    return float(az), float(el)
+
+
+def moon_ecliptic(jd):
+    """月亮的黄经 / 黄纬（度）：返回 (lambda, beta)。
+
+    Meeus《天文算法》第 47 章的低精度三角级数（取振幅最大的若干项），
+    误差约 0.02°——月亮视直径约 0.5°，标位置足够。
+    """
+    import math
+    T = (float(jd) - 2451545.0) / 36525.0
+    Lp = (218.3164477 + 481267.88123421 * T - 0.0015786 * T * T
+          + T ** 3 / 538841.0 - T ** 4 / 65194000.0)
+    D = (297.8501921 + 445267.1114034 * T - 0.0018819 * T * T
+         + T ** 3 / 545868.0 - T ** 4 / 113065000.0)
+    M = (357.5291092 + 35999.0502909 * T - 0.0001536 * T * T
+         + T ** 3 / 24490000.0)
+    Mp = (134.9633964 + 477198.8675055 * T + 0.0087414 * T * T
+          + T ** 3 / 69699.0 - T ** 4 / 14712000.0)
+    F = (93.2720950 + 483202.0175233 * T - 0.0036539 * T * T
+         - T ** 3 / 3526000.0 + T ** 4 / 863310000.0)
+
+    def sin_(x):
+        return math.sin(math.radians(x))
+
+    lam = (Lp
+           + 6.2886 * sin_(Mp)
+           + 1.2740 * sin_(2 * D - Mp)
+           + 0.6583 * sin_(2 * D)
+           + 0.2136 * sin_(2 * Mp)
+           - 0.1851 * sin_(M)
+           - 0.1143 * sin_(2 * F)
+           + 0.0588 * sin_(2 * D - 2 * Mp)
+           + 0.0572 * sin_(2 * D - M - Mp)
+           + 0.0533 * sin_(2 * D + Mp)
+           + 0.0458 * sin_(2 * D - M)
+           + 0.0410 * sin_(Mp - M)
+           - 0.0347 * sin_(D)
+           - 0.0304 * sin_(Mp + M)
+           - 0.0153 * sin_(2 * F - 2 * D)
+           + 0.0107 * sin_(Mp - 4 * D))
+    beta = (5.1282 * sin_(F)
+            + 0.2806 * sin_(Mp + F)
+            + 0.2777 * sin_(Mp - F)
+            + 0.1732 * sin_(2 * D - F)
+            + 0.0554 * sin_(2 * D - Mp + F)
+            + 0.0463 * sin_(2 * D - Mp - F)
+            + 0.0326 * sin_(2 * D + F)
+            + 0.0172 * sin_(2 * Mp + F))
+    return lam % 360.0, float(beta)
+
+
+def moon_altaz(lat_deg, lon_deg, when_utc=None):
+    """月亮相对观测站的地平坐标（度）：返回 (azimuth, elevation)。
+
+    和 `sun_altaz()` 同一套出口，供过境视图在天空图上标出月亮位置。
+    黄道 → 赤道用真黄赤交角，赤道 → 地平复用 `_equatorial_to_horizon()`。
+    """
+    import math
+    if when_utc is None:
+        when_utc = datetime.now(timezone.utc)
+    if when_utc.tzinfo is None:
+        when_utc = when_utc.replace(tzinfo=timezone.utc)
+
+    jd = datetime_to_jd(when_utc)
+    lam, beta = moon_ecliptic(jd)
+    T = (jd - 2451545.0) / 36525.0
+    eps = 23.439291 - 0.0130042 * T
+    lam_r, beta_r, eps_r = (math.radians(lam), math.radians(beta),
+                            math.radians(eps))
+    dec = math.degrees(math.asin(
+        math.sin(beta_r) * math.cos(eps_r)
+        + math.cos(beta_r) * math.sin(eps_r) * math.sin(lam_r)))
+    ra = math.degrees(math.atan2(
+        math.sin(lam_r) * math.cos(eps_r)
+        - math.tan(beta_r) * math.sin(eps_r),
+        math.cos(lam_r))) % 360.0
+    return _equatorial_to_horizon(lat_deg, lon_deg, ra, dec, jd)
+
+
+def sun_altaz(lat_deg, lon_deg, when_utc=None):
+    """太阳相对观测站的地平坐标（度）：返回 (azimuth, elevation)。
+
+    az 自正北顺时针，el 为高度角；供过境视图在天空图上标出太阳位置。
+    采用 NOAA 的低阶太阳位置公式（赤纬 / 赤经 / 格林尼治平恒星时），
+    误差约 0.01°，画图绰绰有余。
+    """
+    import math
+    if when_utc is None:
+        when_utc = datetime.now(timezone.utc)
+    if when_utc.tzinfo is None:
+        when_utc = when_utc.replace(tzinfo=timezone.utc)
+
+    jd = datetime_to_jd(when_utc)
+    T = (jd - 2451545.0) / 36525.0            # J2000 起算的儒略世纪数
+    L0 = (280.46646 + T * (36000.76983 + T * 0.0003032)) % 360.0
+    M = 357.52911 + T * (35999.05029 - 0.0001537 * T)
+    M_r = math.radians(M)
+    C = (math.sin(M_r) * (1.914602 - T * (0.004817 + 0.000014 * T))
+         + math.sin(2 * M_r) * (0.019993 - 0.000101 * T)
+         + math.sin(3 * M_r) * 0.000289)
+    omega = 125.04 - 1934.136 * T
+    lam = L0 + C - 0.00569 - 0.00478 * math.sin(math.radians(omega))
+    eps = 23.439291 - 0.0130042 * T + 0.00256 * math.cos(math.radians(omega))
+    lam_r, eps_r = math.radians(lam), math.radians(eps)
+
+    decl = math.degrees(math.asin(math.sin(eps_r) * math.sin(lam_r)))
+    ra = math.degrees(math.atan2(
+        math.sin(lam_r) * math.cos(eps_r), math.cos(lam_r))) % 360.0
+    # 赤道 → 地平（与月亮共用同一段换算）
+    return _equatorial_to_horizon(lat_deg, lon_deg, ra, decl, jd)
 
 
 def ground_track(satrec, start_utc, duration_hours=3.0, samples=180,
@@ -306,7 +504,7 @@ def ground_track(satrec, start_utc, duration_hours=3.0, samples=180,
     if isinstance(start_utc, datetime):
         t0 = ts.from_datetime(start_utc)
     else:
-        t0 = ts.utc(jd=float(start_utc))
+        t0 = ts.from_datetime(jd_to_datetime(float(start_utc)))
     n = max(2, int(samples))
     hours = max(0.01, float(duration_hours))
     # 以 TT 儒略日均匀采样（跨度内 TT-UTC 为常数，不影响轨迹形状）
@@ -363,7 +561,7 @@ def predict_passes(satrec, observer, start_utc, duration_hours=24.0,
     if isinstance(start_utc, datetime):
         t0 = ts.from_datetime(start_utc)
     else:
-        t0 = ts.utc(jd=float(start_utc))
+        t0 = ts.from_datetime(jd_to_datetime(float(start_utc)))
     t1 = t0 + timedelta(hours=clamp_predict_hours(duration_hours))
 
     lat, lon, alt = observer
@@ -448,7 +646,7 @@ def visibility_windows(satrec, observer, start_utc, duration_hours=24.0,
     if isinstance(start_utc, datetime):
         t0 = ts.from_datetime(start_utc)
     else:
-        t0 = ts.utc(jd=float(start_utc))
+        t0 = ts.from_datetime(jd_to_datetime(float(start_utc)))
     t1 = t0 + timedelta(hours=clamp_predict_hours(duration_hours))
 
     lat, lon, alt = observer

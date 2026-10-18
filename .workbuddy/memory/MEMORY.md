@@ -132,6 +132,25 @@
   数据源 = `file/tle_sources.txt` + 独立窗口（`#` 禁用、延迟自动探测只进 `_ROLE_DELAY`、按 NORAD 增量更新）；
   入口 project「卫星→通联预测」Ctrl+Shift+E / main「卫星过境」「通联预测」；
   **改卫星名匹配规则时两处同步**；选择框**隐藏行必须 `setRowHidden`**，超限靠 `reset_requested`+`while True` 重开。
+- 过境视图 `satellite_sky_window.py`（极坐标天空图）：两个预测窗口的**行内「视图」按钮**是唯一数据入口，
+  布局 = 「素色天空图（1 或 2 张并排）+ 右侧 `PANEL_W` 面板「过境数据」（方位角/仰角/距离/高度 + 进度条 + 图例）」，
+  数据走普通 QLabel、圆盘只画图。**配色一律从 `QPalette` 混合**（Highlight 给轨迹/箭头/卫星、WindowText 给文字、
+  Base 给盘底、`theme.blend` 出网格与太阳），**禁止写死颜色**；换主题靠 `theme.watch_theme` 重取。
+  **素色定稿（2026-10-18）：不做阴影 / 光晕 / 渐变 / 圆角**——状态只用一个着色文字，进度条方头，
+  面板无描边无底色，可通联只是把线画粗（2.4× 线宽，不压暗其余轨迹）。
+  `QTimer` 每秒 `follow` 刷新，拖滑块即退出实时。数据层 `sp.sky_track()`（一次矢量算 240 点）+
+  `sp.sun_altaz()` / `sp.moon_altaz()`（纯解析，无 bsp 星历）；**skyfield 没有 `ts.utc(jd=...)`**，
+  JD 一律 `ts.from_datetime(jd_to_datetime(jd))`，`Time.utc_datetime()` 对数组返回 ndarray。
+- 通联视图的「双方全部过境」：入口传 `emphasis=(可通联起,止)` + `auto_spans=True`，每站用
+  `_pass_span()` 求自己的 AOS→LOS 取轨迹，时间轴取并集（轨迹算完再按采样点扩一次轴，
+  因为 `jd_to_datetime` 只到微秒）；可通联段加粗（2.4×线宽，无光晕），图例多一行「可通联」。
+- **过境视图窗口是独立顶层窗口**（`SkyWindow(None, ...)`，来源窗口只存 `_source` 用来定初始位置）：
+  有父对象就会变成「被拥有的窗口」，Windows 下最小化来源窗口时它跟着一起最小化。
+  卫星地图窗口本来就是这么做的（`MapWindow(None, sats, source=...)`），**新开窗口一律照此**。
+- 两个窗口工具栏的「过境视图」：**有选中用选中行，没有就自动取最近一次**（优先未结束的最近一次，
+  否则刚过去的那次）并 `selectRow()` 高亮；只有表格为空才弹「还没有过境结果」。
+- **经纬度 0° 是合法坐标**（赤道 / 本初子午线）：过境视图与通联视图**不得**再用
+  「经纬度均为 0 → 视为未设置」去拦截（曾各弹一个 QMessageBox，2026-10-18 移除）。
 - 多人日志：**`remote_crypto.py` 是密码学唯一出处**（全帧加密、nonce 滑动窗口防重放、服务端先说话）；
   **退出必走 `RemoteConnection.shutdown()`**；Qt 关窗只隐藏不触发 `destroyed`（资源在 `install_close_guard`）；
   独立服务端目录**自带两份副本 → 改协议须三份同步**；`main.py` 只保留一个 `project_window` 引用，

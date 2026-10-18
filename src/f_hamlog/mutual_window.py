@@ -247,7 +247,7 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
         mu_sats_raw = settings.get('sat_mu_sats', None)
 
     win = QMainWindow()
-    win.resize(1050, 660)
+    win.resize(1200, 690)
     win.setWindowTitle('通联预测')
     win._map_window = None  # 卫星地图窗口引用（由“地图”按钮打开）
     central = QWidget()
@@ -314,6 +314,9 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
 #         '自当前时刻起的地面轨迹与实时位置，以及本台站与对方台站。\n'
 #         '在结果表中点选一行，该卫星会在地图上聚焦高亮。')
     par.addWidget(map_btn)
+    # 过境视图：双站（A/B）极坐标天空图，按当前选中行打开
+    sky_btn = QPushButton('过境视图')
+    par.addWidget(sky_btn)
     layout.addWidget(par_grp)
 
     sep = QFrame()
@@ -331,15 +334,16 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
         status.setText(i18n.tr(text))
 
     # ---------- 结果表 ----------
+    # 第 7 列「记录」、第 8 列「视图」都是行内按钮；「视图」打开双站极坐标天空图。
     headers = ['卫星', '可通联开始(本地)', '可通联结束(本地)', '可通联时长',
-               'A最大仰角', 'B最大仰角', '最佳时刻(本地)', '记录']
+               'A最大仰角', 'B最大仰角', '最佳时刻(本地)', '记录', '视图']
     table = QTableWidget(0, len(headers))
     table.setHorizontalHeaderLabels(headers)
     table.setEditTriggers(QAbstractItemView.NoEditTriggers)
     table.setSelectionBehavior(QAbstractItemView.SelectRows)
     table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
     # 第 1/2/6 列是本地时间（MM-DD HH:MM:SS），宽度需容纳秒
-    for col, wdt in enumerate((180, 150, 150, 95, 85, 85, 150, 70)):
+    for col, wdt in enumerate((200, 165, 165, 105, 92, 92, 165, 80, 64)):
         table.setColumnWidth(col, wdt)
     layout.addWidget(table)
 
@@ -447,6 +451,11 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
 #                 btn.setToolTip('打开批量记录窗口并预填该卫星的卫星名/传播模式/收发频率等信息')
                 btn.clicked.connect(lambda _checked=False, i=i: log_row(i))
                 table.setCellWidget(i, 7, btn)
+                # 每行一个「视图」按钮：打开双站（A/B）极坐标天空图
+                view_btn = QPushButton('视图')
+                view_btn.clicked.connect(
+                    lambda _checked=False, i=i: open_sky_row(i))
+                table.setCellWidget(i, 8, view_btn)
 
             if end < len(rows):
                 QTimer.singleShot(
@@ -744,6 +753,90 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
             return
         mw.set_satellite(table.item(rows[0].row(), 0).text())
 
+    def _find_sat(rec):
+        """按 NORAD 编号（取不到时退回名称）在当前星历里找回卫星对象。"""
+        num = sp.norad_key(str(rec.get('satnum') or ''))
+        if num:
+            for _n, s in sats:
+                if _sat_number(s) == num:
+                    return s
+        name = rec.get('name') or ''
+        for n, s in sats:
+            if n == name:
+                return s
+        return None
+
+    def _row_span(r):
+        a = r['start_jd']
+        return a, a + r['duration'] / 86400.0
+
+    def _target_row():
+        """工具栏「过境视图」用哪一行：有选中用选中的，否则取**最近的一次可通联窗口**
+        （优先还没结束的最近一次，全都过去了就取刚刚过去的那次）。"""
+        sel = table.selectedIndexes()
+        if sel:
+            return sel[0].row()
+        if not last_rows:
+            return -1
+        now_jd = sp.datetime_to_jd(datetime.datetime.now(datetime.timezone.utc))
+        upcoming = [i for i, r in enumerate(last_rows)
+                    if _row_span(r)[1] >= now_jd]
+        if upcoming:
+            return min(upcoming, key=lambda i: _row_span(last_rows[i])[0])
+        return max(range(len(last_rows)),
+                   key=lambda i: _row_span(last_rows[i])[1])
+
+    def open_sky_toolbar():
+        """工具栏入口：没有选中行时自动落到最近的那次可通联窗口，并高亮它。"""
+        idx = _target_row()
+        if idx < 0:
+            QMessageBox.information(
+                win, '过境视图',
+                '表格里还没有可通联结果，请先「刷新星历」或调整预测时长。')
+            return
+        if not table.selectedIndexes():
+            table.selectRow(idx)
+        open_sky_row(idx)
+
+    def open_sky_row(row_index):
+        """打开该可通联窗口的双站极坐标天空图（台站 A / 台站 B 并排）。
+
+        两张图各自按本站在该窗口内的方位-仰角轨迹绘制，读数（方位角 / 仰角 /
+        高度 / 距离）也分别计算；窗口内按真实时间每秒刷新。
+        """
+        if row_index < 0 or row_index >= len(last_rows):
+            QMessageBox.information(
+                win, '过境视图',
+                '请先在表格里点击选中一次可通联记录。')
+            return
+        r = last_rows[row_index]
+        sat = _find_sat(r)
+        if sat is None:
+            QMessageBox.information(
+                win, '过境视图',
+                '本地星历里找不到该卫星，无法绘制过境视图。\n'
+                '请先「刷新星历」后重试。')
+            return
+        va = box_a.get_values()
+        vb = box_b.get_values()
+        if va is None or vb is None:
+            QMessageBox.information(
+                win, '过境视图',
+                '台站 A / B 的位置填写不完整，无法绘制过境视图。')
+            return
+        # 坐标不设门槛：经纬度 0° 同样是合法位置，照常画（见 open_sky 说明）
+        from f_hamlog import satellite_sky_window
+        # 双站视图显示「双方各自的全部过境」：auto_spans 让每张图按本站 AOS→LOS
+        # 取轨迹，时间轴取两者并集；emphasis = 可通联窗口，那一段轨迹加粗。
+        satellite_sky_window.open_sky(
+            win, r['name'], sat,
+            [('台站 A（本站）', va), ('台站 B（对方）', vb)],
+            r['start_jd'], r['start_jd'] + r['duration'] / 86400.0,
+            info='A 最大仰角 %.1f° ｜ B 最大仰角 %.1f°'
+                 % (r['a_max_elev'], r['b_max_elev']),
+            emphasis=(r['start_jd'], r['start_jd'] + r['duration'] / 86400.0),
+            auto_spans=True)
+
     def log_row(row_index):
         if row_index < 0 or row_index >= len(last_rows):
             QMessageBox.information(win, '记录', '请先在表格里选中一行。')
@@ -772,10 +865,13 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
     clear_tle_btn.clicked.connect(clear_tle)
     sel_btn.clicked.connect(open_select)
     map_btn.clicked.connect(open_map)
+    sky_btn.clicked.connect(open_sky_toolbar)
     # 行选择变化：仅同步已打开的地图（不开图）；点记录按钮导致行选中也不会误开地图
     table.itemSelectionChanged.connect(_sync_map_if_open)
-    # 点击「非记录列」单元格：打开/聚焦地图；第 7 列是「记录」按钮，点它只记录、不开地图
-    table.cellClicked.connect(lambda r, c: _focus_or_open_map() if c != 7 else None)
+    # 点击「非记录/视图列」单元格：打开/聚焦地图；第 7 列「记录」、第 8 列「视图」
+    # 是行内按钮，点它们只做各自的事，不顺手打开地图。
+    table.cellClicked.connect(
+        lambda r, c: _focus_or_open_map() if c not in (7, 8) else None)
     # 任何数据变化都自动重新预测（不再有“开始预测”按钮）
     dur_spin.valueChanged.connect(lambda: run_prediction() if sats else None)
     box_a.el_spin.valueChanged.connect(lambda: run_prediction() if sats else None)

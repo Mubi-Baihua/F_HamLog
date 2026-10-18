@@ -775,6 +775,7 @@ class PredictWorker(bg_thread.BgThread):
             'los_az': p['los_azimuth'],
             'duration': p['duration_sec'],
             'aos_jd': p['aos_jd'],
+            'los_jd': p['los_jd'],
             'preset': preset,
         }
 
@@ -893,6 +894,8 @@ def main(parent_window, quick_log_callback=None, title='卫星过境'):
 #         '打开全球卫星地图：显示所有已选卫星（与下方“范围/自选卫星”实时同步）'
 #         '自当前时刻起的地面轨迹与实时位置，以及本台站。\n'
 #         '在结果表中点选一行，该卫星会在地图上聚焦高亮。')
+    # 过境视图：极坐标天空图（方位-仰角轨迹），按当前选中行打开
+    sky_btn = QPushButton('过境视图')
     # 星历自动更新实时开关（等价于“设置”中的复选框）
     auto_cb = QCheckBox('星历自动更新')
     _auto_on = bool(settings.get('sat_auto_update', False))
@@ -909,6 +912,7 @@ def main(parent_window, quick_log_callback=None, title='卫星过境'):
     tool_top.addSpacing(10)
     tool_top.addWidget(mutual_btn)
     tool_top.addWidget(map_btn)
+    tool_top.addWidget(sky_btn)
     tool_top.addStretch(1)
     tool_top.addWidget(auto_cb)
     # 星历最近更新时间：取本地缓存文件 file/amateur.tle 的修改时间（手动刷新或后台
@@ -992,9 +996,12 @@ def main(parent_window, quick_log_callback=None, title='卫星过境'):
     layout.addLayout(prog_layout)
 
     # ---------- 表格 ----------
-    table = QTableWidget(0, 8)
+    # 第 8 列是隐藏占位（保持与其它记录窗口列风格一致），第 7 列是「视图」按钮：
+    # 打开该次过境的极坐标天空图（方位-仰角轨迹，按真实时间刷新）。
+    table = QTableWidget(0, 9)
     table.setHorizontalHeaderLabels(
-        ['卫星', '升起(本地)', '落下(本地)', '最大仰角', '方位(升起→落下)', '时长', '记录', ''])
+        ['卫星', '升起(本地)', '落下(本地)', '最大仰角', '方位(升起→落下)',
+         '时长', '记录', '视图', ''])
     table.setEditTriggers(QAbstractItemView.NoEditTriggers)
     table.setSelectionBehavior(QAbstractItemView.SelectRows)
     table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
@@ -1005,7 +1012,8 @@ def main(parent_window, quick_log_callback=None, title='卫星过境'):
     table.setColumnWidth(4, 150)
     table.setColumnWidth(5, 90)
     table.setColumnWidth(6, 70)
-    table.setColumnWidth(7, 0)
+    table.setColumnWidth(7, 60)
+    table.setColumnWidth(8, 0)
     layout.addWidget(table)
 
     sats = []
@@ -1184,7 +1192,7 @@ def main(parent_window, quick_log_callback=None, title='卫星过境'):
             return  # 已被新的预测结果取代，放弃本次填充
         try:
             end = min(start + _FILL_BATCH, len(rows))
-            sel_col = 7
+            sel_col = 8
             for i in range(start, end):
                 r = rows[i]
                 table.setItem(i, 0, QTableWidgetItem(r['name']))
@@ -1199,7 +1207,12 @@ def main(parent_window, quick_log_callback=None, title='卫星过境'):
                 rec_btn.clicked.connect(
                     lambda _checked=False, i=i: log_row(i))
                 table.setCellWidget(i, 6, rec_btn)
-                # 第7列隐藏，仅占位（保持与其它记录窗口列风格一致）
+                # 每行一个「视图」按钮：打开本次过境的极坐标天空图
+                view_btn = QPushButton('视图')
+                view_btn.clicked.connect(
+                    lambda _checked=False, i=i: open_sky_row(i))
+                table.setCellWidget(i, 7, view_btn)
+                # 第8列隐藏，仅占位（保持与其它记录窗口列风格一致）
                 table.setItem(i, sel_col, QTableWidgetItem(''))
 
             if end < len(rows):
@@ -1548,6 +1561,85 @@ def main(parent_window, quick_log_callback=None, title='卫星过境'):
         s['sat_auto_update'] = bool(checked)
         _save_settings(s)
 
+    def _find_sat(rec):
+        """按 NORAD 编号（取不到时退回名称）在当前星历里找回卫星对象。"""
+        num = sp.norad_key(str(rec.get('satnum') or ''))
+        if num:
+            for _n, s in sats:
+                if _sat_number(s) == num:
+                    return s
+        name = rec.get('name') or ''
+        for n, s in sats:
+            if n == name:
+                return s
+        return None
+
+    def open_sky_row(row_index):
+        """打开该次过境的极坐标天空图（单站：本站）。
+
+        天空图按本次过境的 AOS→LOS 计算方位-仰角轨迹，窗口内按真实时间
+        每秒刷新；若过境还未开始 / 已结束，滑块停在起始 / 结束时刻。
+        """
+        if row_index < 0 or row_index >= len(last_rows):
+            QMessageBox.information(
+                win, '过境视图',
+                '请先在表格里点击选中一次过境记录。')
+            return
+        r = last_rows[row_index]
+        # 观测站经纬度 0° 是合法位置（赤道 / 本初子午线），不再拦截，照常绘制
+        sat = _find_sat(r)
+        if sat is None:
+            QMessageBox.information(
+                win, '过境视图',
+                '本地星历里找不到该卫星，无法绘制过境视图。\n'
+                '请先「刷新星历」后重试。')
+            return
+        from f_hamlog import satellite_sky_window
+        # 兼容旧预测结果（没有 los_jd 字段时按 AOS + 时长推算）
+        los_jd = r.get('los_jd')
+        if los_jd is None:
+            los_jd = r['aos_jd'] + r['duration'] / 86400.0
+        satellite_sky_window.open_sky(
+            win, r['name'], sat, [('本站', (lat, lon, alt))],
+            r['aos_jd'], los_jd,
+            info='最大仰角 %.1f°' % r['max_elev'])
+
+    def _row_span(r):
+        """一行的 (起点 jd, 终点 jd)；旧结果没有 los_jd 时按 AOS + 时长推算。"""
+        a = r['aos_jd']
+        b = r.get('los_jd')
+        if b is None:
+            b = a + r['duration'] / 86400.0
+        return a, b
+
+    def _target_row():
+        """工具栏「过境视图」用哪一行：有选中用选中的，否则取**最近的一次过境**
+        （优先还没结束的最近一次，全都过去了就取刚刚过去的那次）。"""
+        sel = table.selectedIndexes()
+        if sel:
+            return sel[0].row()
+        if not last_rows:
+            return -1
+        now_jd = sp.datetime_to_jd(datetime.datetime.now(datetime.timezone.utc))
+        upcoming = [i for i, r in enumerate(last_rows)
+                    if _row_span(r)[1] >= now_jd]
+        if upcoming:
+            return min(upcoming, key=lambda i: _row_span(last_rows[i])[0])
+        return max(range(len(last_rows)),
+                   key=lambda i: _row_span(last_rows[i])[1])
+
+    def open_sky_toolbar():
+        """工具栏入口：没有选中行时自动落到最近的那次过境，并高亮它。"""
+        idx = _target_row()
+        if idx < 0:
+            QMessageBox.information(
+                win, '过境视图',
+                '表格里还没有过境结果，请先「刷新星历」或调整预测时长。')
+            return
+        if not table.selectedIndexes():
+            table.selectRow(idx)
+        open_sky_row(idx)
+
     def log_row(row_index):
         """对指定行的卫星，直接把预填记录追加到当前项目（通过 quick_log_callback）。"""
         if row_index < 0 or row_index >= len(last_rows):
@@ -1581,10 +1673,13 @@ def main(parent_window, quick_log_callback=None, title='卫星过境'):
     edit_tqsl_btn.clicked.connect(edit_tqsl_dict)
     mutual_btn.clicked.connect(open_mutual)
     map_btn.clicked.connect(open_map)
+    sky_btn.clicked.connect(open_sky_toolbar)
     # 行选择变化：仅同步已打开的地图（不开图）；点记录按钮导致行选中也不会误开地图
     table.itemSelectionChanged.connect(_sync_map_if_open)
-    # 点击「非记录列」单元格：打开/聚焦地图；第 6 列是「记录」按钮，点它只记录、不开地图
-    table.cellClicked.connect(lambda r, c: _focus_or_open_map() if c != 6 else None)
+    # 点击「非记录/视图列」单元格：打开/聚焦地图；第 6 列是「记录」、第 7 列是
+    # 「视图」按钮，点它们只做各自的事，不顺手打开地图。
+    table.cellClicked.connect(
+        lambda r, c: _focus_or_open_map() if c not in (6, 7) else None)
     auto_cb.toggled.connect(on_auto_toggled)
     dur_spin.valueChanged.connect(lambda: (run_prediction() if sats else None, _persist()))
     el_spin.valueChanged.connect(

@@ -862,4 +862,47 @@ TRANSLATIONS = {
         '.fhl is a records-only format; it carries no custom log fields.',
     '请「另存为」带属性的 .fhla 项目文件后再使用。':
         'Please use "Save As" to write a .fhla project file first, then try again.',
+
+    # ------------------------------------------------------------------
+    #  过境视图（极坐标天空图）——卫星过境 / 通联预测共用
+    # ------------------------------------------------------------------
+    '过境视图': 'Pass view',
+    '视图': 'View',
+    '方位角': 'Azimuth',
+    '仰角': 'Elevation',
+    '高度': 'Altitude',
+    '距离': 'Range',
+    '实时': 'Live',
+    '未开始': 'Not started',
+    '进行中': 'In progress',
+    '已结束': 'Finished',
+    '最大仰角 {}°': 'Max el. {}°',
+    'A 最大仰角 {}° ｜ B 最大仰角 {}°': 'A max el. {}° ｜ B max el. {}°',
+    '请先在表格里点击选中一次过境记录。':
+        'Please click a pass row in the table first.',
+    '请先在表格里点击选中一次可通联记录。':
+        'Please click a mutual-window row in the table first.',
+    '本地星历里找不到该卫星，无法绘制过境视图。\n请先「刷新星历」后重试。':
+        'The satellite is not in the local ephemeris; cannot draw the pass view.\n'
+        'Please "Refresh ephemeris" and try again.',
+    '台站 A / B 的位置填写不完整，无法绘制过境视图。':
+        'Station A / B positions are incomplete; cannot draw the pass view.',
+    '过境数据': 'Pass data',
+    '北': 'N',
+    '东': 'E',
+    '南': 'S',
+    '西': 'W',
+    '已过': 'Passed',
+    '未到': 'Upcoming',
+    '太阳': 'Sun',
+    '月亮': 'Moon',
+    '可通联': 'Workable',
+    '表格里还没有过境结果，请先「刷新星历」或调整预测时长。':
+        'No pass results yet — refresh the ephemeris or adjust the prediction '
+        'span first.',
+    '表格里还没有可通联结果，请先「刷新星历」或调整预测时长。':
+        'No mutual-window results yet — refresh the ephemeris or adjust the '
+        'prediction span first.',
+    '本次窗口': 'This pass',
+    '剩余': 'left',
 }
