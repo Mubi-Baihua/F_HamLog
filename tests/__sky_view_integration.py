@@ -146,6 +146,11 @@ def main():
     check('通联每行有「视图」按钮',
           t2.cellWidget(0, 8) is not None)
 
+    # 「记录」列两窗同宽：卫星过境第 6 列 / 通联预测第 7 列
+    check('「记录」列两窗同宽',
+          t1.columnWidth(6) == t2.columnWidth(7),
+          '卫星过境=%d 通联预测=%d' % (t1.columnWidth(6), t2.columnWidth(7)))
+
     before = len(sk._OPEN)
     t2.cellWidget(0, 8).click()
     pump(app, 0.5)

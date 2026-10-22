@@ -1011,7 +1011,7 @@ def main(parent_window, quick_log_callback=None, title='卫星过境'):
     table.setColumnWidth(3, 80)
     table.setColumnWidth(4, 150)
     table.setColumnWidth(5, 90)
-    table.setColumnWidth(6, 70)
+    table.setColumnWidth(6, 80)  # 「记录」：与「通联预测」窗口保持同宽
     table.setColumnWidth(7, 60)
     table.setColumnWidth(8, 0)
     layout.addWidget(table)

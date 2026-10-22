@@ -342,7 +342,8 @@ def main(parent_window, quick_log_callback=None, on_selection_change=None):
     table.setEditTriggers(QAbstractItemView.NoEditTriggers)
     table.setSelectionBehavior(QAbstractItemView.SelectRows)
     table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
-    # 第 1/2/6 列是本地时间（MM-DD HH:MM:SS），宽度需容纳秒
+    # 第 1/2/6 列是本地时间（MM-DD HH:MM:SS），宽度需容纳秒；
+    # 第 7 列「记录」与「卫星过境」窗口保持同宽（80）
     for col, wdt in enumerate((200, 165, 165, 105, 92, 92, 165, 80, 64)):
         table.setColumnWidth(col, wdt)
     layout.addWidget(table)
