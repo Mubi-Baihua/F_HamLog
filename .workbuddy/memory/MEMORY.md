@@ -50,6 +50,17 @@
 ## 主题 / 对话框 / i18n（细节见 `DETAILS.md`）
 - 浅深**一律平台原生调色板**：不建兜底色、不上全局 QSS、不用 `Fusion`（`5e9fcbe` 已否决）。颜色走
   `theme.hint_css()/warn_css()/link_color()/watch_theme()`，禁止写死；**验证颜色看 `grab()` 像素**。
+- **抓像素必乘 DPR**：本机 125% 缩放，`viewport().grab().toImage()` 是**设备像素**图，
+  `pixelColor(x,y)` 必须传「逻辑坐标 × `devicePixelRatio()`」；直接用逻辑坐标会采到隔壁行
+  （曾误判「悬停只在前两行生效」「斑马纹错乱」，全是假象）。行底色别在行中点取（长地址
+  省略后文字伸得到），取「省略地址与右端延迟之间空白带」的众数。
+- **原生 windows11 样式两个坑**（item view）：① 悬停态用调色板 `Highlight` **整行填充**
+  （变蓝）——QSS 必须显式写 `::item:hover`；② 焦点行描**纯黑大框**（`PE_FrameFocusRect`，
+  由 `State_HasFocus` 触发）——自绘委托里 copy option 后剥掉 `State_HasFocus`。
+- **星历数据源窗口观感定稿**（`tle_source_window.py`）：悬停 = `blend(Window, WindowText, 0.08)`
+  的跟随主题浅灰（浅 #e0e0e0 / 深 #303030），文字色不动；选中 = 链接色文字 + 透明底，
+  `:hover:selected` 维持选中观感；**不描黑框**。验证 `tests/__tle_hover_gray_smoke.py`
+  （必须 `QT_QPA_PLATFORM=windows`）。
 - **文件对话框一律原生静态调用**（自绘+汉化已否决）；`dialog_defaults.desktop_dir()` 默认桌面、文件名为空。
 - i18n：中文是源语言，显示时查词表；**动态文案逐段 `i18n.tr` 后再拼**；单元格固定文案用
   `bind_cell_texts`；文件对话框在**调用处**翻；`translate()` 幂等；**窗口尺寸在 `show()` 之后量**；

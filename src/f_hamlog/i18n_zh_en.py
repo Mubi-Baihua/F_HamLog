@@ -609,11 +609,10 @@ TRANSLATIONS = {
     '已载入星历：本次取得 {} 颗，共 {} 颗卫星{}。':
         'Ephemeris loaded: got {} satellites, {} in total{}.',
     'UTC {}   |   本地 {} ({})': 'UTC {}   |   local {} ({})',
-    '按列表顺序读取已启用的数据源；同一颗卫星（按 NORAD 编号）以先出现的为准。\n左侧方框为启用开关；双击地址即可编辑（回车确认、Esc 取消）。\n打开本窗口或改完地址会自动测试各源延迟，无需手动操作；点「保存」后写入：{}':
+    '按列表顺序读取已启用的数据源；同一颗卫星（按 NORAD 编号）以先出现的为准。\n左侧方框为启用开关；双击地址即可编辑（回车确认、Esc 取消）。':
         'Enabled sources are read in list order; for the same satellite (by NORAD ID) the '
         'earlier one wins.\nThe left checkbox enables/disables a source; double-click an '
-        'address to edit (Enter to confirm, Esc to cancel).\nOpening this window or editing '
-        'an address tests latency automatically; click "Save" to write to: {}',
+        'address to edit (Enter to confirm, Esc to cancel).',
 
     # ------------------------------------------------------------------
     #  结果提示 / 确认

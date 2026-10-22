@@ -55,10 +55,29 @@ def _warn_css():
     return theme.warn_css()
 
 
+# 悬停底色：把窗口底色向正文色混合的比例（浅色→浅灰、深色→深灰，「稍微变灰」）
+_HOVER_BLEND = 0.08
+
+
+def _hover_bg():
+    """悬停底色：跟随主题（写死 gray 在深色底上会糊成一片）。"""
+    pal = theme.palette()
+    return theme.blend(pal.color(QPalette.ColorRole.Window),
+                       pal.color(QPalette.ColorRole.WindowText), _HOVER_BLEND)
+
+
 def _list_qss():
-    """选中项用主题链接色 + 透明背景（保留斑马纹底色）。"""
-    return ("QListWidget::item:selected { background: transparent; color: %s; }"
-            % theme.link_color().name())
+    """选中项用主题链接色文字 + 透明背景（保留斑马纹底色）。
+
+    悬停**必须显式覆盖**：原生样式（windows11）会用调色板 Highlight（蓝色）
+    整行填充悬停项——就是「鼠标一悬停，整条链接变蓝」。这里改成只铺一层
+    跟随主题的浅灰，文字颜色不动；选中行悬停时维持选中观感（透明底 + 链接色）。
+    """
+    hover = _hover_bg().name()
+    return ("QListWidget::item:hover { background: %s; }"
+            "QListWidget::item:selected { background: transparent; color: %s; }"
+            "QListWidget::item:hover:selected { background: transparent; color: %s; }"
+            % (hover, theme.link_color().name(), theme.link_color().name()))
 
 
 def _display_path(path):
@@ -77,6 +96,9 @@ class SourceItemDelegate(QStyledItemDelegate):
 
     延迟刻意**不写进 item.text()**——`text()` 始终只是地址本身（解析与保存都用它），
     否则「显示」和「数据」会互相污染。禁用的源整行文字用次要提示色画淡。
+
+    选中/焦点行**不画原生纯黑大框**（PE_FrameFocusRect）：描黑边与「链接色文字 +
+    透明背景」的选中表达重复，且键盘走查时满屏黑框很吵；选中态见 `_list_qss()`。
     """
 
     def sizeHint(self, option, index):
@@ -92,12 +114,16 @@ class SourceItemDelegate(QStyledItemDelegate):
         return size
 
     def paint(self, painter, option, index):
-        delay = index.data(_ROLE_DELAY) or ''
-        if not delay:
-            super().paint(painter, option, index)
-            return
         opt = QStyleOptionViewItem(option)
         self.initStyleOption(opt, index)
+        # 去掉键盘焦点态：原生样式会据此给「当前行」描一整圈纯黑大框
+        # （PE_FrameFocusRect）。选中/焦点态已由 _list_qss() 的链接色文字 +
+        # 透明背景表达（键盘移动时链接色文字跟着走），不再叠黑框。
+        opt.state &= ~QStyle.StateFlag.State_HasFocus
+        delay = index.data(_ROLE_DELAY) or ''
+        if not delay:
+            super().paint(painter, opt, index)
+            return
         widget = opt.widget
         style = widget.style() if widget is not None else QApplication.style()
         fm = opt.fontMetrics
@@ -187,13 +213,10 @@ def main(window=None, on_save=None):
     win.setCentralWidget(central)
     layout = QVBoxLayout(central)
 
-    path_text = _display_path(sp.TLE_SOURCES_PATH)
+    #path_text = _display_path(sp.TLE_SOURCES_PATH)
 
     tip = QLabel(
-        '按列表顺序读取已启用的数据源；同一颗卫星（按 NORAD 编号）以先出现的为准。\n'
-        '左侧方框为启用开关；双击地址即可编辑（回车确认、Esc 取消）。\n'
-        '打开本窗口或改完地址会自动测试各源延迟，无需手动操作；点「保存」后写入：%s'
-        % path_text, central)
+        '按列表顺序读取已启用的数据源；同一颗卫星（按 NORAD 编号）以先出现的为准。\n左侧方框为启用开关；双击地址即可编辑（回车确认、Esc 取消）。')
     tip.setStyleSheet(_hint_css())
     tip.setWordWrap(True)
     layout.addWidget(tip)
@@ -215,7 +238,8 @@ def main(window=None, on_save=None):
 #     src_list.setToolTip(
 #         '双击某一项即可编辑地址（需以 http:// 或 https:// 开头）。\n'
 #         '行尾显示的是自动测得的响应延迟。')
-    # 选中行不整行填充蓝色：用主题链接色文字 + 透明背景表示选中（保留斑马纹底色）
+    # 悬停只轻微变灰、不整行填充蓝色；选中行用主题链接色文字 + 透明背景
+    # 表示选中（保留斑马纹底色）
     src_list.setStyleSheet(_list_qss())
     layout.addWidget(src_list, 1)
 
