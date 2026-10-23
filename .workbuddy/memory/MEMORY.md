@@ -137,6 +137,11 @@
 - 仓库 `github.com/Mubi-Baihua/F_HamLog`，默认分支 `main`；`main.yml`（手动发布，唯一能发 Release）/
   `preview.yml`（cron 预览，必须在 `main`）/ `.github/inno/F HamLog 2.iss`；本机无 `gh`、无 token；
   **取产物脚本双位置回退**（先 `兼容版/` 再仓库根）。
+- **界面改动「打包后没生效」先怀疑装到了旧包**：扫 exe 字节找新代码独有的字符串/函数名
+  （如 `_hover_bg`、`item:hover:selected`）即可判定，**别用安装后的文件 mtime**（Inno 会把它改成安装时刻；
+  2026-10-23 就因此误判）。锁屏下验界面用 `PrintWindow(hwnd,hdc,2)` + 探针进程先
+  `SetProcessDpiAwarenessContext(-4)`（否则 125% 下只截到窗口一角），点击靠 `PostMessage` 绕开，
+  **悬停绕不开**；工具 `tests/__pkg_ui.py`。
 - **打包必须显式给 `PYTHONPATH=<repo>/src`**：否则 Nuitka 把 `__main__.py` 当孤立脚本编译，**零告警**产出
   「空壳 exe」（双击没反应、无日志）。两个 workflow 的「校验打包产物」已内置**空包检查**（exe 字节里找不到
   `f_hamlog.app_log` 即失败）。口诀：**「打包成功」≠ 产物可用**。

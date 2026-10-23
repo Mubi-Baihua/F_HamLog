@@ -97,3 +97,31 @@ Nuitka（那种包的故障现象千奇百怪，排查成本极高）。
 2) C 层崩溃（不是 Python 异常，traceback 打不出来）：先看 file\log\F_HamLog_crash_*.log；
    连它都没有就去 事件查看器 → Windows 日志 → 应用程序，找「应用程序错误」
    (Application Error，事件 ID 1000)，记下异常代码与出错模块名。
+
+===== 界面类改动「打包后没生效」：先确认装的是不是新代码 =====
+现象：源码里已验证过的观感（如「星历数据源」悬停灰），打包版里完全没有。
+2026-10-23 实例：机器上装的是 preview 工作流的 artifact，比修复所在提交
+（178caa5，22:15）还早 —— 编译没错，装的就是旧代码。
+
+一分钟判断法：扫 exe 字节里有没有**新代码独有的字符串/函数名**（Nuitka 把常量按
+UTF-8 存进 exe，新字面量一定搜得到）：
+    .venv\Scripts\python.exe -c "d=open(r'<dist>\F HamLog 2.exe','rb').read(); \
+        print(d.count(b'_hover_bg'), d.count(b'item:hover:selected'))"
+旧包是 0 0，新包是 1 1。
+
+⚠️ 别把**安装后的文件时间戳**当构建时间：Inno 安装时会把 mtime 改成安装时刻，
+本次就因此把 22:15 之前的包误判成「22 分钟后打的」。
+
+===== 锁屏 / 远程断开时怎么验打包产物界面 =====
+- ImageGrab / 全屏 grab 全是纯黑（没有桌面合成），别误判成「界面没画出来」。
+- 单个窗口仍可用 PrintWindow(hwnd, hdc, 2) 抓到真实内容；现成工具 tests/__pkg_ui.py
+  （list / find / cap / click / hover）。
+- 探针进程必须先 SetProcessDpiAwarenessContext(-4)：125% 缩放下不声明的话
+  GetWindowRect 返回**虚拟化坐标**（1920×1080 的屏给出 1536×864），PrintWindow 只截到窗口一角，
+  看着像「内容被裁掉」。
+- 锁屏时 GetForegroundWindow()==0、SetCursorPos 能移动光标但点击不生效。点击可用
+  PostMessage(WM_MOUSEMOVE / WM_LBUTTONDOWN / WM_LBUTTONUP) 绕过去（本次就靠它点开了
+  「设置」→「设置星历数据源」并拿到截图）；**悬停（State_MouseOver）绕不过去**，
+  只能在解锁后用真鼠标 / 进程内合成事件（tests/__tle_hover_gray_smoke.py）验。
+- 用 --output-folder-name=main 覆盖重建时，main.dist\file\ 会按 src 重新铺一遍：
+  别把用户数据（main.fhla 等）留在那里当「测试环境」。
