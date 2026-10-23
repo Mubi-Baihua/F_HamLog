@@ -471,7 +471,7 @@ TRANSLATIONS = {
         'Ephemeris file (*.tle *.txt *.csv);;TLE file (*.tle);;CSV file (*.csv);;'
         'Text file (*.txt)',
     '导入卫星星历数据': 'Import satellite ephemeris',
-    '选择之前版本 F HamLog.exe 所在的文件夹':
+    '选择其他版本 F HamLog.exe 所在的文件夹':
         'Select the folder containing the previous F HamLog.exe',
 
     # ------------------------------------------------------------------
@@ -485,7 +485,7 @@ TRANSLATIONS = {
     '请输入服务端地址。': 'Please enter the server address.',
     '请输入关键词。': 'Please enter a keyword.',
     '请输入查找内容。': 'Please enter what to find.',
-    '请选择之前版本 F HamLog.exe 所在的文件夹！':
+    '请选择其他版本 F HamLog.exe 所在的文件夹！':
         'Please select the folder containing the previous F HamLog.exe!',
     '对方呼号为空，无法打开 QRZ。': 'Other call is empty; cannot open QRZ.',
     '梅登黑格坐标前两位应为字母（A–R）': 'The first two grid characters must be letters (A–R)',

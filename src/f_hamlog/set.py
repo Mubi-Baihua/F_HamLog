@@ -71,7 +71,7 @@ def main(window):
         import shutil
         print("从其他版本导入数据")  # 保持引用，防止被回收
         folder = QFileDialog.getExistingDirectory(
-            window, i18n.tr("选择之前版本 F HamLog.exe 所在的文件夹"), desktop_dir())
+            window, i18n.tr("选择其他版本 F HamLog.exe 所在的文件夹"), desktop_dir())
         if folder:
             print(f"选择的文件夹: {folder}")
             file_path = os.path.join(folder, 'file')
@@ -129,7 +129,7 @@ def main(window):
                 window.close()
             else:
                 QMessageBox.warning(window, "从其他版本导入数据",
-                                    i18n.tr("请选择之前版本 F HamLog.exe 所在的文件夹！"))
+                                    i18n.tr("请选择其他版本 F HamLog.exe 所在的文件夹！"))
                 back_set()
 
     # 颜色模式与自动保存合并成一行后，内容高度减少约 30px，窗口高度同步收回。
