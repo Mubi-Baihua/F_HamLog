@@ -125,7 +125,7 @@ def main(window):
 
                 QMessageBox.information(
                     window, "从其他版本导入数据",
-                    i18n.tr('成功导入{}\n（目前不支持从之前版本中导入插件）').format(back_item))
+                    i18n.tr('成功导入{}\n（目前不支持从其他版本中导入插件）').format(back_item))
                 window.close()
             else:
                 QMessageBox.warning(window, "从其他版本导入数据",

@@ -116,7 +116,7 @@ TRANSLATIONS = {
     '卫星地图': 'Satellite map',
     '设置': 'Settings',
     '插件设置': 'Plugin settings',
-    '从其他版本导入数据': 'Import old data',
+    '从其他版本导入数据': 'Import data from other versions',
     '加密此项目': 'Encrypt this project',
     '不再加密此项目': 'Do not encrypt again',
     '按时间排序': 'Sort by time',
@@ -637,8 +637,8 @@ TRANSLATIONS = {
         'then upload to LoTW.',
     '已另存为项目文件：{}': 'Saved as project file: {}',
     '已安装到：{}': 'Installed to: {}',
-    '成功导入{}\n（目前不支持从之前版本中导入插件）':
-        'Imported{}\n(importing plugins from older versions is not supported)',
+    '成功导入{}\n（目前不支持从其他版本中导入插件）':
+        'Imported{}\n(Importing plugins from other versions is not supported).',
     '用户设置': 'user settings',
     '问题反馈到：BI8SQL@outlook.com': 'Report issues to: BI8SQL@outlook.com',
     '版本更新请访问：': 'For updates visit: ',
