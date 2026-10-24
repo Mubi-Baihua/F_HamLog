@@ -3903,32 +3903,112 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
             plugin_action.setVisible(False)
     
     def run_pack(pack_name):
-        """返回一个 QAction，触发时执行插件文件夹下的 main.py 或 run.py（使用 runpy）。"""
+        """插件入口：跑插件目录下的 main.py，用它的输出替换当前项目。
+
+        输入（一律 UTF-8 **明文**，加密项目也先解密再交给插件）：
+          * ``input.fhl``  —— 纯记录列表，老接口，保持不变
+          * ``input.fhla`` —— ``{"xml": 属性块, "project": 记录}``（与磁盘上的 .fhla 同构，
+            但 ``encrypted`` 恒为 false）。插件可据此读到自定义字段定义等属性。
+        输出（**有哪个用哪个，.fhla 优先**）：
+          * ``output.fhla``—— 记录 + 属性块，两者一起生效（自定义字段定义也会跟着变）
+          * ``output.fhl`` —— 只替换记录列表，属性块保持原样（老接口）
+        详见 README「插件开发」。
+        """
         action = QAction(pack_name, window)
+        pack_dir = app_path(f'file/pypack/{pack_name}')
+        in_fhl = os.path.join(pack_dir, 'input.fhl')
+        in_fhla = os.path.join(pack_dir, 'input.fhla')
+        out_fhl = os.path.join(pack_dir, 'output.fhl')
+        out_fhla = os.path.join(pack_dir, 'output.fhla')
+
+        def _drop(path):
+            # 插件崩溃过就会留下上一轮的 output；下次运行前必须清掉，否则会被当成本次结果
+            try:
+                os.remove(path)
+            except OSError:
+                pass
 
         def handler():
             global file,key
             if key != None:
                 QMessageBox.information(window,'加密项目','F HamLog 会将项目解密后提供给插件，\n请确保插件来自可信的开发者。')
             import json
-            with open(app_path(f'file/pypack/{pack_name}/input.fhl'),'w',encoding='utf-8') as f:
-                json.dump(file, f, ensure_ascii=False, indent=2)
-            subprocess.run(['python', app_path(f'file/pypack/{pack_name}/main.py')])
+            # 空项目时 file 可能是 None：给插件写 null 会让它 json.load 出 None，一律按空列表给
+            records = file if isinstance(file, list) else []
+            _drop(out_fhl)
+            _drop(out_fhla)
+            with open(in_fhl,'w',encoding='utf-8') as f:
+                f.write(json.dumps(records, ensure_ascii=False, indent=2))
             try:
-                with open(app_path(f'file/pypack/{pack_name}/output.fhl'),'r',encoding='utf-8') as f:
-                    snapshot_before()
-                    file = json.load(f)
-            except FileNotFoundError:
-                QMessageBox.warning(window, "插件错误", f"插件 {pack_name} 未正确生成输出文件！")
-            table_update()
-            if _rc() is not None:
-                # 插件修改了日志，同步回服务端
+                # .fhla 输入：属性块 + 记录。encrypted 写 false——内容就是明文，
+                # 这个键只是声明（以字节能否 UTF-8 解为准）。不改内存里的 _fhla['meta']。
+                meta_in = dict(_fhla['meta'] or empty_meta())
+                meta_in['encrypted'] = False
+                payload = {'xml': ordered_meta(meta_in), 'project': records}
+                with open(in_fhla,'w',encoding='utf-8') as f:
+                    f.write(json.dumps(payload, ensure_ascii=False, indent=4))
+            except Exception as e:
+                QMessageBox.warning(window, "插件错误",
+                                    f"插件 {pack_name} 的 input.fhla 写入失败：\n{e}")
+            subprocess.run(['python', os.path.join(pack_dir, 'main.py')])
+
+            new_recs, new_meta = None, None
+            if os.path.exists(out_fhla):
+                # **.fhla 优先**：记录与属性块（自定义字段定义 / 顺序 / 必填 / 主页显示）一起生效
                 try:
-                    _rc().send_save(file)
-                except Exception:
-                    pass
-            os.remove(app_path(f'file/pypack/{pack_name}/input.fhl'))
-            os.remove(app_path(f'file/pypack/{pack_name}/output.fhl'))
+                    # 不走 read_fhla_file：这里要能区分「project 缺失/不是列表」与「空项目」，
+                    # 否则插件写错结构会被静默当成空项目、把整份日志清空。
+                    with open(out_fhla,'r',encoding='utf-8') as f:
+                        raw = f.read()
+                    data = json.loads(raw)
+                    if not isinstance(data, dict) or not isinstance(data.get('project'), list):
+                        raise ValueError('缺少 project 记录数组')
+                    new_recs = data['project']
+                    new_meta = dict(fhla_project(data).get_xml())
+                    # 明文读回来 encrypted 恒为 False；内存里要保留真实加密状态，
+                    # 否则「项目属性」会先显示「未加密」（保存时虽会被写回函数纠正）
+                    new_meta['encrypted'] = bool(key)
+                except UnicodeDecodeError:
+                    QMessageBox.warning(window, "插件错误",
+                                        f"插件 {pack_name} 的 output.fhla 无法解析：\n"
+                                        f"输出文件是加密的，插件请输出明文")
+                except Exception as e:
+                    # 明确指定了 .fhla 却不合法时不回退到 output.fhl：静默降级会丢掉属性块改动
+                    QMessageBox.warning(window, "插件错误",
+                                        f"插件 {pack_name} 的 output.fhla 无法解析：\n{e}")
+            elif os.path.exists(out_fhl):
+                try:
+                    with open(out_fhl,'r',encoding='utf-8') as f:
+                        new_recs = json.load(f)
+                except Exception as e:
+                    QMessageBox.warning(window, "插件错误",
+                                        f"插件 {pack_name} 的 output.fhl 无法解析：\n{e}")
+            else:
+                QMessageBox.warning(window, "插件错误", f"插件 {pack_name} 未正确生成输出文件！")
+
+            if new_recs is not None:
+                if not isinstance(new_recs, list) \
+                        or not all(isinstance(r, dict) for r in new_recs):
+                    # 例如把 {"xml":…, "project":…} 写进 output.fhl：建表会把 dict 当列表用 → 崩
+                    QMessageBox.warning(window, "插件错误",
+                                        f"插件 {pack_name} 的输出不是记录列表！")
+                else:
+                    snapshot_before()
+                    file = new_recs
+                    if new_meta is not None:
+                        # 属性块也可能被插件改过（自定义字段）→ 换掉并标脏，
+                        # 保证紧跟其后的 table_update()/save() 写的是新属性、且算一次编辑
+                        _fhla['meta'] = new_meta
+                        _fhla['dirty'] = True
+                    table_update()
+                    if _rc() is not None:
+                        # 插件修改了日志，同步回服务端
+                        try:
+                            _rc().send_save(file)
+                        except Exception:
+                            pass
+            for _p in (in_fhl, in_fhla, out_fhl, out_fhla):
+                _drop(_p)
 
         action.triggered.connect(handler)
         return action

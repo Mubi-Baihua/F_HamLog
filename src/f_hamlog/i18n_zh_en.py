@@ -656,6 +656,17 @@ TRANSLATIONS = {
         'Installer finished successfully!\nPlease reopen Plugin settings.',
     '安装失败：{}': 'Installation failed: {}',
     '插件 {} 未正确生成输出文件！': 'Plugin {} did not produce an output file!',
+    '插件 {} 的 input.fhla 写入失败：\n{}':
+        'Failed to write input.fhla for plugin {}:\n{}',
+    '插件 {} 的 output.fhla 无法解析：\n{}':
+        'Plugin {} produced an unreadable output.fhla:\n{}',
+    '插件 {} 的 output.fhl 无法解析：\n{}':
+        'Plugin {} produced an unreadable output.fhl:\n{}',
+    '插件 {} 的输出不是记录列表！':
+        'The output of plugin {} is not a list of records!',
+    '输出文件是加密的，插件请输出明文':
+        'The output file is encrypted; plugins must write plain text.',
+    '缺少 project 记录数组': 'Missing the "project" record array.',
     '该插件与当前F HamLog版本不兼容\n当前F HamLog版本：{}\n插件适配版本：{}':
         'This plugin is incompatible with the current F HamLog version\n'
         'Current F HamLog version: {}\nPlugin targets: {}',

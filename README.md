@@ -98,7 +98,15 @@ python:
 #### 插件 python 代码
 
 ##### 输入
-运行时 F HamLog 会将当前文件放在 python 文件的工作目录下。名称为：`input.fhl`。编码使用 utf-8。
+
+运行时 F HamLog 会把当前项目写在 python 文件的工作目录下，**两份都提供**，编码均为 utf-8，且**一律是解密后的明文**（加密项目也会先解密再交给插件）：
+
+| 文件名 | 内容 |
+| --- | --- |
+| `input.fhl` | 纯记录数组（老接口，与以往完全一致） |
+| `input.fhla` | `{"xml": 属性块, "project": 记录数组}`，与磁盘上的 `.fhla` 同构；`xml.encrypted` 恒为 `false`，可据此读取自定义字段定义（`other_item` / `field_order` / `field_meta`）等项目属性 |
+
+只想改记录时读 `input.fhl` 就够了；需要用到项目属性（自定义字段）时读 `input.fhla`。两者来自同一份项目，记录部分完全一致。属性块里各键的含义见下文「[FHLA 文件格式（.fhla）](#fhla-文件格式fhla)」。
 
 示例输入代码：
 ```python
@@ -107,21 +115,45 @@ from pathlib import Path
 
 abs_path = Path(__file__).resolve().parent
 
+# 纯记录（老接口）
 with open(f"{abs_path}/input.fhl", "r", encoding="utf-8") as f:
     file_list = json.load(f)  
+
+# 记录 + 项目属性（.fhla 结构，已解密）
+with open(f"{abs_path}/input.fhla", "r", encoding="utf-8") as f:
+    project = json.load(f)
 ```
 
 ##### 输出
-运行时 F HamLog 会读取 python 文件的工作目录下的输出文件。名称为：`output.fhl`。编码使用 utf-8。
+
+运行时 F HamLog 会读取 python 文件工作目录下的 `output.fhla` 与 `output.fhl`（utf-8），**哪个存在就用哪个，`.fhla` 优先**（两个都写时只用 `output.fhla`，`output.fhl` 被忽略）：
+
+| 文件名 | 生效范围 |
+| --- | --- |
+| `output.fhla` | `{"xml": 属性块, "project": 记录数组}`：记录与项目属性（自定义字段定义等）一起替换 |
+| `output.fhl` | 纯记录数组：只替换记录，项目属性保持原样（老插件行为不变） |
+
+- 只改记录时**不要**写 `output.fhla`——它优先，会连属性块一起覆盖。
+- `output.fhla` 存在但内容不合法时，会提示「无法解析」并**保持项目原样**，不会退回去用 `output.fhl`。
+- 结构不对（例如把 `{"xml":…, "project":…}` 写进 `output.fhl`）会提示「不是记录列表」，同样保持项目原样。
+- 一次运行结束后，`input.fhl` / `input.fhla` / `output.fhl` / `output.fhla` 都会被删除。
+- 老版本 F HamLog 只认 `output.fhl`：需要兼容旧版时请只写 `output.fhl`。
 
 示例输出代码：
 ```python
+import json
 from pathlib import Path
 
 abs_path = Path(__file__).resolve().parent
 
+# 只改记录（老接口，任何版本都认）
 with open(f"{abs_path}/output.fhl", "w", encoding="utf-8") as f:
     json.dump(file_list, f, ensure_ascii=False, indent=2)
+
+# 或者：记录 + 属性一起写（优先于 output.fhl）
+project["project"] = file_list
+with open(f"{abs_path}/output.fhla", "w", encoding="utf-8") as f:
+    json.dump(project, f, ensure_ascii=False, indent=4)
 ```
 
 #### 插件打包
@@ -348,7 +380,14 @@ python:
 #### Plugin Python Code
 
 ##### Input
-At runtime, F HamLog places the current file in the working directory of the python file, named `input.fhl`, encoded in utf-8.
+At runtime, F HamLog writes the current project into the working directory of the python file, **both files are provided**, encoded in utf-8, and always **decrypted plain text** (encrypted projects are decrypted before being handed to the plugin):
+
+| File | Content |
+| --- | --- |
+| `input.fhl` | Plain array of records (the legacy interface, unchanged) |
+| `input.fhla` | `{"xml": meta block, "project": records}`, the same shape as an on-disk `.fhla`; `xml.encrypted` is always `false`, so plugins can read project properties such as custom field definitions (`other_item` / `field_order` / `field_meta`) |
+
+Read `input.fhl` if you only need the records; read `input.fhla` when you need project properties (custom fields). Both come from the same project, and their record arrays are identical. The meaning of each meta key is described in [FHLA File Format (.fhla)](#fhla-file-format-fhla) below.
 
 Example input code:
 ```python
@@ -357,21 +396,44 @@ from pathlib import Path
 
 abs_path = Path(__file__).resolve().parent
 
+# Plain records (legacy interface)
 with open(f"{abs_path}/input.fhl", "r", encoding="utf-8") as f:
     file_list = json.load(f)  
+
+# Records + project properties (.fhla shape, decrypted)
+with open(f"{abs_path}/input.fhla", "r", encoding="utf-8") as f:
+    project = json.load(f)
 ```
 
 ##### Output
-At runtime, F HamLog reads the output file in the working directory of the python file, named `output.fhl`, encoded in utf-8.
+At runtime, F HamLog looks for `output.fhla` and `output.fhl` in the working directory of the python file (utf-8). **Whichever exists is used, and `.fhla` wins** (if both are written, only `output.fhla` is read and `output.fhl` is ignored):
+
+| File | What it replaces |
+| --- | --- |
+| `output.fhla` | `{"xml": meta block, "project": records}`: replaces both the records and the project properties (custom field definitions, etc.) |
+| `output.fhl` | Plain array of records: replaces the records only, project properties stay as they were (legacy behaviour unchanged) |
+
+- To change records only, do **not** write `output.fhla` — it takes priority and would overwrite the meta block too.
+- If `output.fhla` exists but is invalid, F HamLog reports that it cannot be parsed and **leaves the project untouched**; it does not fall back to `output.fhl`.
+- A wrong structure (for example a `{"xml":…, "project":…}` written to `output.fhl`) reports "not a list of records" and also leaves the project untouched.
+- After each run, `input.fhl` / `input.fhla` / `output.fhl` / `output.fhla` are all deleted.
+- Older F HamLog versions only read `output.fhl`: write `output.fhl` alone when you need to stay compatible with them.
 
 Example output code:
 ```python
+import json
 from pathlib import Path
 
 abs_path = Path(__file__).resolve().parent
 
+# Records only (legacy interface; understood by every version)
 with open(f"{abs_path}/output.fhl", "w", encoding="utf-8") as f:
     json.dump(file_list, f, ensure_ascii=False, indent=2)
+
+# Or: records + properties together (takes priority over output.fhl)
+project["project"] = file_list
+with open(f"{abs_path}/output.fhla", "w", encoding="utf-8") as f:
+    json.dump(project, f, ensure_ascii=False, indent=4)
 ```
 
 #### Plugin Packaging
