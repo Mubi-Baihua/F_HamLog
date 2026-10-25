@@ -84,6 +84,9 @@
 - `show_toast()`：非模态、无边框、置顶、1 秒关、可堆叠、跟随主题；**分层窗口禁用 `QGraphicsDropShadowEffect`**
   （脏矩形越界），用 1px 边框。
 - **删除日志无二次确认**（定稿）：直接删 + toast，安全网 = `snapshot_before()`；**别改回 `QMessageBox.question`**。
+- **别用 `setEnabled(False)` 表示「忙」**：Qt 会立刻把焦点移交到焦点链下一个控件，设置页里就是「我的呼号」
+  QLineEdit，而它因 TabFocusReason 拿焦点时会**全选文本**（＝"点检查更新自动选中呼号"）；改用改文字 +
+  `isRunning()` 拦重入。回归 `tests/__update_btn_focus_smoke.py`。
 
 ## 卫星 / 过境视图
 - `satellite_pred.py`（skyfield 离线）；`MAX_PREDICT_HOURS=240`、`MAX_SELECTED_SATELLITES=250`；数据源 =

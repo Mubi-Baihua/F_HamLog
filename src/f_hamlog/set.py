@@ -124,7 +124,13 @@ def _is_installer_url(url):
 
 
 def _start_update_check(window, button):
-    """「检查更新」按钮的入口：预览版直接拒绝，正式版起线程去查。"""
+    """「检查更新」按钮的入口：预览版直接拒绝，正式版起线程去查。
+
+    「检查中」**只用改文字表达，绝不能 setEnabled(False)**：按钮一旦被禁用，Qt 会立刻把
+    焦点移交到焦点链上的下一个控件 —— 设置页里就是「我的呼号」QLineEdit，而 QLineEdit
+    因 TabFocusReason 拿到焦点时会**全选文本**，看起来就像"点检查更新自动选中了呼号"。
+    （重复点击由下面的 isRunning() 拦住，不需要靠禁用来防重入。）
+    """
     global _update_check_thread
     from f_hamlog import check_update
     if check_update.is_preview_version():
@@ -135,14 +141,16 @@ def _start_update_check(window, button):
     if _update_check_thread is not None and _update_check_thread.isRunning():
         return
 
-    button.setEnabled(False)
     button.setText(i18n.tr('检查中…'))
     thread = _CheckThread(window)
 
     def _finished(info):
-        button.setEnabled(True)
-        button.setText(i18n.tr('检查更新'))
-        _on_update_checked(window, info)
+        # 界面此刻可能已经关掉（按钮/窗口已销毁）→ 别碰 C++ 对象
+        try:
+            button.setText(i18n.tr('检查更新'))
+            _on_update_checked(window, info)
+        except RuntimeError:
+            pass
 
     thread.result.connect(_finished)
     thread.start()
