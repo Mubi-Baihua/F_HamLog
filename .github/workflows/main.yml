@@ -7,6 +7,7 @@ name: 发布 F HamLog（Nuitka → Inno Setup → 兼容版压缩包 → Release
 #   3. 生成兼容版压缩包（免安装，解压即用）
 #   4. 把安装包与兼容版压缩包回写到运行分支的约定目录并提交
 #      （安装包 → F HamLog 2 Inno Setup/ ；兼容版 → 兼容版/）
+#      ⚠️ 可用输入 commit_artifacts=false 跳过这一步（只发 Release，不动 git）
 #   5. 发布到 Releases（tag = 填入的版本号；附件 = 安装包 + 兼容版压缩包 + 远程日志服务端）
 #      默认发布为**草稿**，确认无误后在 Releases 页面手动点击发布
 #      说明内容留空，由作者在 Releases 页面手动填写
@@ -32,6 +33,10 @@ on:
         default: 'F_HamLog_Remote_Log_Server_2.0.0/dist/F_HamLog_Remote_Log_Server_2.0.0.exe'
       draft:
         description: '是否发布为草稿（true / false）'
+        required: false
+        default: 'true'
+      commit_artifacts:
+        description: '是否把安装包/兼容版压缩包提交回运行分支（false = 只发 Release，不动 git）'
         required: false
         default: 'true'
       upload_debug_artifact:
@@ -407,7 +412,11 @@ jobs:
       # ------------------------------------------------------------------
       # 4b. 把两个产物回写到运行分支（与历次手工提交的位置一致）
       # ------------------------------------------------------------------
+      # 由 workflow_dispatch 的 commit_artifacts 控制：填 false 就只发 Release，
+      # 不往分支里塞 130MB+ 的二进制（仓库会越滚越大，也省一次可能与开发冲突的推送）。
+      # 注意 gates 用的是字符串比较：inputs 一律是字符串，别写成 inputs.commit_artifacts == true。
       - name: 提交产物到运行分支
+        if: ${{ inputs.commit_artifacts == 'true' }}
         run: |
           $ErrorActionPreference = 'Stop'
 
@@ -483,6 +492,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           IN_DRAFT: ${{ inputs.draft }}
+          IN_COMMIT: ${{ inputs.commit_artifacts }}
         run: |
           $ErrorActionPreference = 'Stop'
           $repo   = $env:GITHUB_REPOSITORY
@@ -531,8 +541,14 @@ jobs:
           $summary.Add('')
           foreach ($a in $assets) { $summary.Add("- ``$(Split-Path $a -Leaf)``") }
           $summary.Add('')
-          $summary.Add('### 已回写到运行分支')
-          $summary.Add('')
-          $summary.Add("- ``$env:COMMIT_SETUP``")
-          $summary.Add("- ``$env:COMMIT_ZIP``")
+          if ($env:IN_COMMIT -eq 'true') {
+            $summary.Add('### 已回写到运行分支')
+            $summary.Add('')
+            $summary.Add("- ``$env:COMMIT_SETUP``")
+            $summary.Add("- ``$env:COMMIT_ZIP``")
+          } else {
+            $summary.Add('### 未回写到运行分支')
+            $summary.Add('')
+            $summary.Add('- 已按 `commit_artifacts=false` 跳过：产物只在 Release 附件里，仓库分支未改动')
+          }
           [System.IO.File]::AppendAllLines($env:GITHUB_STEP_SUMMARY, $summary.ToArray(), (New-Object System.Text.UTF8Encoding $false))

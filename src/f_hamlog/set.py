@@ -1,13 +1,408 @@
 from PySide6.QtWidgets import *
+from PySide6.QtCore import Qt, QEvent, Signal
+import threading
+import webbrowser
 from f_hamlog import call_upper
 from f_hamlog import theme
 from f_hamlog import i18n
+from f_hamlog import bg_thread
 from f_hamlog import __version__
 from f_hamlog.dialog_defaults import desktop_dir
 from f_hamlog.paths import app_path
 
 # 「星历数据源」独立窗口的引用（防止被回收；非模态，可重复打开）
 tle_source_win = None
+
+
+# ---------------------------------------------------------------------------
+# 检查更新：检查 → 多线程下载 → 运行安装包 → 退出本程序
+# ---------------------------------------------------------------------------
+# 线程必须是**模块级强引用**：QThread 的 C++ 对象一旦被回收而线程还在跑，Qt 会走
+# qFatal → abort（见 bg_thread 模块说明）。同时继承 bg_thread.BgThread，退出前由
+# stop_all() 兜底。
+_update_check_thread = None
+_update_download_thread = None
+_update_dialog = None       # 下载进度窗（独立顶层窗口，靠这个引用保命）
+
+
+def _no_maximize(win):
+    """把这个窗口钉成「不可以最大化」。
+
+    Qt 的对话框默认带可缩放边框（系统样式 WS_THICKFRAME），拖到屏幕上沿会被 Aero Snap
+    拉成整屏；这些窗口都只有几行字，放大之后就是一片空，很难看。所以两件事一起做：
+    去掉最大化按钮 + 去掉可缩放边框（固定尺寸对话框样式）。
+    """
+    win.setWindowFlag(Qt.WindowMaximizeButtonHint, False)
+    win.setWindowFlag(Qt.MSWindowsFixedSizeDialogHint, True)
+
+
+def _revert_maximize(win, event):
+    """谁把窗口最大化了就立刻还原（任务栏右键菜单 / ShowWindow 也能放大）。"""
+    if event.type() == QEvent.WindowStateChange and win.isMaximized():
+        win.showNormal()
+
+
+class _NoMaximizeDialog(QDialog):
+    """更新流程用的小对话框：不可以最大化，也不可以拖边改大小。"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        _no_maximize(self)
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        _revert_maximize(self, event)
+
+
+class _UpdateProgressDialog(QProgressDialog):
+    """下载进度窗：不可以最大化，也不可以拖边改大小（理由见 :func:`_no_maximize`）。"""
+
+    def __init__(self, parent=None):
+        super().__init__(i18n.tr('正在下载更新…'), i18n.tr('取消'), 0, 100, parent)
+        _no_maximize(self)
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        _revert_maximize(self, event)
+
+
+class _CheckThread(bg_thread.BgThread):
+    """后台查版本：check_update.check() 内部最多重试 5 次，绝不能放在 UI 线程里跑。"""
+
+    result = Signal(object)
+
+    def run(self):
+        try:
+            from f_hamlog import check_update
+            info = check_update.check()
+        except Exception as e:
+            info = {'status': 'error', 'version': '', 'url': '', 'detail': str(e)}
+        self.result.emit(info)
+
+
+class _DownloadThread(bg_thread.BgThread):
+    """后台下载更新包（多线程分段并行在 check_update.download 里完成）。"""
+
+    progressed = Signal(int, int)   # (已下载字节, 总字节；总字节 0 表示未知)
+    done = Signal(str)              # 下载完成 → 本地路径
+    failed = Signal(str)            # 失败原因；空串表示用户取消
+
+    def __init__(self, url, sha256='', version='', force=False, parent=None):
+        super().__init__(parent)
+        self._url = url
+        self._sha256 = sha256 or ''
+        self._version = version or ''
+        self._force = bool(force)
+        self._cancel = threading.Event()
+
+    def run(self):
+        from f_hamlog import check_update
+        try:
+            path = check_update.download(
+                self._url,
+                progress=lambda done, total: self.progressed.emit(int(done), int(total)),
+                cancel=self._cancel,
+                sha256=self._sha256 or None,
+                version=self._version,
+                force=self._force)
+        except check_update.Cancelled:
+            self.failed.emit('')
+        except Exception as e:
+            self.failed.emit(str(e))
+        else:
+            self.done.emit(path)
+
+    def stop(self):
+        """取消下载（关闭进度窗、退出程序时都会被调到）。"""
+        self._cancel.set()
+
+
+def _is_installer_url(url):
+    """下载地址是否直接指向安装包（否则只能打开网页让用户自己下）。"""
+    path = str(url or '').split('?', 1)[0].split('#', 1)[0].lower()
+    return path.endswith('.exe') or path.endswith('.msi')
+
+
+def _start_update_check(window, button):
+    """「检查更新」按钮的入口：预览版直接拒绝，正式版起线程去查。"""
+    global _update_check_thread
+    from f_hamlog import check_update
+    if check_update.is_preview_version():
+        QMessageBox.information(
+            window, i18n.tr('检查更新'),
+            i18n.tr('当前是预览版，不参与自动更新。\n请从项目主页获取正式版。'))
+        return
+    if _update_check_thread is not None and _update_check_thread.isRunning():
+        return
+
+    button.setEnabled(False)
+    button.setText(i18n.tr('检查中…'))
+    thread = _CheckThread(window)
+
+    def _finished(info):
+        button.setEnabled(True)
+        button.setText(i18n.tr('检查更新'))
+        _on_update_checked(window, info)
+
+    thread.result.connect(_finished)
+    thread.start()
+    _update_check_thread = thread
+
+
+def _on_update_checked(window, info):
+    info = info or {}
+    status = info.get('status')
+    if status == 'error':
+        QMessageBox.warning(
+            window, i18n.tr('检查更新'),
+            i18n.tr('检查更新失败：\n{}\n\n请稍后重试。').format(
+                info.get('detail') or i18n.tr('网络不可用')))
+        return
+    if status == 'preview':
+        QMessageBox.information(
+            window, i18n.tr('检查更新'),
+            i18n.tr('当前是预览版，不参与自动更新。\n请从项目主页获取正式版。'))
+        return
+    if status == 'latest':
+        QMessageBox.information(
+            window, i18n.tr('检查更新'),
+            i18n.tr('已是最新版本（{}）。').format(__version__))
+        return
+    if status != 'new':
+        return
+
+    version = info.get('version') or '?'
+    url = info.get('url') or ''
+    if not _is_installer_url(url):
+        if QMessageBox.question(
+                window, i18n.tr('发现新版本'),
+                i18n.tr('发现新版本 {}，是否打开下载页面？').format(version)) == QMessageBox.Yes:
+            webbrowser.open(url)
+        return
+
+    # 下载前先看本地：上次可能已经下完了（选了「稍后」/ 装到一半取消 / 顺手关了窗），
+    # 这时不该再白下几十 MB。
+    from f_hamlog import check_update
+    cached = check_update.find_installer(url, sha256=info.get('sha256') or '', version=version)
+    force = False
+    if cached:
+        choice = _ask_cached(window, version, cached)
+        if choice == 'install':
+            _install_update(window, cached['path'], version, confirm=False)
+            return
+        if choice != 'download':
+            return
+        force = True                        # 明确选了「重新下载」→ 别又被缓存拦下
+    elif QMessageBox.question(
+            window, i18n.tr('发现新版本'),
+            i18n.tr('发现新版本 {}，是否下载并安装？\n当前版本：{}').format(
+                version, __version__)) != QMessageBox.Yes:
+        return
+    _start_update_download(window, version, url, info.get('sha256') or '', force)
+
+
+def _ask_cached(window, version, found):
+    """本地已有安装包时的三选一，返回 ``'install'`` / ``'download'`` / ``''``（取消）。
+
+    **不能用 QMessageBox**：它按 role 排按钮，RejectRole 会被塞到「立即安装」右边
+    （实测 Accept/Reject/Action → 立即安装、稍后、重新下载），更致命的是**没有
+    RejectRole 按钮时，标题栏叉号和 Esc 都失效**（实测只有「单按钮 + Accept」那种
+    才能被 close() 关掉，两按钮的怎么点都没反应）。这里自己排顺序，叉号 / Esc 都能关。
+    """
+    from f_hamlog import check_update
+    size_txt = check_update.format_size(found.get('size') or 0)
+    trusted = found.get('verified') in ('sha256', 'meta')
+    picked = {'value': ''}
+
+    dlg = _NoMaximizeDialog(window)
+    dlg.setWindowTitle(i18n.tr('发现新版本'))
+    dlg.setModal(True)
+    dlg.setMinimumWidth(460)
+    # 上限：安装包路径可能很长，不封顶的话 QLabel 的单行 sizeHint 会把窗口越撑越宽
+    dlg.setMaximumWidth(600)
+    lay = QVBoxLayout(dlg)
+    lay.setContentsMargins(18, 16, 18, 14)
+    lay.setSpacing(10)
+
+    text = QLabel(i18n.tr('发现新版本 {}，本地已有下载好的安装包：\n{}（{}）').format(
+        version, found.get('path') or '', size_txt), dlg)
+    text.setWordWrap(True)
+    text.setTextInteractionFlags(Qt.TextSelectableByMouse)
+    lay.addWidget(text)
+
+    note = QLabel(i18n.tr('是否直接安装？') if trusted
+                  else i18n.tr('这个安装包没有校验过，重新下载更稳妥。'), dlg)
+    note.setWordWrap(True)
+    note.setStyleSheet(theme.hint_css())
+    lay.addWidget(note)
+    theme.watch_theme(dlg, lambda: note.setStyleSheet(theme.hint_css()))
+
+    row = QHBoxLayout()
+    row.setSpacing(8)
+    row.addStretch(1)
+    btn_now = QPushButton(i18n.tr('立即安装'), dlg)
+    btn_again = QPushButton(i18n.tr('重新下载'), dlg)
+    btn_later = QPushButton(i18n.tr('稍后'), dlg)
+    for b in (btn_now, btn_again, btn_later):
+        row.addWidget(b)
+    lay.addLayout(row)
+
+    def _pick(value):
+        picked['value'] = value
+        dlg.accept()
+
+    btn_now.clicked.connect(lambda: _pick('install'))
+    btn_again.clicked.connect(lambda: _pick('download'))
+    btn_later.clicked.connect(dlg.reject)       # 与叉号 / Esc 同效
+    (btn_now if trusted else btn_again).setDefault(True)
+    (btn_now if trusted else btn_again).setFocus()
+
+    dlg.exec()
+    return picked['value']
+
+
+def _alive(window):
+    """window 可能已经被销毁（下载窗是非模态的，用户随时能关掉设置窗口）。
+
+    被销毁的 C++ 对象一访问就抛 RuntimeError，这里把它换成 None ——
+    没有父窗口的 QMessageBox 照样能弹，不该因为父窗口没了就崩。
+    """
+    try:
+        if window is not None:
+            window.windowTitle()        # 碰一下 C++ 对象，探活
+        return window
+    except RuntimeError:
+        return None
+
+
+def _start_update_download(window, version, url, sha256='', force=False):
+    global _update_download_thread, _update_dialog
+    if _update_download_thread is not None and _update_download_thread.isRunning():
+        # 已经在下了（比如用户又点了一次检查更新）：把现有的进度窗提上来，别开第二个
+        if _update_dialog is not None:
+            _update_dialog.showNormal()
+            _update_dialog.raise_()
+            _update_dialog.activateWindow()
+        return
+
+    # parent 给 None：进度窗是独立顶层窗口。设了父对象会被当成「被拥有的窗口」，
+    # 父窗口一最小化/关闭它就跟着走；而下载期间关掉设置窗口不该中断下载。
+    dlg = _UpdateProgressDialog(None)
+    dlg.setWindowTitle(i18n.tr('下载更新'))
+    # 非模态 + 最小化按钮：模态时最小化了自己，父窗口却仍被阻塞（点了没反应，
+    # 看着像卡死）；非模态下可以最小化去干别的，也能继续用主界面。
+    # 最大化由 _no_maximize() 关掉（在 __init__ 里就设好了，这里只补最小化）。
+    dlg.setWindowModality(Qt.NonModal)
+    dlg.setWindowFlag(Qt.WindowMinimizeButtonHint, True)
+    dlg.setMinimumDuration(0)
+    dlg.setAutoClose(False)
+    dlg.setAutoReset(False)
+    # 文案要放下「已下载/总大小 · 速度 · 剩余时间」：中文约 406 px、英文约 430 px，
+    # 定 480 就够（数字与斜杠之间不留空格，省 12 px）；不设下限的话每次改文案 adjustSize
+    # 会让窗口随数字位数忽宽忽窄。
+    dlg.setMinimumWidth(480)
+    dlg.setValue(0)
+    dlg.show()
+    if window is not None:
+        # 没有父窗口就不会自动居中，手动摆到设置窗口正中间
+        geo = window.frameGeometry()
+        dlg.move(geo.center() - dlg.rect().center())
+    _update_dialog = dlg
+
+    from f_hamlog import check_update
+    meter = check_update.Speedometer()      # 滑动窗口算速度，避免数字乱跳
+    eta_est = check_update.EtaEstimator()   # 累计平均 + 只降不升，避免剩余时间来回跳
+
+    thread = _DownloadThread(url, sha256, version, force, window)
+
+    # 关闭标记。QProgressDialog 的坑：**setValue() 内部会 ensureDialog() → show()**，
+    # 所以点叉关掉之后，只要还有一帧进度信号进来，窗口就会自己弹回来（看起来像关不掉）。
+    # 这里用 state 兜住：一旦关闭，后续进度一律不碰窗口。
+    state = {'closed': False}
+
+    def _shut():
+        global _update_dialog
+        state['closed'] = True
+        dlg.reset()         # reset 内部也会 setValue()，可能把窗口 show 出来
+        dlg.hide()          # 所以顺序必须是「先 reset 再 hide」
+        if _update_dialog is dlg:
+            _update_dialog = None
+
+    def _progress(done, total):
+        if state['closed']:
+            return
+        # 速度、剩余时间都是与语言无关的数值，只有句式走词表
+        speed = meter.update(done)
+        speed_txt = check_update.format_speed(speed) if done else '—'
+        if total > 0:
+            if dlg.maximum() != 100:
+                dlg.setMaximum(100)     # 从「不定长」切回百分比
+            dlg.setValue(min(100, int(done * 100 / total)))
+            eta = check_update.format_eta(eta_est.update(done, total))
+            if eta:
+                dlg.setLabelText(i18n.tr('{}/{} · {} · 剩余 {}').format(
+                    check_update.format_size(done),
+                    check_update.format_size(total), speed_txt, eta))
+            else:
+                dlg.setLabelText(i18n.tr('{}/{} · {}').format(
+                    check_update.format_size(done),
+                    check_update.format_size(total), speed_txt))
+        else:
+            if dlg.maximum() != 0:
+                dlg.setMaximum(0)       # 拿不到总大小 → 不定长进度条，也算不出剩余时间
+            dlg.setLabelText(i18n.tr('已下载 {} · {}').format(
+                check_update.format_size(done), speed_txt))
+
+    def _ok(path):
+        _shut()
+        _install_update(_alive(window), path, version)
+
+    def _fail(message):
+        _shut()
+        if message:                     # 空串 = 用户主动取消，不再弹窗
+            QMessageBox.warning(_alive(window), i18n.tr('下载失败'), message)
+
+    def _cancel():
+        """点「取消」/ 点叉 / 按 Esc：先关窗（别让下一帧进度又弹回来），再让线程收手。"""
+        _shut()
+        thread.stop()
+
+    thread.progressed.connect(_progress)
+    thread.done.connect(_ok)
+    thread.failed.connect(_fail)
+    dlg.canceled.connect(_cancel)
+    thread.start()
+    _update_download_thread = thread
+
+
+def _install_update(window, path, version, confirm=True):
+    """下载完成 → 问一句 → 运行安装包 → 退出本程序。
+
+    ``confirm=False`` 用于「本地已有安装包」那条路：那边已经问过「是否直接安装」，
+    这里别再问第二遍。
+    """
+    from f_hamlog import check_update
+    if confirm:
+        box = QMessageBox(window)
+        box.setWindowTitle(i18n.tr('安装更新'))
+        box.setText(i18n.tr('更新包已下载完成（{}）：\n{}\n\n是否立即安装？').format(version, path))
+        box.setInformativeText(i18n.tr('安装程序会关闭 F HamLog，安装完成后请重新打开。'))
+        btn_now = box.addButton(i18n.tr('立即安装'), QMessageBox.AcceptRole)
+        box.addButton(i18n.tr('稍后'), QMessageBox.RejectRole)
+        box.exec()
+        if box.clickedButton() is not btn_now:
+            return
+
+    try:
+        check_update.run_installer(path)
+    except Exception as e:
+        QMessageBox.warning(window, i18n.tr('安装更新'),
+                            i18n.tr('无法运行安装包：\n{}').format(e))
+        return
+    # 安装器已启动：先退程序，它才能覆盖正在运行的主程序文件
+    app = QApplication.instance()
+    if app is not None:
+        app.quit()
 
 
 def main(window):
@@ -371,9 +766,22 @@ def main(window):
         return i18n.tr('F HamLog 版本：') + __version__
 
     fk_v = QLabel(_ver_text(), central_widget)
-    layout.addWidget(fk_v)
     # 语言切换后重刷文案（前缀走词表，版本号动态拼接）
     i18n.watch_language(window, lambda: fk_v.setText(_ver_text()))
+
+    # 「检查更新」与版本号同一行：版本号右侧才是这个按钮的自然位置，
+    # 而且不额外占一行高度（设置窗口是固定尺寸，多一行就要重新排版）。
+    update_btn = QPushButton(i18n.tr('检查更新'), central_widget)
+    update_btn.setFixedHeight(24)
+    update_btn.setMinimumWidth(96)
+    update_btn.clicked.connect(lambda: _start_update_check(window, update_btn))
+
+    ver_row = QHBoxLayout()
+    ver_row.setContentsMargins(0, 0, 0, 0)
+    ver_row.addWidget(fk_v)
+    ver_row.addStretch(1)
+    ver_row.addWidget(update_btn)
+    layout.addLayout(ver_row)
 
     line = QFrame(central_widget)
     line.setFrameShape(QFrame.HLine)

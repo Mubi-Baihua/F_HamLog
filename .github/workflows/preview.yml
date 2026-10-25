@@ -434,6 +434,53 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-nuitka-build-${{ env.PYTHON_VERSION }}-${{ env.APP_EXE_NAME }}-
 
+      # ------------------------------------------------------------------
+      # 7a. 改写预览版版本号（src/f_hamlog/__init__.py）
+      # ------------------------------------------------------------------
+      # 预览包的版本串必须是「日常开发Preview UTC-yyyyMMdd-HHmm 2.x.y」，原因有两个：
+      #   ① 不能自称正式版本号 —— 否则「检查更新」会把预览包当成正式版，把用户
+      #      从预览版拽回旧正式版；
+      #   ② 串里带 UTC / Preview / 日常开发 标记后，check_update.is_preview_version()
+      #      直接判定为预览版 → **预览版永不自我更新**（需求：预览版不自己更新）。
+      # 两个顺序都不能动：
+      #   · 必须在「准备虚拟环境与依赖」（pip install -e .）**之后**：
+      #     pyproject 的 version 是 dynamic+attr，setuptools 会校验 PEP 440，
+      #     而「日常开发Preview UTC-… 2.x.y」不是合法版本号，装依赖时会直接失败；
+      #   · 必须在 Nuitka 打包**之前**：否则打进 exe 的还是原版本号。
+      # 顺带一提：上面的构建缓存键用 hashFiles('src/**/*.py')，在本步骤之前就算好了，
+      # 所以这里改 __init__.py 不会让缓存失效（只会重编这一个模块）。
+      - name: 改写预览版版本号
+        if: ${{ env.SHOULD_BUILD == 'true' }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+          $init = Join-Path $env:GITHUB_WORKSPACE 'src\f_hamlog\__init__.py'
+          if (-not (Test-Path $init)) { throw "找不到版本号文件：$init" }
+
+          $text = [System.IO.File]::ReadAllText($init, [System.Text.Encoding]::UTF8)
+          $m = [regex]::Match($text, '__version__\s*=\s*"([^"]*)"')
+          if (-not $m.Success) { throw "没能从 $init 读到 __version__（格式变了？）" }
+          $base = $m.Groups[1].Value
+
+          # 末尾保留正式版本线（如 2.8.0）：预览包出自哪条版本一目了然
+          $preview = "日常开发Preview $env:VERSION $base"
+          $new = $text.Replace($m.Value, '__version__ = "' + $preview + '"')
+          [System.IO.File]::WriteAllText($init, $new, $utf8NoBom)
+
+          # 读回校验：编码写错（带 BOM）或替换没落地都在这里当场暴露，
+          # 别等打完 50 分钟的包才发现版本号还是老样子
+          $check = [System.IO.File]::ReadAllText($init, [System.Text.Encoding]::UTF8)
+          if (-not $check.Contains($preview)) { throw "版本号改写失败：$init 里找不到「$preview」" }
+          if (-not $check.Contains('UTC')) {
+            throw '版本号里没有 UTC 标记 —— 预览包会被当成正式版参与自更新'
+          }
+          if ($check.Length -gt 0 -and $check[0] -eq [char]0xFEFF) {
+            throw '改写后的 __init__.py 带了 BOM，Python 会读坏第一行'
+          }
+
+          Write-Host "预览版版本号：$preview（原 $base）"
+          [System.IO.File]::AppendAllLines($env:GITHUB_ENV, [string[]]@("PREVIEW_VERSION=$preview"), $utf8NoBom)
+
       - name: Nuitka 独立打包
         if: ${{ env.SHOULD_BUILD == 'true' }}
         run: |
@@ -503,6 +550,19 @@ jobs:
             throw "打包产物里找不到 '$probe' —— f_hamlog 包没被收录，exe 一启动就会 ModuleNotFoundError。请检查构建步骤是否把 <repo>\src 放进了 PYTHONPATH。"
           }
           Write-Host "空包检查通过：exe 内含 $probe"
+
+          # 预览版还要确认「改写后的版本号真的进了 exe」：改写步骤若被跳过/写错文件，
+          # 打出来的包会自称正式版本号 → 用户在预览包上点「检查更新」会被拉回旧正式版。
+          # 只查 ASCII 部分（"Preview UTC-时间戳"）：中文在 Nuitka 的字符串常量里
+          # 可能被转义成字节序列，直接搜「日常开发」会误报失败。
+          if ($env:PREVIEW_VERSION) {
+            $needle = "Preview $env:VERSION"
+            $utf8Text = [System.Text.Encoding]::UTF8.GetString([System.IO.File]::ReadAllBytes($exe))
+            if (-not $utf8Text.Contains($needle)) {
+              throw "exe 里找不到「$needle」—— 预览版版本号没进打包产物（改写步骤没生效？）"
+            }
+            Write-Host "预览版版本号检查通过：$env:PREVIEW_VERSION"
+          }
 
       # ------------------------------------------------------------------
       # 8. Inno Setup 6 生成安装包（注入预览用 AppName / AppId / 时间戳版本号）
@@ -654,6 +714,9 @@ jobs:
             $summary.Add("- 产物来源 run：``$env:PREV_RUN_ID``（沿用其产物，未重新打包）")
           }
           $summary.Add("- 主程序 exe：``$env:APP_EXE_NAME.exe``")
+          if ($env:PREVIEW_VERSION) {
+            $summary.Add("- 预览版版本号：``$env:PREVIEW_VERSION``（带 UTC/Preview 标记 → 不自我更新）")
+          }
           $summary.Add("- 安装包 AppName：``$env:APP_NAME``（AppId 与正式版不同，可共存）")
           $summary.Add('')
           $summary.Add('### 产物（Artifact：``' + $env:ARTIFACT_NAME + '``）')

@@ -135,6 +135,43 @@ TRANSLATIONS = {
     # ------------------------------------------------------------------
     '业余无线电通联日志': 'Amateur Radio QSO Log',
     'F HamLog 版本：': 'F HamLog version: ',
+    # 检查更新（检查 → 下载 → 安装）
+    '检查更新': 'Check for updates',
+    '检查中…': 'Checking…',
+    '检查更新失败：\n{}\n\n请稍后重试。':
+        'Update check failed:\n{}\n\nPlease try again later.',
+    '网络不可用': 'network unavailable',
+    '已是最新版本（{}）。': 'You are up to date ({}).',
+    '当前是预览版，不参与自动更新。\n请从项目主页获取正式版。':
+        'This is a preview build and does not update itself.\n'
+        'Please download the release build from the project page.',
+    '发现新版本': 'New version available',
+    '发现新版本 {}，是否打开下载页面？':
+        'Version {} is available. Open the download page?',
+    '发现新版本 {}，是否下载并安装？\n当前版本：{}':
+        'Version {} is available. Download and install it?\nCurrent version: {}',
+    # 下载前发现本地已经有这个包（上次下完没装）
+    '发现新版本 {}，本地已有下载好的安装包：\n{}（{}）':
+        'Version {} is available. An installer has already been downloaded:\n{} ({})',
+    '是否直接安装？': 'Install it now?',
+    '这个安装包没有校验过，重新下载更稳妥。':
+        'This installer has not been verified; downloading again is safer.',
+    '重新下载': 'Download again',
+    '下载更新': 'Download update',
+    '正在下载更新…': 'Downloading update…',
+    # 进度窗文案：数字/单位（MB/s、00:42）与语言无关，只有句式需要翻
+    # 数字与斜杠之间不留空格：进度窗宽度按「中文 406 px / 英文 430 px」定的 480 px。
+    '{}/{} · {} · 剩余 {}': '{}/{} · {} · ETA {}',
+    '已下载 {} · {}': '{} downloaded · {}',
+    '下载失败': 'Download failed',
+    '安装更新': 'Install update',
+    '更新包已下载完成（{}）：\n{}\n\n是否立即安装？':
+        'Update package downloaded ({}):\n{}\n\nInstall it now?',
+    '安装程序会关闭 F HamLog，安装完成后请重新打开。':
+        'The installer will close F HamLog. Please reopen it after installation.',
+    '立即安装': 'Install now',
+    '稍后': 'Later',
+    '无法运行安装包：\n{}': 'Cannot start the installer:\n{}',
     '我的呼号:': 'My call:',
     '我的QTH:': 'My QTH:',
     '我的设备:': 'My rig:',

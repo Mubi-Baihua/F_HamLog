@@ -664,3 +664,239 @@ sat_dur(1~240) / sat_sats / mu_sats / **theme_mode**。
 - 落盘：`other_item`（键→名称）+ `field_order` + `field_meta`。**「恢复默认」只重置表格，点「保存更改」
   才写盘**；顺序回到历史默认时 `field_order` 整个省掉（文件回到出厂状态）。
 - **`.fhl` 一律不给**：管理窗口拒绝、`custom_fields()` 恒空、录入窗口只 20 行。
+
+## 检查更新 / 自动更新（2026-10-24）
+
+**模块分工**：`check_update.py` = 纯标准库（网络 + 文件 + `subprocess`），**不 import Qt**，可单独跑；
+`set.py` 只负责提问、进度窗与收尾。测试可以完全绕开界面。
+
+| 接口 | 说明 |
+| --- | --- |
+| `is_preview_version(v=None)` | 版本串含 `UTC` / `Preview` / `日常开发` → True（预览版永不自更新） |
+| `check()` | `dict(status, version, url, detail)`；preview 时**不发请求**；error / latest / new |
+| `main()` | 旧接口：`'p' / 'e' / 'n' / (版本, 地址)` |
+| `probe(url)` | `(可分段, 总字节或 None, 文件名)`；`Range: bytes=0-0`，回 200 说明不支持分段 |
+| `download(url, dest=None, progress=None, workers=8, cancel=None)` | 返回本地绝对路径；默认落 `%TEMP%/F_HamLog_update/` |
+| `run_installer(path, silent=True)` | `/SILENT /CLOSEAPPLICATIONS /NORESTART`，返回 `Popen` |
+
+**多线程下载的取舍**
+- 只有 `ranged and total >= 4MB` 才切段；段数 = `min(workers, total // 1MB)`，每段最少 1MB。
+- 每段独立文件 `xxx.exe.partN`，全部完成后顺序拼进 `xxx.exe.merging` 再 `os.replace` 成目标名
+  （不留半成品目标文件）；`_clean_parts()` 在开始与结束时清残留。
+- 段跑 3 次仍失败 → 抛异常 → `download()` **整体退回单线程重下**（比报错给用户更有用）。
+- `_Meter` 限流：100ms 或整数百分比变化才回调（8 线程 × 64KB 会一秒上千次）。
+- 取消：`threading.Event`；每个读块前检查，抛出 `Cancelled`（界面里 `failed.emit('')` 表示静默取消）。
+
+**界面（`set.py`）**
+- 按钮在「F HamLog 版本：」同一行右侧（`QHBoxLayout`，按钮 `setFixedHeight(24)`）；中文下内容最小高 421，
+  窗口 770×475，不挤。
+- `_CheckThread`（`Signal(object)`）/ `_DownloadThread`（`progressed/done/failed`）都继承 `BgThread`、
+  存在 `_update_check_thread` / `_update_download_thread` 两个模块级变量里——**别改成局部变量**（QThread 被
+  回收而线程还在跑 → Qt abort）。
+- `QProgressDialog`：`setAutoClose(False)` + `setAutoReset(False)`，`canceled → thread.stop()`；
+  总长未知时 `setMaximum(0)` 走不定长。
+- 下载完 → 「立即安装 / 稍后」→ `run_installer()` 成功后 `QApplication.instance().quit()`（先退程序，
+  安装器才能覆盖主程序）。
+
+**预览版版本号（`preview.yml`）**
+- 步骤「改写预览版版本号」位置：`缓存 Nuitka 构建目录` 之后、`Nuitka 独立打包` 之前。
+- 结果：`__version__ = "日常开发Preview UTC-20261024-2111 2.8.0"`，写入 `GITHUB_ENV` 的 `PREVIEW_VERSION`。
+- 读回校验三件事：串在 / 有 `UTC` / 无 BOM。
+- `校验打包产物` 只扫 ASCII 片段 `Preview UTC-<时间戳>`：中文在 Nuitka 字符串常量里可能被转义，搜中文会误报。
+
+**测试**
+```
+.venv/Scripts/python.exe tests/__check_update_retry_smoke.py        # 重试 / 新旧 / 预览版不联网
+.venv/Scripts/python.exe tests/__update_download_smoke.py           # 本地 Range 服务，9 项
+QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/__update_flow_smoke.py   # 界面链路 9 项
+QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/__set_update_btn_smoke.py # 按钮布局 6 项
+```
+
+## 下载进度窗（速度显示 / 宽度，2026-10-24 续）
+
+**速度估算别用逐次差分**：`_Meter` 把回调限流到 ~10 Hz，逐次算抖动极大。
+`Speedometer(window=1.0, clock=time.monotonic)` 取窗口内首尾样本平均；
+`done` 变小（分段重下 `meter.add(-got)`）时**清空样本重建**，否则出负速度。
+
+```python
+sp = check_update.Speedometer()
+speed = check_update.format_speed(sp.update(done)) if done else '—'
+dlg.setLabelText(i18n.tr('正在下载更新… {} / {}（{}）').format(
+    check_update.format_size(done), check_update.format_size(total), speed))
+```
+总长未知（`total == 0`，进度条走不定长）用另一句：`正在下载更新… 已下载 {}（{}）`。
+
+**宽度**：QProgressDialog 每次 `setLabelText` 都会 `adjustSize()`，不设下限会随数字忽宽忽窄。
+`dlg.setMinimumWidth(600)`。实测最长文案（offline 测量，`QProgressDialog.sizeHint()`）：
+
+| 文案 | 需要宽度 |
+| --- | --- |
+| 正在下载更新… 8.0 MB / 80.0 MB（11.3 MB/s） | 442 |
+| 正在下载更新… 已下载 8.0 MB（11.3 MB/s） | 370 |
+| Downloading… 8.0 MB / 80.0 MB (11.3 MB/s) | 514 |
+| Downloading update… 8.0 MB downloaded (11.3 MB/s) | 610（**超 600，故英文改成 `Downloading…`**） |
+
+**测试**：`tests/__update_speed_smoke.py`（14 项，注入可控 clock）；
+`__update_flow_smoke.py` 的本地服务每 32 KB `sleep(0.02)` 故意放慢（本地回环 8 MB 几十毫秒就下完，
+否则采不到速度），并从 `app.topLevelWidgets()` 采 `QProgressDialog.labelText()/width()` 断言。
+
+## 检查更新 · 关闭 / 宽度 / 剩余时间 / 加速（2026-10-24 三改）
+
+**点叉关不掉（已修）**
+`QProgressDialog::setValue()` → `ensureDialog()` → `show()`。关闭后只要还有一帧进度进来就弹回：
+```python
+state = {'closed': False}
+def _shut():
+    state['closed'] = True
+    dlg.reset()     # reset 内部也 setValue() → 可能 show
+    dlg.hide()      # 所以 hide 必须在 reset 之后
+def _progress(done, total):
+    if state['closed']: return
+```
+`dlg.canceled`（点取消 / 点叉 / Esc 都会发）→ `_cancel()` = `_shut()` + `thread.stop()`。
+
+**文案与宽度**
+`{done} / {total} · {speed} · 剩余 {eta}`，标签不再带「正在下载更新…」前缀（标题栏已有）。
+`format_eta()` → `00:42` / `01:02:03`；`dlg.setMinimumWidth(540)`。
+注意 QProgressDialog **只增不减**：宽度一旦被长文案顶到 658，换回短文案仍是 658。
+
+**加速（`check_update.py`）**
+
+| 手段 | 常量 / 函数 | 说明 |
+| --- | --- | --- |
+| 并发 | `WORKERS=16` `MAX_WORKERS=32` `PART_MIN_BYTES=512KB` | CDN 限单连接，多开最有效 |
+| 断线重连 | `PART_TIMEOUT=15` | 分段/整包连接空闲 15 s 抛错 → 按 `PART_TRIES` 重连 |
+| 镜像择优 | `choose_source()` | 直连 + `MIRROR_PREFIXES` 并行 2 s 测速窗，快 `MIRROR_GAIN=1.3` 倍才换 |
+| Range 复核 | `probe(best)` | 代理若返回 200 整包 → 只能单线程 → 不换 |
+| 内容校验 | `_spot_check()` / `sha256=` | 头/中/尾各 64KB 与官方比对；版本文件第三段可给 sha256 |
+
+`download(url, dest, progress, workers, cancel, sha256=None)`；`parse_text` 返回 `(version, url, sha256)`。
+`_download_once()` 承担「探测 + 分段/单线程 + 长度校验」，`download()` 只做选路与校验。
+
+## 检查更新 · 剩余时间估算 / 进度窗宽度（2026-10-24 四改）
+
+**两个跳变来源**
+1. 算法：旧代码 `(total-done)/speed`，`Speedometer` 是 1 秒滑动窗，速度本身抖 ±1 倍 → 剩余时间跳几十秒。
+2. 数据源：`_Meter.add()` 原来在锁外 `self.callback(done, total)`。多个分段线程同时 add 时，
+   **后算出来的更小 done 可能先送到界面**（信号按发射顺序排队），界面看到 `8.25 MB → 8.19 MB` 倒退。
+   实测（8 MB / 16 分段，本地限速服务）在最后半秒连续倒退两次。
+   → 回调移进 `with self._lock:` 内。PySide6 里该槽在 MainThread 执行（排队连接），锁内 emit 不会死锁。
+
+**`check_update.EtaEstimator`**
+
+| 项 | 值 / 做法 |
+| --- | --- |
+| 用于 ETA 的速度 | **累计平均** `(done - done0)/dt`，不用短窗 |
+| 下降 | 直接跟随（自然倒计时） |
+| 上升 | 先超死区 `max(0.3, min(2.0, eta*20%))`，再每帧最多挪 `max(0.5, eta*5%)` |
+| `done` 回退 | 当帧不重算、**不重设基准**，显示值保持不变（重设会让预热反复重来，ETA 长期不显示） |
+| 预热 | `warmup=1.0 s` 或 `total<=0` 返回 `None` |
+
+死区必须随剩余时间缩放：固定 2 秒时，剩 1 秒的场景永远涨不上去，末尾会一直显示 `00:00`。
+
+**宽度**：`{}/{} MB · 速度 · 剩余 xx:xx`（数字与斜杠不留空格）。实测 480 宽窗口里标签可用 458，
+中文需 408、英文（`ETA 00:52`）需 420，够用。QProgressDialog 只增不减，`setMinimumWidth(480)` 即实际宽度。
+
+**测试**
+```
+.venv/Scripts/python.exe tests/__update_eta_smoke.py                     # 26 项，可控时钟
+QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/__update_flow_smoke.py   # 20 项
+```
+`__update_flow_smoke.py` 的本地服务改成每 32 KB 停 120 ms：原来 20 ms 时 8 MB 一两秒下完，
+ETA 还在 1 秒预热期内，一条 `剩余` 都采不到。
+
+## 检查更新 · 本地已下载安装包（2026-10-24 五改）
+
+**为什么要有这层**：用户点了「下载并安装」但选「稍后」/ 装到一半取消 / 顺手关窗 → 下次再点检查更新，
+不该白下几十 MB。所以下载前先翻本地。
+
+| 接口 | 说明 |
+| --- | --- |
+| `update_dir()` | `%LOCALAPPDATA%/F_HamLog/update`；`F_HAMLOG_UPDATE_DIR` 覆盖；无 LOCALAPPDATA 退回 TEMP |
+| `legacy_dirs()` | 旧位置 `%TEMP%/F_HamLog_update`（升级后仍认，免得白下一遍） |
+| `read_meta(p)` / `write_meta(p, url, version, sha256)` | 同名 `.json`：`url / version / size / sha256 / time` |
+| `find_installer(url, dest, sha256, total, version, verify_hash, cancel)` | 返回 `dict(path, size, meta, verified)` 或 None；`version` 不参与判断（兼容保留） |
+| `installer_name(path_or_url)` | exe 名称指纹：小写 + 去掉空格/点/下划线/连字符（先 unquote） |
+| `download(..., version='', force=False)` | 开头查缓存；`force` 绕过（「重新下载」） |
+
+**判据从硬到软**
+1. 给了 `sha256`：元数据里记的摘要对得上 → 认；否则只有 `verify_hash=True` 才真算一遍（70 MB ≈ 0.3 s，
+   必须在工作线程调用）。
+2. 元数据：`url` 必须同一个地址、`size` 与实际一致 → `verified='meta'`。
+3. 无元数据（老缓存 / 写元数据失败）：exe 名称对得上且 ≥ 1 MB → `verified='name'`，界面提示「未校验」。
+4. 任何情况下 `size < MIN_INSTALLER_BYTES(1MB)` 都不认 —— 挡半截文件与占位文件。
+
+**只比 exe 名称，不比版本号**：版本号在文件名里的位置写法不统一（`F HamLog 2.9 setup.exe` vs
+`F.HamLog.2.9.0.setup.exe`），拿它做相等比较会把已下好的包判成「不是这个包」→ 每次白重下几十 MB
+（`2.9` 补齐成 `2.9.0` 只在一个方向成立，双向比必然不等）。`dest` 是调用方指定的落点，不参与名字比对。
+
+**界面**（`set.py`）
+- `_on_update_checked` 在问「是否下载并安装」之前先查；命中 → `_ask_cached()`：
+  ```
+  发现新版本 2.9.0，本地已有下载好的安装包：
+  C:/Users/.../F HamLog 2.9 setup.exe
+  （70.0 MB）
+
+  是否直接安装？              ← verified 是 name 时改成「这个安装包没有校验过，重新下载更稳妥。」
+        [立即安装] [重新下载]
+  ```
+  只有两个按钮：`QMessageBox` 会按 role 重排，加「取消」会夹在中间（实测 Accept/Reject/Action 顺序），
+  关窗即取消。`verified in ('sha256','meta')` → 默认按钮「立即安装」，否则「重新下载」。
+- 选「立即安装」→ `_install_update(confirm=False)`，别再问第二遍；选「重新下载」→ `force=True`。
+
+**坑**
+- `_DownloadThread` 的 `force` 必须一路传到 `download()`；只删文件不够稳（可能被占用删不掉）。
+- 测试里的 `download()` 若落到默认缓存目录，第二次运行会直接命中上一轮的包 → 全部测试必须
+  `os.environ[cu.CACHE_DIR_ENV] = <tmp>` + `cu.legacy_dirs = lambda: []`。
+- `_Meter.add()` 里的回调包了 try/except：回调抛异常不该让整包下载失败（缓存命中路径同样单独兜）。
+
+**测试**
+```
+.venv/Scripts/python.exe tests/__update_cache_smoke.py                            # 29 项
+QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/__update_flow_smoke.py  # 30 项
+```
+
+## 更新界面 · QMessageBox 叉号 / 进度窗最小化（2026-10-25）
+
+**QMessageBox 的 X 按钮在「没有 RejectRole」时完全失效**（实测，PySide6 6.x + Windows 11）：
+
+| 按钮组合 | 点标题栏叉号 |
+| --- | --- |
+| 只有 AcceptRole | 能关（`exec()` 返回） |
+| Accept + Action | **关不掉**，`close()` 无任何效果 |
+| Accept + Action + Reject | 能关 |
+
+所以「只放两个按钮、让用户点叉取消」是不可行的。`_ask_cached` 改成 QDialog 自己排按钮：
+
+```python
+dlg = QDialog(window); dlg.setModal(True)
+dlg.setMinimumWidth(460); dlg.setMaximumWidth(600)   # 长路径换行但不撑爆
+row = QHBoxLayout(); row.addStretch(1)               # 按钮右对齐
+for b in (btn_now, btn_again, btn_later): row.addWidget(b)   # 立即安装 / 重新下载 / 稍后
+btn_later.clicked.connect(dlg.reject)                # 与叉号、Esc 等价
+```
+
+顺带确认 Windows 下 QMessageBox 的 role 排序是 **Accept → Reject → Yes/No/Destructive/Action**，
+所以「立即安装/稍后/重新下载」这种顺序改 role 也救不回来（Yes/No/Destructive 都试过）。
+
+**进度窗的窗口按钮**
+
+| 设置 | 标题栏 | 能不能放大 |
+| --- | --- | --- |
+| 默认 | 只有 X | 拖边 / Aero Snap 可放大（`WS_THICKFRAME` 在） |
+| `+ WindowMinimizeButtonHint` | [—][灰□][X]（最大化画成禁用方块） | `ShowWindow(SW_MAXIMIZE)` 仍能放大 |
+| `+ WindowMinimizeButtonHint + WindowMaximizeButtonHint` | [—][□][X] 全正常 | 能放大（已弃用） |
+| `+ MSWindowsFixedSizeDialogHint`（`_no_maximize()`，定稿） | [—][灰□][X] | **不能**：`MAX=False THICK=False`，`SW_MAXIMIZE` 无效 |
+
+`MSWindowsFixedSizeDialogHint` 去不掉那个灰方块（灰的禁用按钮是 Windows 对「有最小化、无最大化」的
+固定画法），但它是**唯一能顺手去掉 `WS_THICKFRAME`** 的开关，配合 `changeEvent` 里的
+`WindowStateChange && isMaximized() → showNormal()` 才算真正「不可以最大化」。
+
+**模态 → 非模态**：进度窗改 `Qt.NonModal` + `parent=None`。
+模态下最小化自己之后父窗口仍被阻塞（点哪都没反应，比没有最小化按钮更像卡死）。
+parent=None 的副作用：下载期间关掉设置窗口后，`_ok`/`_fail` 里的 `window` 已是野指针 →
+`_alive(window)` 碰一下 C++ 对象、捕获 `RuntimeError` 返回 None（无父的 QMessageBox 照样能弹）。
+再配一个模块级 `_update_dialog`：重复触发时 `showNormal/raise_/activateWindow`，不开第二个窗。
+
+**抓标题栏截图**：`widget.grab()` 只有客户区。要 `screen.grabWindow(0)` 抓整屏再按
+`frameGeometry()`（记得乘 DPR）裁剪。
