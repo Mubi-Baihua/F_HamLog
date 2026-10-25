@@ -2103,8 +2103,49 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
             layout.addWidget(table)
             table.setUpdatesEnabled(True)   # 解冻，一次性重绘
             if scroll_to_bottom:
-                # 延到事件循环下一轮，等布局算好视口高度再跳，确保真正落到最后一行
-                QTimer.singleShot(0, table.scrollToBottom)
+                # 「打开项目 → 停在最后一条」：滚动范围要等布局/显示时才算出来
+                # （QAbstractItemView.updateGeometries → rangeChanged）。原来只写
+                # QTimer.singleShot(0, scrollToBottom)，等于把定位推迟到**首帧绘制之后**，
+                # 打开项目时能看见「先停在第 1 行、下一帧闪到底部」的跳动。
+                # 现在改为「范围一变就贴住底部」：首帧绘制时位置已经是最终值，全程不跳。
+                # 范围会分几次定稿（布局、滚动条是否占位都会影响最大值），所以不能在
+                # 第一次成功贴底后就摘监听 —— 那样会停在 max-2 这种差一点点的位置上。
+                _bar = table.verticalScrollBar()
+
+                def _pin_to_bottom(*_a):
+                    _maximum = _bar.maximum()
+                    if _maximum > 0 and _bar.value() != _maximum:
+                        _bar.setValue(_maximum)
+
+                def _release(pin=_pin_to_bottom, tries=None):
+                    # 等一个事件循环，让布局 / 滚动条范围定稿：位置已贴住底部就摘掉监听，
+                    # 免得以后用户把窗口拖小、范围变大时又自动跳到底部；还没贴住就再补一轮。
+                    # 表格可能在这之前又被重建（旧表 deleteLater 已销毁）→ 碰 C++ 对象会抛
+                    # RuntimeError，这里整个兜住，别让定时器里冒异常。
+                    _tries = 0 if tries is None else tries
+                    try:
+                        _maximum = _bar.maximum()
+                        _now = _bar.value()
+                    except RuntimeError:
+                        return
+                    if _maximum <= 0 or _now == _maximum:
+                        try:
+                            _bar.rangeChanged.disconnect(pin)
+                        except (RuntimeError, TypeError):
+                            pass
+                        return
+                    _bar.setValue(_maximum)
+                    if _tries < 4:      # 最多补 4 轮，绝不无限重排
+                        QTimer.singleShot(0, lambda: _release(pin, _tries + 1))
+                    else:
+                        try:
+                            _bar.rangeChanged.disconnect(pin)
+                        except (RuntimeError, TypeError):
+                            pass
+
+                _pin_to_bottom()                    # 已显示窗口里的重建（新建日志等）：多半立刻到位
+                _bar.rangeChanged.connect(_pin_to_bottom)
+                QTimer.singleShot(0, _release)      # 打开项目：show() 里算好范围时已由 rangeChanged 贴住
             elif prev_scroll:
                 # 恢复重建前的滚动位置。延到事件循环下一轮再设，等 Qt 按新布局算好
                 # 视口尺寸与滚动范围，避免设完后被布局过程重置回顶部。
@@ -2659,15 +2700,26 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         if not is_fhla_path(save_path):
             # 多段文案逐段 tr 后再拼：整条拼完再翻会漏翻（i18n 词表按整串匹配）
             QMessageBox.information(
-                window, '项目属性',
+                window, i18n.tr('项目属性'),
                 i18n.tr('不支持的格式：当前项目不是 .fhla 文件。') + '\n\n'
                 + i18n.tr('.fhl 是纯记录格式，不含编辑者、编辑时间、版本、加密状态等属性。') + '\n'
                 + i18n.tr('请「另存为」带属性的 .fhla 项目文件后再查看。'))
             return
         meta = normalize_meta(_fhla['meta'] or empty_meta())
         meta['encrypted'] = bool(key)
-        lines = [f'{k}：{v}' for k, v in describe_meta(meta, path=save_path)]
-        QMessageBox.information(window, '项目属性', '\n'.join(lines))
+        # QMessageBox 的文字**不经过控件树**（i18n 只翻控件文字 / 表头），所以这里逐行自己翻：
+        # 属性名查词表（文件 / 上一次编辑的人 / 加密状态 / 自定义记录项目 / 格式版本…），
+        # 值里的固定文案（已加密 / 未加密 / 无）也查；用户数据（呼号、时间、字段名）原样。
+        # **按行翻，别把整段拼完再翻** —— 词表是整串匹配的。冒号跟着语言走：
+        # 中文用全角「：」（历史上就是这个样子，一个字节都不改），英文用「: 」。
+        sep = ': ' if i18n.is_english() else '：'
+        # 值只翻「界面固定文案」这几个，其余（呼号 / 时间 / 版本 / 用户字段名 / 文件名）
+        # 一律原样 —— 别拿 tr() 无脑套用户数据，万一和词表撞上就成了「翻译用户数据」。
+        fixed_values = ('已加密', '未加密', '无')
+        lines = [f'{i18n.tr(name)}{sep}'
+                 f'{i18n.tr(value) if value in fixed_values else value}'
+                 for name, value in describe_meta(meta, path=save_path)]
+        QMessageBox.information(window, i18n.tr('项目属性'), '\n'.join(lines))
 
     props_action = QAction('项目属性', window)
     props_action.setShortcut(QKeySequence('Alt+I'))
@@ -2762,6 +2814,29 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         for _key, _label, _req, _main, _is_custom in field_entries():
             _add_row(_key, _label, _req, _main, _is_custom)
 
+        def retranslate_names():
+            """把**标准字段**的名字换成当前语言；自定义字段名是用户自己填的，绝不翻译。
+
+            字段名写在**单元格**里（不是表头），`i18n.translate_tree` 只翻表头不翻单元格，
+            所以英文界面下这一列原来是「Field name / 日期 / 时间 …」的中英混排。
+            不能直接用 `i18n.bind_cell_texts`：它按**固定行号**记住中文原文，而这里
+            上移 / 下移 / 删除 / 恢复默认都会让字段换行，语言一换就会把自定义字段的名字
+            覆盖成别的字段的译文。所以每次重译都按行上的 KEY_ROLE 现查一遍。
+            """
+            for _r in range(tbl.rowCount()):
+                _it = tbl.item(_r, 0)
+                if _it is None:
+                    continue
+                _key = _it.data(KEY_ROLE) or ''
+                if _key not in FIELD_LABELS:
+                    continue
+                _new = i18n.tr(FIELD_LABELS[_key])
+                if _it.text() != _new:
+                    _it.setText(_new)
+
+        retranslate_names()
+        i18n.watch_language(dlg, retranslate_names)
+
         def warn(msg):
             QMessageBox.warning(dlg, '格式错误', msg)
 
@@ -2811,6 +2886,7 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
             tbl.setRowCount(0)
             for _k, _lb, _req, _main, _is_custom in fields_from_meta(None):
                 _add_row(_k, _lb, _req, _main, _is_custom)
+            retranslate_names()      # 重建出来的都是中文标签 → 英文界面下要立刻换掉
             tbl.setCurrentCell(0, 0)
             toast_tip.show_toast(i18n.tr('已恢复默认，点「保存更改」后生效。'), dlg)
 

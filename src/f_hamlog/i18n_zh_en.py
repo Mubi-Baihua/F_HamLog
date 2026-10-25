@@ -867,6 +867,7 @@ TRANSLATIONS = {
     '已加密': 'Encrypted',
     '未加密': 'Not encrypted',
     '自定义记录项目': 'Custom log fields',
+    '格式版本': 'Format version',
     '无': 'None',
     '提示：这些属性只在保存为 .fhla 项目文件时写入磁盘（当前为 .fhl）。':
         'Note: these properties are written to disk only when saving as a .fhla project '
