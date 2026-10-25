@@ -37,6 +37,7 @@
 1. 2.3.0 以上版本支持覆盖安装，自动保留原有数据。但仍建议在安装前手动备份默认通联日志。
 2. 请定期手动备份默认通联日志。
 3. 强烈不建议手动修改 F HamLog 项目文件，在使用插件前请确认插件来自可信的开发者。
+4. 2.8.0 及以后版本的 **Releases 不再附带「兼容版」压缩包**（免安装、解压即用），请下载该版本的安装包安装。此前版本仍在其 Releases 页面保留兼容版压缩包。
 
 ---
 
@@ -319,6 +320,7 @@ Remote logs in version 2.4.0 and above do not require a separate server — you 
 1. Version 2.3.0 and above supports overwrite installation, automatically preserving existing data. However, it is still recommended to manually back up the default log before installing.
 2. Please manually back up the default log regularly.
 3. Manually modifying F HamLog project files is strongly discouraged. Before using a plugin, make sure it comes from a trusted developer.
+4. Starting with 2.8.0, the **Releases page no longer includes the "compatible" (portable, no-install) zip**; please download the installer for that version instead. Earlier versions keep their compatible zips on their own Releases pages.
 
 ---
 

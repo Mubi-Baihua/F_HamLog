@@ -1,14 +1,13 @@
-name: 发布 F HamLog（Nuitka → Inno Setup → 兼容版压缩包 → Releases）
+name: 发布 F HamLog（Nuitka → Inno Setup → Releases）
 
 # 触发方式：仅在 Actions 页面手动点击 "Run workflow"
 # 只需填写 version（同时作为 tag，例如 2.4.0），其余保留默认即可完成全流程：
 #   1. Nuitka 打包（保留 pip / 虚拟环境 / Nuitka 构建目录缓存，加速下次打包）
 #   2. Inno Setup 6 生成安装包（版本号自动注入，文件名形如 "F HamLog 2.4 setup.exe"）
-#   3. 生成兼容版压缩包（免安装，解压即用）
-#   4. 把安装包与兼容版压缩包回写到运行分支的约定目录并提交
-#      （安装包 → F HamLog 2 Inno Setup/ ；兼容版 → 兼容版/）
+#   3. 把安装包回写到运行分支的约定目录并提交（安装包 → F HamLog 2 Inno Setup/）
 #      ⚠️ 可用输入 commit_artifacts=false 跳过这一步（只发 Release，不动 git）
-#   5. 发布到 Releases（tag = 填入的版本号；附件 = 安装包 + 兼容版压缩包 + 远程日志服务端）
+#   4. 发布到 Releases（tag = 填入的版本号；附件 = 安装包 + 远程日志服务端）
+#      注：自 2.8.0 起不再生成「兼容版」zip（解压即用包），仓库体积与构建时长都省一半。
 #      默认发布为**草稿**，确认无误后在 Releases 页面手动点击发布
 #      说明内容留空，由作者在 Releases 页面手动填写
 #
@@ -40,7 +39,7 @@ on:
         required: false
         default: 'true'
       commit_artifacts:
-        description: '是否把安装包/兼容版压缩包提交回运行分支（false = 只发 Release，不动 git）'
+        description: '是否把安装包提交回运行分支（false = 只发 Release，不动 git）'
         required: false
         default: 'true'
       upload_debug_artifact:
@@ -105,13 +104,10 @@ jobs:
             DISPLAY       = $display
             APP_EXE_NAME  = $appExe
             SETUP_BASE    = "F HamLog $display setup"
-            ZIP_NAME      = "F HamLog ${display}兼容版.zip"
             ASSET_SETUP   = "F.HamLog.$display.setup.exe"
-            ASSET_ZIP     = "F.HamLog.$display.zip"
             RELEASE_TITLE = "F HamLog $display($version)"
             # 回写运行分支用的相对路径（与历次手工提交的位置保持一致）
             COMMIT_SETUP  = "F HamLog 2 Inno Setup/F HamLog $display setup.exe"
-            COMMIT_ZIP    = "兼容版/F HamLog ${display}兼容版.zip"
           }
           # 显式按“无 BOM 的 UTF-8”写 GITHUB_ENV，避免不同 shell 下 Out-File 带 BOM 导致环境变量被污染
           $utf8NoBom = New-Object System.Text.UTF8Encoding $false
@@ -121,7 +117,7 @@ jobs:
           }
 
           Write-Host "主程序 exe：$appExe.exe"
-          Write-Host "版本号 $version → 安装包 $($map.SETUP_BASE).exe / 兼容版 $($map.ZIP_NAME)"
+          Write-Host "版本号 $version → 安装包 $($map.SETUP_BASE).exe"
 
       # ------------------------------------------------------------------
       # 0b. 预检：Release 权限（workflow 文件是否与默认分支一致）
@@ -320,8 +316,8 @@ jobs:
           $ErrorActionPreference = 'Stop'
           # ⚠️ --output-folder-name=main 必须保留：Nuitka 默认拿「主模块文件名」给产出目录取名，
           #    --main=src/f_hamlog/__main__.py 会让产物落到 __main__.dist / __main__.build；
-          #    而后续「校验打包产物」、安装包（.iss 里 SourceDistDir = RepoRoot\main.dist）、
-          #    兼容版 zip、以及上面的构建缓存目录，全部按 main.dist / main.build 取路径。
+          #    而后续「校验打包产物」、安装包（.iss 里 SourceDistDir = RepoRoot\main.dist）
+          #    以及上面的构建缓存目录，全部按 main.dist / main.build 取路径。
           #    显式钉死基名后，主模块将来再改名也不会牵动这些下游路径。
           # ⚠️ 别再往这里加 --include-module：remote_crypto 由 project.py 的
           #    「from f_hamlog import remote_crypto」自动跟随收录（已实测在 Included 列表里）。
@@ -440,32 +436,7 @@ jobs:
           Write-Host "安装包：$setup（$size MB，版本 $actual）"
 
       # ------------------------------------------------------------------
-      # 4. 兼容版压缩包（免安装）
-      # ------------------------------------------------------------------
-      - name: 生成兼容版压缩包
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $src = Join-Path $env:GITHUB_WORKSPACE 'main.dist'
-          $dst = Join-Path $env:GITHUB_WORKSPACE "release\$env:ZIP_NAME"
-          if (Test-Path $dst) { Remove-Item $dst -Force }
-
-          $sevenZip = 'C:\Program Files\7-Zip\7z.exe'
-          if (Test-Path $sevenZip) {
-            Push-Location $src
-            try {
-              & $sevenZip a -tzip -mx=5 $dst *
-              if ($LASTEXITCODE -ne 0) { throw "7-Zip 压缩失败（退出码 $LASTEXITCODE）" }
-            } finally { Pop-Location }
-          } else {
-            Compress-Archive -Path (Join-Path $src '*') -DestinationPath $dst -CompressionLevel Optimal
-          }
-
-          if (-not (Test-Path $dst)) { throw "未生成兼容版压缩包：$dst" }
-          $size = [math]::Round((Get-Item $dst).Length / 1MB, 1)
-          Write-Host "兼容版压缩包：$dst（$size MB）"
-
-      # ------------------------------------------------------------------
-      # 4b. 把两个产物回写到运行分支（与历次手工提交的位置一致）
+      # 4. 把安装包回写到运行分支（与历次手工提交的位置一致）
       # ------------------------------------------------------------------
       # 由 workflow_dispatch 的 commit_artifacts 控制：填 false 就只发 Release，
       # 不往分支里塞 130MB+ 的二进制（仓库会越滚越大，也省一次可能与开发冲突的推送）。
@@ -483,25 +454,20 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "切换到分支 $env:GITHUB_REF_NAME 失败" }
 
           $setupSrc = Join-Path $env:GITHUB_WORKSPACE "release\$env:SETUP_BASE.exe"
-          $zipSrc   = Join-Path $env:GITHUB_WORKSPACE "release\$env:ZIP_NAME"
           $setupDst = Join-Path $env:GITHUB_WORKSPACE $env:COMMIT_SETUP
-          $zipDst   = Join-Path $env:GITHUB_WORKSPACE $env:COMMIT_ZIP
 
           New-Item -ItemType Directory -Path (Split-Path $setupDst -Parent) -Force | Out-Null
-          New-Item -ItemType Directory -Path (Split-Path $zipDst -Parent) -Force | Out-Null
           Copy-Item $setupSrc $setupDst -Force
-          Copy-Item $zipSrc   $zipDst   -Force
 
-          Write-Host "安装包   → $env:COMMIT_SETUP"
-          Write-Host "兼容版   → $env:COMMIT_ZIP"
+          Write-Host "安装包 → $env:COMMIT_SETUP"
 
-          # 只暂存这两个产物，避免把构建中间目录（main.dist / release / .venv）带进提交
-          git add -- $env:COMMIT_SETUP $env:COMMIT_ZIP
+          # 只暂存这个产物，避免把构建中间目录（main.dist / release / .venv）带进提交
+          git add -- $env:COMMIT_SETUP
           if ($LASTEXITCODE -ne 0) { throw '暂存产物失败' }
 
           git diff --cached --quiet
           if ($LASTEXITCODE -eq 0) {
-            Write-Host '两个产物内容与分支上的现有文件一致，无需提交'
+            Write-Host '产物内容与分支上的现有文件一致，无需提交'
           } else {
             git -c user.name='github-actions[bot]' `
                 -c user.email='41898282+github-actions[bot]@users.noreply.github.com' `
@@ -524,9 +490,8 @@ jobs:
           if (Test-Path $assets) { Remove-Item $assets -Recurse -Force }
           New-Item -ItemType Directory -Path $assets -Force | Out-Null
 
-          # 安装包与兼容版压缩包：历史 Release 用点号命名（F.HamLog.2.4.setup.exe），保持一致
+          # 安装包：历史 Release 用点号命名（F.HamLog.2.4.setup.exe），保持一致
           Copy-Item (Join-Path $env:GITHUB_WORKSPACE "release\$env:SETUP_BASE.exe") (Join-Path $assets $env:ASSET_SETUP) -Force
-          Copy-Item (Join-Path $env:GITHUB_WORKSPACE "release\$env:ZIP_NAME") (Join-Path $assets $env:ASSET_ZIP) -Force
 
           # 远程日志服务端：直接取仓库中已打包好的文件，不重新打包
           $remote = ([string]$Env:IN_REMOTE_EXE).Trim() -replace '/', '\'
@@ -600,7 +565,6 @@ jobs:
             $summary.Add('### 已回写到运行分支')
             $summary.Add('')
             $summary.Add("- ``$env:COMMIT_SETUP``")
-            $summary.Add("- ``$env:COMMIT_ZIP``")
           } else {
             $summary.Add('### 未回写到运行分支')
             $summary.Add('')
