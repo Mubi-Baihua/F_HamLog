@@ -437,15 +437,17 @@ jobs:
       # ------------------------------------------------------------------
       # 7a. 改写预览版版本号（src/f_hamlog/__init__.py）
       # ------------------------------------------------------------------
-      # 预览包的版本串必须是「日常开发Preview UTC-yyyyMMdd-HHmm 2.x.y」，原因有两个：
+      # 预览包的版本串是「Preview UTC-yyyyMMdd-HHmm 2.x.y」，原因有两个：
       #   ① 不能自称正式版本号 —— 否则「检查更新」会把预览包当成正式版，把用户
       #      从预览版拽回旧正式版；
-      #   ② 串里带 UTC / Preview / 日常开发 标记后，check_update.is_preview_version()
+      #   ② 串里带 UTC / Preview 标记后，check_update.is_preview_version()
       #      直接判定为预览版 → **预览版永不自我更新**（需求：预览版不自己更新）。
+      # 版本串只用 ASCII（不写中文）：它要出现在标题栏、设置页、安装包摘要里，
+      # 中文在 Nuitka 字符串常量与 CI 控制台里都可能被转义成字节而搜不到。
       # 两个顺序都不能动：
       #   · 必须在「准备虚拟环境与依赖」（pip install -e .）**之后**：
       #     pyproject 的 version 是 dynamic+attr，setuptools 会校验 PEP 440，
-      #     而「日常开发Preview UTC-… 2.x.y」不是合法版本号，装依赖时会直接失败；
+      #     而「Preview UTC-… 2.x.y」不是合法版本号，装依赖时会直接失败；
       #   · 必须在 Nuitka 打包**之前**：否则打进 exe 的还是原版本号。
       # 顺带一提：上面的构建缓存键用 hashFiles('src/**/*.py')，在本步骤之前就算好了，
       # 所以这里改 __init__.py 不会让缓存失效（只会重编这一个模块）。
@@ -463,7 +465,7 @@ jobs:
           $base = $m.Groups[1].Value
 
           # 末尾保留正式版本线（如 2.8.0）：预览包出自哪条版本一目了然
-          $preview = "日常开发Preview $env:VERSION $base"
+          $preview = "Preview $env:VERSION $base"
           $new = $text.Replace($m.Value, '__version__ = "' + $preview + '"')
           [System.IO.File]::WriteAllText($init, $new, $utf8NoBom)
 
@@ -553,8 +555,7 @@ jobs:
 
           # 预览版还要确认「改写后的版本号真的进了 exe」：改写步骤若被跳过/写错文件，
           # 打出来的包会自称正式版本号 → 用户在预览包上点「检查更新」会被拉回旧正式版。
-          # 只查 ASCII 部分（"Preview UTC-时间戳"）：中文在 Nuitka 的字符串常量里
-          # 可能被转义成字节序列，直接搜「日常开发」会误报失败。
+          # 只查 ASCII 部分（"Preview UTC-时间戳"）：版本串本身已全 ASCII，不必碰中文。
           if ($env:PREVIEW_VERSION) {
             $needle = "Preview $env:VERSION"
             $utf8Text = [System.Text.Encoding]::UTF8.GetString([System.IO.File]::ReadAllBytes($exe))

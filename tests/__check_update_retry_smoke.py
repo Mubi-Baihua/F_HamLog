@@ -107,7 +107,7 @@ print('F 远端更旧: status=latest')
 # G. 预览版：一个请求都不发，且永不自我更新
 calls.clear()
 saved = cu.__version__
-cu.__version__ = '日常开发Preview UTC-20261024-2111 2.8.0'
+cu.__version__ = 'Preview UTC-20261024-2111 2.8.0'
 patch(lambda req, timeout=None: (_ for _ in ()).throw(AssertionError('预览版不该联网')))
 print('G 预览版: main=%r check=%r 请求=%d' % (cu.main(), cu.check()['status'], len(calls)))
 assert cu.main() == 'p' and cu.check()['status'] == 'preview' and not calls

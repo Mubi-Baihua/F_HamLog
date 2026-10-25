@@ -672,7 +672,7 @@ sat_dur(1~240) / sat_sats / mu_sats / **theme_mode**。
 
 | 接口 | 说明 |
 | --- | --- |
-| `is_preview_version(v=None)` | 版本串含 `UTC` / `Preview` / `日常开发` → True（预览版永不自更新） |
+| `is_preview_version(v=None)` | 版本串含 `UTC` / `Preview` → True（预览版永不自更新；纯 ASCII，不含中文） |
 | `check()` | `dict(status, version, url, detail)`；preview 时**不发请求**；error / latest / new |
 | `main()` | 旧接口：`'p' / 'e' / 'n' / (版本, 地址)` |
 | `probe(url)` | `(可分段, 总字节或 None, 文件名)`；`Range: bytes=0-0`，回 200 说明不支持分段 |
@@ -700,7 +700,9 @@ sat_dur(1~240) / sat_sats / mu_sats / **theme_mode**。
 
 **预览版版本号（`preview.yml`）**
 - 步骤「改写预览版版本号」位置：`缓存 Nuitka 构建目录` 之后、`Nuitka 独立打包` 之前。
-- 结果：`__version__ = "日常开发Preview UTC-20261024-2111 2.8.0"`，写入 `GITHUB_ENV` 的 `PREVIEW_VERSION`。
+- 结果：`__version__ = "Preview UTC-20261024-2111 2.8.0"`，写入 `GITHUB_ENV` 的 `PREVIEW_VERSION`。
+  **全 ASCII，不写「日常开发」**：这串会进标题栏 / 设置页 / 安装包摘要，中文在 CI 控制台与
+  Nuitka 字符串常量里可能被转义成字节（改前的那版就是因此才要「只扫 ASCII 片段」）。
 - 读回校验三件事：串在 / 有 `UTC` / 无 BOM。
 - `校验打包产物` 只扫 ASCII 片段 `Preview UTC-<时间戳>`：中文在 Nuitka 字符串常量里可能被转义，搜中文会误报。
 

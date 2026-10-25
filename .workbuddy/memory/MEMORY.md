@@ -130,8 +130,10 @@
   ETA 反复重置；`done` 回退当帧不重算（**别重设基准**，否则预热反复重来，ETA 一直不显示）。
 - **加速**：GitHub 限**单连接** → 多开线程 + `PART_TIMEOUT=15` 断线重连 + `choose_source()` 镜像择优（2 s 测速
   窗、快 1.3 倍才换、换前确认支持 Range）；走镜像时 `_spot_check()` 与官方抽样比对；版本文件可写第三段 sha256。
-- **预览版不自我更新**：版本串含 `UTC` / `Preview` / `日常开发` 任一 → 连网都不连；`preview.yml` 改写版本号
+- **预览版不自我更新**：版本串含 `UTC` / `Preview` 任一 → 连网都不连；`preview.yml` 改写版本号
   这一步**必须夹在 `pip install -e .` 之后（PEP 440）与 Nuitka 之前**；缓存键是改写前算的，不影响缓存。
+- **预览版版本串全 ASCII、不含中文**（定稿 2026-10-25）：`Preview UTC-yyyyMMdd-HHmm 2.x.y`，
+  这个串要出现在标题栏 / 设置页 / 安装包摘要里，中文在 CI 控制台与 Nuitka 字符串常量里会被转义。
 - **下载前必查本地已有包**：缓存目录 `%LOCALAPPDATA%/F_HamLog/update`（`F_HAMLOG_UPDATE_DIR` 可覆盖；
   TEMP 会被清理，旧位置仅回退认）；下载成功写同名 `.json` 元数据（url/version/size/sha256/time）。
   `find_installer()` 判据从硬到软 = sha256 → 元数据（url+size）→ 仅 exe 名称；**小于 1 MB 一律不认**（挡半截文件）。

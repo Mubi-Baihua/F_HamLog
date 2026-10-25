@@ -8,7 +8,7 @@
 版本信息来源 ``check_url``：一行文本，形如 ``2.8.0 https://.../setup.exe``。
   · 版本号与本地 ``__version__`` 相同（或更旧）→ ``latest``；
   · 不同 → ``new``，带下载地址；
-  · **预览版**（版本串里带 ``UTC`` / ``Preview`` / ``日常开发``）→ ``preview``，
+  · **预览版**（版本串里带 ``UTC`` / ``Preview``）→ ``preview``，
     不去联网、也永不自我更新（预览包是开发中的临时产物，装回正式版会丢功能）。
 """
 
@@ -64,8 +64,10 @@ SAMPLE_BYTES = 256 << 10    # 单个候选在窗口内最多读这么多，够�
 SPOT_BLOCK = 64 << 10       # 镜像下载完成后，与官方比对的抽样块大小
 
 # 预览版标记：构建预览包时 __init__.py 会被改写为
-# 「日常开发Preview UTC-yyyyMMdd-HHmm 2.x.y」，命中任意一个都视为预览版
-PREVIEW_MARKERS = ('UTC', 'Preview', '日常开发')
+# 「Preview UTC-yyyyMMdd-HHmm 2.x.y」，命中任意一个都视为预览版。
+# **纯 ASCII**：这个串要出现在标题栏 / 设置页 / 安装包摘要里，中文在 CI 控制台与
+# Nuitka 的字符串常量里都可能被转义成字节，搜不到也读不对。
+PREVIEW_MARKERS = ('UTC', 'Preview')
 
 # 检查结果状态
 PREVIEW = 'preview'
