@@ -517,6 +517,19 @@ def main():
 
     QTimer.singleShot(0, _check_recovery)
 
+    # ---------- 每次打开都自动查一次更新（设置页勾了「自动更新」才走） ----------
+    # 延后 1.5 s：先让上面那些启动任务（数据迁移、恢复提示）跑完，别跟它们抢网络和对话框。
+    # 发现新版本 → 弹窗提示「是否下载并安装」，与手动点「检查更新」完全一样；
+    # 「已是最新 / 检查失败」不打扰用户。
+    def _auto_update():
+        try:
+            from f_hamlog import set as set_mod
+            set_mod.start_auto_update(window)
+        except Exception as e:
+            print('[更新] 启动时自动检查更新失败：%s' % e)
+
+    QTimer.singleShot(1500, _auto_update)
+
     app.exec()
 
     # 最后一道网：aboutToQuit 若因异常路径没触发（或退出过程中又起了线程），

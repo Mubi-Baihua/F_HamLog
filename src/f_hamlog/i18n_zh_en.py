@@ -187,6 +187,7 @@ TRANSLATIONS = {
     '自动保存': 'Auto save',
     '自动按时间排序': 'Auto sort',
     '星历自动更新': 'Auto TLE update',
+    '自动更新': 'Auto update',
     '更新间隔:': 'Every:',
     ' 小时': ' h',
     '颜色模式:': 'Theme:',

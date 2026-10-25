@@ -1,5 +1,5 @@
 from PySide6.QtWidgets import *
-from PySide6.QtCore import Qt, QEvent, Signal
+from PySide6.QtCore import Qt, QEvent, QTimer, Signal
 import threading
 import webbrowser
 from f_hamlog import call_upper
@@ -149,21 +149,77 @@ def _start_update_check(window, button):
     _update_check_thread = thread
 
 
-def _on_update_checked(window, info):
+def auto_update_enabled():
+    """设置里是否勾了「自动更新」（读 file/m_xml.txt）。
+
+    默认 **True**：新装的程序每次打开都查一次更新（发现新版弹窗提示），不想要就在设置里取消。
+    文件读不到 / 读坏了也按 True 走 —— 检查更新失败本身是不吵人的，不该因此变哑巴。
+    """
+    try:
+        with open(app_path('file/m_xml.txt'), 'r', encoding='utf-8') as f:
+            data = eval(f.read())
+    except Exception:
+        return True
+    return bool(data.get('auto_update', True)) if isinstance(data, dict) else True
+
+
+def start_auto_update(window):
+    """**每次打开程序**时查一次更新：设置里勾了「自动更新」、且不是预览版才走。
+
+    结果交给 ``_on_update_checked(..., auto=True)``：发现新版本照常弹窗提示（和手动点
+    「检查更新」一模一样），只有「已是最新 / 检查失败」不打扰用户；预览版连网都不连。
+    """
+    global _update_check_thread
+    from f_hamlog import check_update
+    if not auto_update_enabled():
+        return
+    if check_update.is_preview_version():
+        return
+    if _update_check_thread is not None and _update_check_thread.isRunning():
+        return
+
+    thread = _CheckThread(window)
+
+    def _got(info):
+        # 启动期间用户可能已经把主窗口关了 → 探活，别碰已销毁的 C++ 对象
+        try:
+            _on_update_checked(_alive(window), info, auto=True)
+        except RuntimeError:
+            pass
+
+    thread.result.connect(_got)
+    thread.start()
+    _update_check_thread = thread
+
+
+def _on_update_checked(window, info, auto=False):
+    """检查结果的处理：手动点「检查更新」和启动时「自动更新」共用这一条路径。
+
+    ``auto=True`` 是启动时自动查的那条：只有「已经是最新 / 检查失败」两种「没有消息」
+    的情况不吭声（每次打开都弹「已是最新版本」很烦）；**一旦发现新版本，照样弹窗提示**，
+    跟手动检查一模一样。预览版永远不会走到这里（那条路连网都不连）。
+    """
     info = info or {}
     status = info.get('status')
     if status == 'error':
+        if auto:
+            print('[更新] 启动检查失败：%s' % (info.get('detail') or '网络不可用'))
+            return
         QMessageBox.warning(
             window, i18n.tr('检查更新'),
             i18n.tr('检查更新失败：\n{}\n\n请稍后重试。').format(
                 info.get('detail') or i18n.tr('网络不可用')))
         return
     if status == 'preview':
+        if auto:
+            return
         QMessageBox.information(
             window, i18n.tr('检查更新'),
             i18n.tr('当前是预览版，不参与自动更新。\n请从项目主页获取正式版。'))
         return
     if status == 'latest':
+        if auto:
+            return
         QMessageBox.information(
             window, i18n.tr('检查更新'),
             i18n.tr('已是最新版本（{}）。').format(__version__))
@@ -419,41 +475,62 @@ def main(window):
     m_alt = xml_dict.get('m_alt', 0.0)
     sat_auto_update_b = xml_dict.get('sat_auto_update', False)
     sat_update_hours = int(xml_dict.get('sat_update_hours', 24) or 24)
+    auto_update_b = xml_dict.get('auto_update', True)
 
-    def set():
-        m_call = m_call_input.text()
-        m_qth = m_qth_input.text()
-        m_dig = m_dig_input.text()
-        aouto_save_b = aouto_save.isChecked()
-        aouto_list_b = aouto_list_.isChecked()
-        sat_auto_update_b = sat_auto_update.isChecked()
-        sat_update_hours = sat_update_hours_spin.value()
+    # 上次成功解析出来的观测站坐标：输入框里还打着「-」「1e」这种半截内容时，
+    # 不能拿它去覆盖已存的坐标（自动保存会在每一次改动后跑，容错必须在这里）。
+    pos_state = {'m_lat': m_lat, 'm_lon': m_lon, 'm_alt': m_alt}
+
+    def _save():
+        """把本页设置写回 file/m_xml.txt。
+
+        **没有「保存更改」按钮了**：任何控件一改就直接落盘（自动保存），所以这里
+        不弹提示、不关窗口 —— 校验不过的输入安静跳过（保留上一次的正确值），
+        别在用户打字的中间弹「请输入数字」。
+        """
         try:
-            m_lat = float(lat_input.text())
-            m_lon = float(lon_input.text())
-            m_alt = float(alt_input.text())
+            pos_state['m_lat'] = float(lat_input.text())
+            pos_state['m_lon'] = float(lon_input.text())
+            pos_state['m_alt'] = float(alt_input.text())
         except ValueError:
-            QMessageBox.warning(window, "输入错误", "观测站经纬度/海拔请填写数字。")
-            return
-        print(f"保存设置: 我的呼号={m_call}, 我的QTH={m_qth}, 我的设备={m_dig}, 自动保存={aouto_save_b}, 自动按时间排序={aouto_list_b}, 观测站=({m_lat},{m_lon},{m_alt}), 星历数据源={sp.load_tle_sources()}")
+            pass                            # 半截输入：沿用上一次的有效坐标
         # 读取现有设置，仅更新本窗口管理的键，保留其它键（如卫星预测设置 sat_*）
-        with open(app_path('file/m_xml.txt'), 'r', encoding='utf-8') as f:
-            data = eval(f.read())
+        try:
+            with open(app_path('file/m_xml.txt'), 'r', encoding='utf-8') as f:
+                data = eval(f.read())
+        except Exception:
+            data = {}
+        if not isinstance(data, dict):
+            data = {}
         data.update({
-            'm_call': m_call,
-            'm_qth': m_qth,
-            'm_dig': m_dig,
-            'aouto_save': aouto_save_b,
-            'aouto_list': aouto_list_b,
-            'm_lat': m_lat,
-            'm_lon': m_lon,
-            'm_alt': m_alt,
-            'sat_auto_update': sat_auto_update_b,
-            'sat_update_hours': sat_update_hours,
+            'm_call': m_call_input.text(),
+            'm_qth': m_qth_input.text(),
+            'm_dig': m_dig_input.text(),
+            'aouto_save': aouto_save.isChecked(),
+            'aouto_list': aouto_list_.isChecked(),
+            'm_lat': pos_state['m_lat'],
+            'm_lon': pos_state['m_lon'],
+            'm_alt': pos_state['m_alt'],
+            'sat_auto_update': sat_auto_update.isChecked(),
+            'sat_update_hours': sat_update_hours_spin.value(),
+            'auto_update': auto_update_box.isChecked(),
         })
-        with open(app_path('file/m_xml.txt'), 'w', encoding='utf-8') as f:
-            f.write(str(data))
-        window.close()
+        try:
+            with open(app_path('file/m_xml.txt'), 'w', encoding='utf-8') as f:
+                f.write(str(data))
+        except OSError as e:
+            print('[设置] 写 file/m_xml.txt 失败：%s' % e)
+
+    # 文本类输入做 300 ms 防抖：每敲一个字符就落盘没必要，但也不等「失焦」——
+    # 设完呼号直接点右上角叉号关窗，防抖计时器仍会补上这一笔。
+    _save_timer = QTimer(window)
+    _save_timer.setSingleShot(True)
+    _save_timer.setInterval(300)
+    _save_timer.timeout.connect(_save)
+
+    def _save_later(*_args):
+        _save_timer.start()
+
     def pack_set():
         print("插件设置")
         from f_hamlog import pack_set
@@ -645,9 +722,6 @@ def main(window):
 
     src_set_btn.clicked.connect(lambda: set_sources())
 
-    sett_button = QPushButton("保存更改", central_widget)
-    sett_button.setMinimumWidth(170)   # 加宽：默认宽度偏窄，与同行控件不协调
-    sett_button.clicked.connect(lambda: set())
     layout.addWidget(m_call_label)
     layout.addWidget(m_call_input)
     layout.addWidget(m_qth_label)
@@ -680,6 +754,7 @@ def main(window):
         grid_input.setText(sp.latlon_to_maidenhead(glat, glon))
         lat_input.setText(f'{glat:.5f}')
         lon_input.setText(f'{glon:.5f}')
+        _save()                             # 网格换算出的坐标立刻落盘
 
     def on_coord_to_grid():
         try:
@@ -688,14 +763,14 @@ def main(window):
         except (TypeError, ValueError):
             return
 
+    # 观测站输入：换算网格（失焦时）+ 自动保存
     lat_input.editingFinished.connect(on_coord_to_grid)
     lon_input.editingFinished.connect(on_coord_to_grid)
     grid_input.editingFinished.connect(on_grid_to_coord)
     layout.addLayout(h_layout)
 
-    # 「颜色模式」+「语言」并作一行，右侧靠边放「保存更改」按钮，中间用 stretch 撑开
-    # （先选颜色/语言、再保存，符合操作顺序）。这两项都是「即改即生效并落盘」的设置，
-    # 放同一行风格一致；上方那行只留开关与星历间隔，不再挤在一起。
+    # 「颜色模式」+「语言」并作一行：这两项本来就是「即改即生效并落盘」，
+    # 与整页的自动保存风格一致；上方那行只留开关与星历间隔，不再挤在一起。
     lang_layout = QHBoxLayout()
     lang_layout.addWidget(theme_mode_label)
     lang_layout.addWidget(theme_mode_box)
@@ -703,7 +778,6 @@ def main(window):
     lang_layout.addWidget(lang_label)
     lang_layout.addWidget(lang_box)
     lang_layout.addStretch(1)
-    lang_layout.addWidget(sett_button)
     layout.addLayout(lang_layout)
     
     line = QFrame(central_widget)
@@ -769,8 +843,16 @@ def main(window):
     # 语言切换后重刷文案（前缀走词表，版本号动态拼接）
     i18n.watch_language(window, lambda: fk_v.setText(_ver_text()))
 
-    # 「检查更新」与版本号同一行：版本号右侧才是这个按钮的自然位置，
-    # 而且不额外占一行高度（设置窗口是固定尺寸，多一行就要重新排版）。
+    # 「自动更新」+「检查更新」+ 版本号同一行：勾上之后**每次打开程序**都会在后台查一次，
+    # 发现新版就弹窗提示（和手动点「检查更新」同一套流程：问是否下载 → 下完问是否安装）。
+    # 预览版永远不参与自动更新 —— 那个开关对它没有意义，直接置灰。
+    auto_update_box = QCheckBox(i18n.tr('自动更新'), central_widget)
+    auto_update_box.setChecked(bool(auto_update_b))
+    from f_hamlog import check_update as _check_update
+    if _check_update.is_preview_version():
+        auto_update_box.setChecked(False)
+        auto_update_box.setEnabled(False)
+
     update_btn = QPushButton(i18n.tr('检查更新'), central_widget)
     update_btn.setFixedHeight(24)
     update_btn.setMinimumWidth(96)
@@ -780,6 +862,8 @@ def main(window):
     ver_row.setContentsMargins(0, 0, 0, 0)
     ver_row.addWidget(fk_v)
     ver_row.addStretch(1)
+    ver_row.addWidget(auto_update_box)
+    ver_row.addSpacing(10)
     ver_row.addWidget(update_btn)
     layout.addLayout(ver_row)
 
@@ -791,6 +875,15 @@ def main(window):
 
     cc_l = QLabel("Coded by BI8SQL", central_widget)
     layout.addWidget(cc_l)
+
+    # ---------- 自动保存：控件一改就写 file/m_xml.txt（本页不再有「保存更改」） ----------
+    # 文本类走 300 ms 防抖（连打字不必逐字节落盘），开关/数字/下拉改了立即写。
+    for _edit in (m_call_input, m_qth_input, m_dig_input,
+                  lat_input, lon_input, alt_input, grid_input):
+        _edit.textChanged.connect(_save_later)
+    for _box in (aouto_save, aouto_list_, sat_auto_update, auto_update_box):
+        _box.toggled.connect(lambda _checked=False: _save())
+    sat_update_hours_spin.valueChanged.connect(lambda _value=0: _save())
 
     def _fit_window():
         """把窗口固定为「参考尺寸」与「当前语言下内容所需尺寸」中的较大者。
