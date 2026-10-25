@@ -151,11 +151,15 @@ jobs:
           $def = @(gh api "repos/$repo/contents/.github/workflows?ref=$default" --jq '.[] | .name + "=" + .sha' 2>$null | Sort-Object)
           if ($LASTEXITCODE -ne 0) { $def = @() }
 
-          $diff = @(Compare-Object $cur $def)
+          $diff = @(Compare-Object -ReferenceObject $cur -DifferenceObject $def)
           if ($diff.Count -gt 0) {
-            Write-Host "当前提交（$env:GITHUB_SHA）的 .github/workflows/："
+            Write-Host "当前提交（$env:GITHUB_SHA）与默认分支（$default）的 .github/workflows/ 存在差异："
             foreach ($d in $diff) {
-              $which = if ($d.SideIndicator -eq '=>') { "仅当前提交有" } else { "仅 $default 有" }
+              # ⚠️ Compare-Object 的 SideIndicator 极易写反（2.8.0 首次上线就标反过，
+              #    把「只有 main 有」显示成「仅当前提交有」，结论完全颠倒）：
+              #      '<=' → 只存在于 ReferenceObject（第 1 个参数 = $cur = 当前提交）
+              #      '=>' → 只存在于 DifferenceObject（第 2 个参数 = $def = 默认分支）
+              $which = if ($d.SideIndicator -eq '<=') { '仅当前提交有' } else { "仅 $default 有" }
               Write-Host ("  [{0}] {1}" -f $which, $d.InputObject)
             }
             $msg = @(
