@@ -13,6 +13,10 @@ name: 发布 F HamLog（Nuitka → Inno Setup → 兼容版压缩包 → Release
 #      说明内容留空，由作者在 Releases 页面手动填写
 #
 # 另见 preview.yml：每次提交自动打包为「预览版」并只上传 Artifact，不写分支、不发 Release。
+#
+# ⚠️ 一定要在默认分支（main）上点「Run workflow」：
+#    非默认分支的 .github/workflows/ 只要与 main 有差异，创建 Release 就会 403
+#    （GITHUB_TOKEN 拿不到 workflows 权限），详见「预检 Release 权限」步骤的注释。
 on:
   workflow_dispatch:
     inputs:
@@ -118,6 +122,57 @@ jobs:
 
           Write-Host "主程序 exe：$appExe.exe"
           Write-Host "版本号 $version → 安装包 $($map.SETUP_BASE).exe / 兼容版 $($map.ZIP_NAME)"
+
+      # ------------------------------------------------------------------
+      # 0b. 预检：Release 权限（workflow 文件是否与默认分支一致）
+      # ------------------------------------------------------------------
+      # GitHub 的「Create a release」接口有一条隐藏规则（REST docs / releases 一节）：
+      #   若 target_commitish（本流程传的是 GITHUB_SHA）**相对默认分支**新增或修改了
+      #   .github/workflows/ 下的任何文件，创建 Release / tag 的 token 必须具备
+      #   「workflows: write」权限；否则接口返回 404，部分调用路径返回
+      #   403 Resource not accessible by integration。
+      #   而 **GITHUB_TOKEN 永远拿不到 workflows 权限**（GitHub 明确禁止），
+      #   在 permissions: 里写 workflow: write 也没用。
+      # 于是「在 develop 上发布、且 develop 的 .github/workflows/ 与 main 不一致」
+      # 必然 403 —— 与 permissions: contents: write 无关：产物回写分支那一步能成功，
+      # 是因为 push 只需要 contents 权限，跟 workflow 权限是两回事（2.8.0 已实际踩到，
+      # 现象极具误导性：除了最后一步，前面全部成功）。
+      # 放在打包之前，让它在几秒内失败，而不是干等一小时打包完再报 403。
+      - name: 预检 Release 权限
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $repo    = $env:GITHUB_REPOSITORY
+          $default = (gh api "repos/$repo" --jq .default_branch).Trim()
+          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($default)) {
+            throw '无法读取仓库的默认分支'
+          }
+
+          # 按「文件名=blob sha」比较两棵 workflows 目录树，等价于 GitHub 侧的判据
+          $cur = @(gh api "repos/$repo/contents/.github/workflows?ref=$env:GITHUB_SHA" --jq '.[] | .name + "=" + .sha' 2>$null | Sort-Object)
+          if ($LASTEXITCODE -ne 0) { $cur = @() }
+          $def = @(gh api "repos/$repo/contents/.github/workflows?ref=$default" --jq '.[] | .name + "=" + .sha' 2>$null | Sort-Object)
+          if ($LASTEXITCODE -ne 0) { $def = @() }
+
+          $diff = @(Compare-Object $cur $def)
+          if ($diff.Count -gt 0) {
+            Write-Host "当前提交（$env:GITHUB_SHA）的 .github/workflows/："
+            foreach ($d in $diff) {
+              $which = if ($d.SideIndicator -eq '=>') { "仅当前提交有" } else { "仅 $default 有" }
+              Write-Host ("  [{0}] {1}" -f $which, $d.InputObject)
+            }
+            $msg = @(
+              "无法创建 Release：当前分支的 .github/workflows/ 与默认分支（$default）不一致。",
+              '原因：GitHub 要求创建 Release 的 token 具备 workflows 写权限，而 GITHUB_TOKEN 永远拿不到（与 permissions: 无关）。',
+              '解决办法（任选其一）：',
+              "  1) 先把当前分支的 workflow 改动合并进 $default，然后在 $default 上重新 Run workflow（必须是新触发的 run，不能用 Re-run）；",
+              '  2) 换用带 workflow 权限的 PAT / GitHub App token，把本工作流的 GH_TOKEN 换成它；',
+              "  3) 临时把当前分支的 .github/workflows/ 恢复成与 $default 完全一致后再发布（不推荐）。"
+            )
+            throw ($msg -join "`n")
+          }
+          Write-Host "预检通过：.github/workflows/ 与默认分支（$default）一致"
 
       - name: 检出代码
         uses: actions/checkout@v4
