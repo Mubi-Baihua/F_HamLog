@@ -2,12 +2,16 @@
 
 设计要点：
 - 备份文件本身即「可恢复的未保存状态」：非空表示有可恢复内容，空文件表示无需恢复。
-- project 备份：file/project_backup.fhl（沿用原项目的加密 key）。
+- project 备份：**按项目文件分开**——已落盘的项目用
+  ``file/project_backup_<hash>.fhl``（见 :func:`project_backup_path`），尚未落盘的
+  项目（新建 / 从备份恢复）用公共的 ``file/project_backup.fhl``；沿用原项目的加密 key。
+  多个项目窗口并存时各写各的备份，互不覆盖。
 - batch  备份：file/batch_backup.fhl（始终明文，因为批量记录本身不绑定加密密钥）。
 - 关闭窗口时若有未保存更改，弹出『保存 / 不保存 / 取消』；选择「不保存」时保留备份，
   下次启动 main.py 即可提示恢复。
 """
 
+import hashlib
 import os
 from f_hamlog import fhl_rw
 from f_hamlog.paths import app_path
@@ -18,6 +22,9 @@ from f_hamlog.paths import app_path
 # file/main.fhl、file/pack_list.txt 集体 FileNotFoundError（主窗都打不开）。
 PROJECT_BACKUP = app_path(os.path.join('file', 'project_backup.fhl'))
 BATCH_BACKUP = app_path(os.path.join('file', 'batch_backup.fhl'))
+
+# 「按项目分开的」项目备份文件名前缀（见 project_backup_path）
+_PROJECT_TAGGED_PREFIX = 'project_backup_'
 
 # 兼容迁移：旧版本曾把批量备份写成 batch_backup.fh（错误扩展名），统一改为 .fhl。
 # 若旧文件存在且新文件不存在（或新文件为空而旧文件非空），则重命名以保留可恢复内容。
@@ -44,6 +51,62 @@ def _ensure_dir(path):
     d = os.path.dirname(path)
     if d and not os.path.exists(d):
         os.makedirs(d)
+
+
+def project_backup_path(save_path=''):
+    """某个项目窗口自己的未保存内容备份文件。
+
+    多个项目窗口并存时若都写公共的 ``project_backup.fhl``，两个窗口的未保存内容
+    会每 1.5 s 互相覆盖 → 下次启动「恢复未保存的内容」恢复出来的可能是**另一个
+    项目**的日志。所以按项目文件路径派生一个稳定的文件名：
+
+        <项目路径小写> → sha1 前 12 位 → file/project_backup_<tag>.fhl
+
+    尚未落盘的项目（新建 / 从备份恢复）没有路径可用，继续用公共的
+    :data:`PROJECT_BACKUP`（与旧行为一致）。
+    """
+    path = str(save_path or '').strip()
+    if not path:
+        return PROJECT_BACKUP
+    try:
+        key = os.path.normcase(os.path.abspath(path))
+    except Exception:
+        key = path
+    tag = hashlib.sha1(key.encode('utf-8', 'ignore')).hexdigest()[:12]
+    # 目录跟随 PROJECT_BACKUP（而不是写死 app_path('file')）：测试脚本把
+    # PROJECT_BACKUP 重定向到临时目录后，按项目分开的备份也跟着进去。
+    folder = os.path.dirname(PROJECT_BACKUP) or '.'
+    return os.path.join(folder, _PROJECT_TAGGED_PREFIX + tag + '.fhl')
+
+
+def list_project_backups():
+    """所有**非空**的项目备份文件（公共备份 + 按项目分开的），按修改时间新→旧。
+
+    启动时据此逐个提示恢复：多项目并存时每个项目都能恢复成自己的窗口，
+    而不是只恢复「最后一个写备份的那个项目」。
+    """
+    out = []
+    d = os.path.dirname(PROJECT_BACKUP) or '.'
+    try:
+        names = os.listdir(d)
+    except OSError:
+        names = []
+    for fn in names:
+        if not fn.lower().endswith('.fhl'):
+            continue
+        if fn.lower() != os.path.basename(PROJECT_BACKUP).lower() \
+                and not fn.lower().startswith(_PROJECT_TAGGED_PREFIX):
+            continue
+        full = os.path.join(d, fn)
+        if not is_backup_nonempty(full):
+            continue
+        try:
+            mtime = os.path.getmtime(full)
+        except OSError:
+            mtime = 0.0
+        out.append((mtime, full))
+    out.sort(key=lambda x: x[0], reverse=True)
+    return [p for _m, p in out]
 
 
 def write_backup(path, data, key=None):

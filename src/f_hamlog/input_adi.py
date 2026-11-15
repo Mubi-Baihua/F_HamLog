@@ -151,22 +151,37 @@ def _map_record(rec):
     return mapped
 
 
+def read_adi_text(path):
+    """读 ADI 文本（先 UTF-8，再退回 GBK）；读不了返回空串。"""
+    try:
+        with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+            return f.read()
+    except Exception:
+        try:
+            with open(path, 'r', encoding='gbk', errors='ignore') as f:
+                return f.read()
+        except Exception:
+            return ''
+
+
+def read_adi_records(path):
+    """读 .adi/.adif 文件 → F HamLog 记录列表（**不弹任何对话框**）。
+
+    供「直接打开 .adi 项目」使用：与「导入 ADI」共用同一套解析 / 字段映射 /
+    UTC→本地时间换算，但只负责读，不做去重合并、不改动已有记录。
+    """
+    txt = read_adi_text(path)
+    if not txt:
+        return []
+    return [_map_record(r) for r in _parse_adi_text(txt)]
+
+
 def main(file_list):
     # 弹出文件选择对话框以选择 .adi 文件
     path, _ = QFileDialog.getOpenFileName(None, i18n.tr('选择 ADI/ADIF 文件'), desktop_dir(), i18n.tr('ADI 文件 (*.adi);;All Files (*)'))
     if not path:
         return file_list
-    try:
-        with open(path, 'r', encoding='utf-8', errors='ignore') as f:
-            txt = f.read()
-    except Exception:
-        try:
-            with open(path, 'r', encoding='gbk', errors='ignore') as f:
-                txt = f.read()
-        except Exception:
-            return file_list
-
-    records = _parse_adi_text(txt)
+    records = _parse_adi_text(read_adi_text(path))
     mapped = [_map_record(r) for r in records]
     # 将导入记录追加到现有 file_list，先做重复检测（按 呼号+日期+时间），提示一次选择覆盖或跳过
     out = list(file_list) if file_list is not None else []

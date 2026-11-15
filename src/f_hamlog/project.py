@@ -153,6 +153,10 @@ def validate_field_text(key, label, text, required=False):
 # 格式 / 属性常量
 FHLA_SUFFIX = '.fhla'
 FHL_SUFFIX = '.fhl'
+# ADI/ADIF：业余无线电通用的日志交换格式（纯文本，<TAG:len>value ... <EOR>）。
+# 2026-11-15 起支持**直接打开 / 编辑 / 保存** .adi：读到内存里就是普通的记录列表，
+# 保存时按 ADIF 写回（时间本地↔UTC 的换算与「导入 ADI / 导出 ADI」完全同一套实现）。
+ADI_SUFFIX = '.adi'
 FORMAT_NAME = 'fhla'
 FORMAT_VERSION = 1
 TIME_FMT = '%Y-%m-%d %H:%M:%S'
@@ -227,6 +231,11 @@ def standard_field_labels():
 def is_fhla_path(path):
     """扩展名是否为 ``.fhla``（大小写不敏感）。"""
     return os.path.splitext(str(path or ''))[1].lower() == FHLA_SUFFIX
+
+
+def is_adi_path(path):
+    """扩展名是否为 ADI/ADIF（``.adi`` / ``.adif``，大小写不敏感）。"""
+    return os.path.splitext(str(path or ''))[1].lower() in (ADI_SUFFIX, '.adif')
 
 
 def detect_encrypted(file_path):
@@ -709,11 +718,31 @@ def write_fhla_file(file_path, data, key=None, meta=None, editor=None, touch=Tru
     return proj
 
 
+# -------------------------- ADI / ADIF（通用交换格式） --------------------------
+# 「直接打开 / 编辑 / 保存 .adi」不另写一套 ADIF 解析与生成：读走 input_adi 的解析
+# （含 UTC→本地时间换算），写走 export_adi 的生成（含本地→UTC、BAND 推导）。
+# 这样「导入 ADI」「导出 ADI」「打开 .adi 项目」三处行为永远一致。
+def read_adi_file(file_path):
+    """读 .adi/.adif → 记录列表；读不了 / 内容为空时返回空列表。"""
+    from f_hamlog import input_adi
+    try:
+        return input_adi.read_adi_records(file_path)
+    except Exception:
+        return []
+
+
+def write_adi_file(file_path, records):
+    """把记录写成 ADIF 文本（与「导出 ADI」同一实现）。"""
+    from f_hamlog import export_adi
+    export_adi.write_adif_file(file_path, records)
+
+
 # -------------------------- 按扩展名分派 --------------------------
 def read_project_file(file_path, key=None, ask_key=True):
     """读项目文件 → ``(records, key, meta)``。
 
-    ``.fhla`` → 记录 + 属性块；其余（``.fhl`` 等）→ 记录 + ``meta=None``（行为与旧版一致）。
+    ``.fhla`` → 记录 + 属性块；``.adi`` → 记录（无属性块、无加密）；
+    其余（``.fhl`` 等）→ 记录 + ``meta=None``（行为与旧版一致）。
     记录为 None 表示用户取消了密钥输入 / 解密失败退出，调用方应中断打开流程。
     """
     if is_fhla_path(file_path):
@@ -721,15 +750,22 @@ def read_project_file(file_path, key=None, ask_key=True):
         if proj is None:
             return None, key, None
         return proj.get_fhl(), key, proj.get_xml()
+    if is_adi_path(file_path):
+        # ADI/ADIF：纯文本交换格式，没有加密、没有属性块 → key / meta 都是 None。
+        # 读不出内容（文件坏 / 读不了）按空项目打开，不弹密钥框。
+        return read_adi_file(file_path), None, None
     records, key = fhl_rw.read_fhl_file(file_path, key)
     return records, key, None
 
 
 def save_project_file(file_path, records, key=None, meta=None, editor=None, touch=True):
-    """按扩展名写项目文件：``.fhla`` 带属性块，其余走老的 .fhl 写入（不引入新结构）。"""
+    """按扩展名写项目文件：``.fhla`` 带属性块，``.adi`` 写成 ADIF，其余走老的 .fhl 写入。"""
     if is_fhla_path(file_path):
         return write_fhla_file(file_path, records, key=key, meta=meta,
                                editor=editor, touch=touch)
+    if is_adi_path(file_path):
+        write_adi_file(file_path, records)
+        return None
     fhl_rw.write_fhl_file(file_path, records, key)
     return None
 
@@ -744,38 +780,57 @@ def save_project_file(file_path, records, key=None, meta=None, editor=None, touc
 # 显示名（定稿 2026-10-17）：
 #   .fhla = F HamLog 项目（带属性块的新格式，默认）
 #   .fhl  = F HamLog 兼容项目（纯记录的老格式，老的 F HamLog 也能打开）
+#   .adi  = ADI/ADIF 通用日志交换格式（2026-11-15 起可直接打开 / 编辑 / 保存）
 SAVE_FILTER_FHL = 'F HamLog 兼容项目 (*.fhl)'
 SAVE_FILTER_FHLA = 'F HamLog 项目 (*.fhla)'
-# 「打开」用的合并过滤器：两种文件一次就看全，名字取中性的「项目」。
-OPEN_FILTER_BOTH = 'F HamLog 项目 (*.fhla *.fhl)'
-OPEN_FILTER_BOTH_ALL = 'F HamLog 项目 (*.fhla *.fhl);;All Files (*)'
+SAVE_FILTER_ADI = 'ADI 日志 (*.adi)'
+# 「打开」用的三条过滤器：全部支持的格式 / 只看项目 / 只看 ADI。
+# 给三条而不是合并成一条，是为了让用户能按格式筛（项目目录里混着 .adi 导出的
+# 日志时，选「F HamLog 项目文件」就只看到项目，不必在一长串里挑）。
+# 第一条（默认选中）仍是「所有支持的文件」，行为和原来的合并过滤器一致。
+OPEN_FILTER_ALL = '所有支持的文件 (*.fhla *.fhl *.adi)'
+OPEN_FILTER_PROJECT = 'F HamLog 项目文件 (*.fhla *.fhl)'
+OPEN_FILTER_ADI = 'ADI 文件 (*.adi)'
 # 只认 .fhl 的场合（导出纯记录文件）沿用「兼容项目」这个名字。
 OPEN_FILTER_FHL = SAVE_FILTER_FHL
 
 
-def project_save_filters():
-    """保存对话框的过滤器字符串（两条，用户选的哪条决定落盘格式）。
+def project_open_filters():
+    """打开对话框的过滤器字符串（三条：所有支持的文件 / 项目 / ADI）。
 
-    顺序即默认：**第一条 `.fhla` 是默认项**（新建 / 另存为都默认存带属性的 .fhla），
-    想存纯记录的 .fhl 时用户自己切到第二条。
+    顺序即默认：第一条把三种后缀一次看全，想只看某一类时用户自己切后两条。
     逐段 ``i18n.tr`` 后再拼——整条拼完再翻会漏翻（见 i18n 约定）。
     """
-    return ';;'.join((i18n.tr(SAVE_FILTER_FHLA), i18n.tr(SAVE_FILTER_FHL)))
+    return ';;'.join((i18n.tr(OPEN_FILTER_ALL), i18n.tr(OPEN_FILTER_PROJECT),
+                      i18n.tr(OPEN_FILTER_ADI)))
+
+
+def project_save_filters():
+    """保存对话框的过滤器字符串（三条，用户选的哪条决定落盘格式）。
+
+    顺序即默认：**第一条 `.fhla` 是默认项**（新建 / 另存为都默认存带属性的 .fhla），
+    想存纯记录的 .fhl / 通用交换格式的 .adi 时用户自己切到后面两条。
+    逐段 ``i18n.tr`` 后再拼——整条拼完再翻会漏翻（见 i18n 约定）。
+    """
+    return ';;'.join((i18n.tr(SAVE_FILTER_FHLA), i18n.tr(SAVE_FILTER_FHL),
+                      i18n.tr(SAVE_FILTER_ADI)))
 
 
 def complete_project_suffix(path, selected_filter=''):
     """按用户所选的过滤器补全扩展名。
 
     Qt 的静态保存对话框**不会**替我们加后缀（自绘对话框尤其如此），用户只输入
-    ``123`` 就会得到一个没有扩展名的文件。规则：已经有 .fhl / .fhla 扩展名
-    （大小写不敏感）时原样返回；否则按所选过滤器补 .fhla 或 .fhl
-    ——**默认 .fhla**（与默认过滤器一致），只有明确选了纯 .fhl 那条才补 .fhl。
+    ``123`` 就会得到一个没有扩展名的文件。规则：已经有 .fhl / .fhla / .adi 扩展名
+    （大小写不敏感）时原样返回；否则按所选过滤器补 .fhla / .fhl / .adi
+    ——**默认 .fhla**（与默认过滤器一致），只有明确选了纯 .fhl / ADI 那条才换后缀。
     """
     path = str(path or '')
     low = path.lower()
-    if low.endswith(FHL_SUFFIX) or low.endswith(FHLA_SUFFIX):
+    if low.endswith(FHL_SUFFIX) or low.endswith(FHLA_SUFFIX) or low.endswith(ADI_SUFFIX):
         return path
     sel = str(selected_filter or '').lower()
+    if ADI_SUFFIX in sel:      # 用户选了「ADI 日志 (*.adi)」那条
+        return path + ADI_SUFFIX
     # 注意 '*.fhl' 是 '*.fhla' 的前缀，不能只看「含 .fhl」；先判 .fhla 再判 .fhl。
     use_fhl = (FHLA_SUFFIX not in sel) and (FHL_SUFFIX in sel)
     return path + (FHL_SUFFIX if use_fhl else FHLA_SUFFIX)
@@ -937,13 +992,24 @@ def _fhla_selftest():
     return tmp
 
 
+# ==========================================================================
+# ⚠️ 记录列表 / 密钥 / 子窗口引用都**属于单个项目窗口**，不是模块级共享状态。
+#
+# 2026-11-15：这里原来是模块全局 ``file`` / ``key``，而 main() 里的所有闭包
+# （save / table_update / append_to_project / 批量记录回调 …）读的都是这两个全局。
+# 打开第二个项目时 ``file`` 被覆盖成新项目的列表 → 第一个窗口的保存、追加、
+# 批量记录落盘全部作用到**后一个项目**上，表现为「不同日志串在一起」。
+# 现在它们都是 main() 的局部变量（闭包里用 nonlocal），每个窗口各一份。
+#
+# 下面这几个模块级名字**只是「最近一个窗口」的镜像**（供 tests/__*.py 观察），
+# 逻辑内部一律用窗口自己的副本（window._file / window._key），不要读这里。
 file = None
 key = None
 _open_windows = []  # 保持由本模块打开的卫星批量记录窗口引用，防止被回收
-# “新建日志 / 更多信息”窗口引用：在 main() 内被 _on_sync 等引用，
-# 必须先于任何使用初始化，否则首次打开项目时引用会抛 NameError。
+# “新建日志 / 更多信息”窗口引用（镜像）：真正的引用挂在窗口上（window._others_window），
+# 在 main() 内被 _on_sync 等引用，必须先于任何使用初始化，否则首次打开项目时抛 NameError。
 project_others_window = None
-# 「自定义日志字段」窗口引用（同一时刻只开一个，重复点菜单就换一个新的）
+# 「自定义日志字段」窗口引用（镜像；权威引用 = window._custom_fields_window）
 custom_fields_window = None
 
 # Qt 对象存活性判断：QMainWindow 的 destroyed 信号回调执行时，底层 C++ 对象已被删除，
@@ -1512,8 +1578,39 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
     fhla_meta：打开 ``.fhla`` 项目时由调用方传入的属性块（上一次编辑者 / 上一次编辑时间 /
     版本 / 加密状态）；``.fhl`` 传入 None 即可。详见本文件「.fhla 文件格式」一节。
     """
-    global file,key
-    key = key_
+    # ---------- 本窗口私有的运行时状态（**不要**用模块级同名全局） ----------
+    # 多个项目窗口可以并存（打开项目 / 新建项目 / 恢复内容 / 多人日志各开一个），
+    # 记录列表与密钥必须各窗口一份，否则后开的窗口会覆盖前一个窗口的数据 ——
+    # 那就是「不同日志串在一起」。闭包里一律 nonlocal 读写，不碰模块全局。
+    file = []       # 本窗口的记录列表（换列表时统一走 _set_file）
+    key = key_      # 本窗口的加密密钥（.adi / 明文项目恒为 None）
+
+    def _set_file(new_list):
+        """切换本窗口的记录列表（撤销/重做/导入/服务端同步都会整份换掉）。
+
+        同时刷新「最近一个窗口」的模块镜像，供 tests/__*.py 观察；逻辑内部不读取。
+        """
+        nonlocal file
+        file = new_list
+        window._file = new_list
+        globals()['file'] = new_list
+
+    def _set_key(new_key):
+        """切换本窗口的加密密钥（加密 / 解密菜单），同样刷新模块镜像。"""
+        nonlocal key
+        key = new_key
+        window._key = new_key
+        globals()['key'] = new_key
+
+    # 「新建日志 / 更多信息」「自定义日志字段」两个子窗口：本窗口各持一份引用，
+    # 避免甲项目的对话框被乙项目覆盖（覆盖后甲窗口的「更多信息」会被回收）
+    project_others_window = None
+    custom_fields_window = None
+    research_window = None       # 「搜索结果」窗口（每个项目窗口各一个）
+    window._others_window = None
+    window._custom_fields_window = None
+
+    _set_key(key_)
     if isinstance(filee, dict) and ('project' in filee or 'xml' in filee):
         # 传进来的是 .fhla 的整块内容（调用方没拆开，或文件扩展名不是 .fhla 时走了 .fhl 读法）：
         # 记录照收、属性块一并接住。否则会按「非 list」当成空项目打开，随后一次自动保存
@@ -1523,7 +1620,7 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
             fhla_meta = _fhla_proj.get_xml()
         filee = _fhla_proj.get_fhl()
     if isinstance(filee, list):
-        file = filee
+        _set_file(filee)
         _upgrade_file_records(file)
         # 打开项目时自动校验所有呼号（己方 m_call 与对方 o_call），统一转为大写
         for _rec in file:
@@ -1532,7 +1629,7 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
             if 'o_call' in _rec:
                 _rec['o_call'] = _rec['o_call'].upper()
     else:
-        file = []
+        _set_file([])
 
     # 远程后端状态：运行时可经「多人日志管理」动态挂载/卸载（避免新建窗口即可联机）
     window._remote = remote
@@ -1633,7 +1730,7 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         _fhla['dirty'] = True
         if save_path and is_fhla_path(save_path) and _rc() is None:
             _write_project_file(save_path)
-            backup.clear_backup(backup.PROJECT_BACKUP)
+            _bk_clear()
             _bk_snapshot()
 
     def _bk_snapshot(snap=None):
@@ -1673,6 +1770,16 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         _bk_state['last'] = snap if snap == _bk_state.get('local') else None
         _refresh_title()   # 基线变了 → 同步标题上的未保存标记
 
+    def _bk_path():
+        """本窗口的未保存内容备份文件：**按项目文件路径区分**。
+
+        多个项目窗口并存时若都写同一个 project_backup.fhl，两个窗口的未保存内容
+        会每 1.5 s 互相覆盖 → 下次启动「恢复未保存的内容」恢复出来的可能是另一个
+        项目的日志（也是「日志串在一起」的一种）。尚未落盘的项目（新建 / 恢复）
+        没有路径可用，仍用公共的 PROJECT_BACKUP。
+        """
+        return backup.project_backup_path(save_path)
+
     def _bk_write(force=False):
         # 多人日志：内容由服务端持有并落盘，本机不写“未保存”备份——否则下次启动会误报
         # “恢复未保存的内容”，把共享会话日志当成未保存内容恢复、覆盖本机项目。
@@ -1680,12 +1787,12 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         if _rc() is not None and not force:
             return
         if not file:
-            backup.clear_backup(backup.PROJECT_BACKUP)
+            backup.clear_backup(_bk_path())
             return
-        backup.write_backup(backup.PROJECT_BACKUP, file, key)
+        backup.write_backup(_bk_path(), file, key)
 
     def _bk_clear():
-        backup.clear_backup(backup.PROJECT_BACKUP)
+        backup.clear_backup(_bk_path())
 
     # ---------- 窗口标题的「未保存」标记 ----------
     # 约定：标题最前面加一个 '*' 表示当前内容相对「已持久化」有未保存更改。
@@ -1802,23 +1909,21 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         redo_stack.clear()
 
     def undo():
-        global file
         if not undo_stack:
             toast_tip.show_toast("没有可撤销的操作。", window)
             return
         redo_stack.append([dict(r) for r in file])
         _undo_trim(redo_stack)
-        file = undo_stack.pop()
+        _set_file(undo_stack.pop())
         table_update()
 
     def redo():
-        global file
         if not redo_stack:
             toast_tip.show_toast("没有可重做的操作。", window)
             return
         undo_stack.append([dict(r) for r in file])
         _undo_trim(undo_stack)
-        file = redo_stack.pop()
+        _set_file(redo_stack.pop())
         table_update()
 
     def get_selected_row_indexes():
@@ -2159,7 +2264,7 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
 
     def new(preset=None):
             xml_dict = load_settings()   # 与「操作者」同一套读取（容忍 BOM / 坏内容）
-            global project_others_window,file
+            nonlocal project_others_window
             index = len(file)
             date = time_.strftime("%Y-%m-%d", time_.localtime())
             time = time_.strftime("%H:%M", time_.localtime())
@@ -2195,6 +2300,8 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
             project_others_window = QMainWindow()
             project_others_window.resize(410, 680)
             project_others_window.setWindowTitle('新建日志')
+            window._others_window = project_others_window
+            globals()['project_others_window'] = project_others_window   # 模块镜像
             # 行序 = 项目的字段定义顺序（标准 20 行 + 自定义字段，可被用户重排）
             entries = field_entries()
             keys_list = [k for k, *_ in entries]
@@ -2249,10 +2356,12 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
             project_others_window.show()
 
     def project_others(index):
-        global project_others_window,file
+        nonlocal project_others_window
         project_others_window = QMainWindow()
         project_others_window.resize(410, 690)
         project_others_window.setWindowTitle('更多信息')
+        window._others_window = project_others_window
+        globals()['project_others_window'] = project_others_window   # 模块镜像
         # 行序 = 项目的字段定义顺序（标准 20 行 + 自定义字段，可被用户在
         # 「自定义日志字段」里重排；.fhl 只有标准 20 行、历史顺序）。
         entries = field_entries()
@@ -2370,9 +2479,8 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         if sp == '':
             return False
         sp = complete_project_suffix(sp, sel)
-        global key
         snap = _write_project_file(sp)
-        backup.clear_backup(backup.PROJECT_BACKUP)
+        _bk_clear()
         save_path = sp
         _bk_snapshot(snap)  # 复位快照 → 消除“未保存”标记
         window._local_title = f'F HamLog 2 - {os.path.basename(save_path)}'
@@ -2400,7 +2508,6 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         aouto_save_b = xml_dict['aouto_save']
 
         if (not(message) and aouto_save_b) or message:
-            global key
             # 无保存路径：恢复项目弹“保存恢复的文件”，普通新建项目弹“另存为”。
             # 只有用户显式保存（message=True）才允许弹对话框；静默自动保存（message=False，
             # 由 table_update 等触发）没有目标文件可写，直接跳过——绝不能弹界面，否则
@@ -2422,8 +2529,15 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
             if not message and _last_written.get('path') == save_path \
                     and _last_written.get('snap') == _cur:
                 return True
+            # .adi 例外：**打开后什么都没改就不写盘**。
+            # ADIF 是通用交换格式，重写一遍等于把标签重排、并丢掉我们没映射的标签
+            # （QSL_SENT、SRX_STRING 之类）——「打开即自动保存」在 .adi 上是纯粹的
+            # 破坏性动作。用户显式保存（Ctrl+S）或真改了内容，照常写。
+            if not message and is_adi_path(save_path) \
+                    and _last_written.get('path') is None and _cur == _fhla['open_snap']:
+                return True
             snap = _write_project_file(save_path, snap=_cur)
-            backup.clear_backup(backup.PROJECT_BACKUP)
+            _bk_clear()
             _bk_snapshot(snap)
             if message:
                 toast_tip.show_toast("保存成功！", window)
@@ -2433,11 +2547,11 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         """把当前 file 写到 path，并记录「本会话已写入」的路径与内容（供 save() 跳过重复写）。
 
         .fhla → 连同属性块写（上一次编辑者 / 上一次编辑时间 / 版本 / 加密状态），
+        .adi  → 按 ADIF 写（通用交换格式，无属性块、无加密），
         其余（.fhl 等）→ 与旧版完全一致，只写记录列表。
 
         snap：调用方已算好的值快照；传了就复用，省掉一次整份拷贝（5 万条约 20 ms）。
         """
-        global key
         if snap is None:
             snap = _content_snap()   # 与「打开时的快照」比对，判断这次写入算不算一次编辑
         if is_fhla_path(path):
@@ -2449,6 +2563,9 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
                 touch=(snap != _fhla['open_snap'] or _fhla['dirty']))
             _fhla['meta'] = written.get_xml()   # 回收刷新后的属性（编辑者/时间/版本/加密状态）
             _fhla['dirty'] = False
+        elif is_adi_path(path):
+            # ADI 是明文交换格式：忽略密钥（不加密），记录按 ADIF 标签映射写回
+            write_adi_file(path, file)
         else:
             fhl_rw.write_fhl_file(path, file, key)
         # 记录“已写入内容”，供调用方的 _bk_snapshot 复用
@@ -2468,7 +2585,7 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
             return False
         sp = complete_project_suffix(sp, sel)
         snap = _write_project_file(sp)
-        backup.clear_backup(backup.PROJECT_BACKUP)
+        _bk_clear()
         _bk_snapshot(snap)
         toast_tip.show_toast("另存成功！", window)
         return True
@@ -2484,7 +2601,6 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
             window.close()
             return
         import json
-        global key
         if save_path == '':
             # 无保存路径（恢复项目 / 新建后尚未落盘）：交给统一的保存流程
             # （恢复场景弹「保存恢复的文件」）；用户取消则保持窗口打开，
@@ -2494,28 +2610,26 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         else:
             # 显式「保存并退出」：无条件落盘（不做未变更跳过），确保用户意图被执行
             snap = _write_project_file(save_path)
-            backup.clear_backup(backup.PROJECT_BACKUP)
+            _bk_clear()
             _bk_snapshot(snap)
             toast_tip.show_toast("保存成功！", window)
         sys.exit()
 
     def input_HAM_tolls_():
-        global file
         old_file = file.copy()  # 使用copy()确保是深拷贝
         from f_hamlog import input_HAM_tolls
         snapshot_before()
-        file = input_HAM_tolls.main(file)
+        _set_file(input_HAM_tolls.main(file))
         table_update()
         if file == old_file:  # 如果没有导入任何内容，则不保存
             return
 
     def import_from_ADI():
-        global file
         old_file = file.copy()
         from f_hamlog import input_adi
         try:
             snapshot_before()
-            file = input_adi.main(file)
+            _set_file(input_adi.main(file))
         except Exception as e:
             QMessageBox.warning(window, "导入失败", f"导入 ADI 失败：{e}")
             return
@@ -2524,11 +2638,10 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         table_update()
 
     def input_fhl():
-        global file
         old_file = file.copy()  # 使用copy()确保是深拷贝
         from f_hamlog import input_fhl
         snapshot_before()
-        file = input_fhl.main(file)
+        _set_file(input_fhl.main(file))
         table_update()
         if file == old_file:  # 如果没有导入任何内容，则不保存
             return
@@ -2586,7 +2699,6 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         if not save_path:
             return
         save_path = complete_project_suffix(save_path, sel)
-        global key
         # 按扩展名分派：.fhla 附带属性块，其余与旧版一致（只写记录）
         save_project_file(save_path, selected_records, key, editor=_fhla_editor())
 
@@ -2655,18 +2767,16 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
     file_menu.addSeparator()
 
     def aes_open_():
-        global key
         QMessageBox.information(window,'加密项目','F HamLog 将使用AES加密项目，\n请牢记你的密钥！若密钥丢失则无法恢复日志数据。')
-        key = fhl_rw.get_user_key_dialog()
+        _set_key(fhl_rw.get_user_key_dialog())
         list_time(message=False)
         save(message=False)
         QMessageBox.information(window,'加密项目','加密成功！\n请重新打开此项目。')
         window.close()
     def aes_close_():
-        global key
         input_key = fhl_rw.get_user_key_dialog()
         if input_key == key:
-            key = None
+            _set_key(None)
             list_time(message=False)
             save(message=False)
             QMessageBox.information(window,'解密项目','解密成功！\n请重新打开此项目。')
@@ -2675,7 +2785,9 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
             QMessageBox.warning(window,'解密项目','密钥错误！')
 
     aes_action = None
-    if key is None and _rc() is None:
+    # ADI 是通用明文交换格式，没有加密概念 → 不给「加密此项目」菜单（避免误导：
+    # 加密后仍会被写成明文 ADIF）
+    if key is None and _rc() is None and not is_adi_path(save_path):
         aes_action = QAction('加密此项目', window)
         aes_action.setShortcut('Ctrl+Alt+E')
         aes_action.triggered.connect(aes_open_)
@@ -2699,6 +2811,13 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         """
         if not is_fhla_path(save_path):
             # 多段文案逐段 tr 后再拼：整条拼完再翻会漏翻（i18n 词表按整串匹配）
+            if is_adi_path(save_path):
+                QMessageBox.information(
+                    window, i18n.tr('项目属性'),
+                    i18n.tr('不支持的格式：当前项目不是 .fhla 文件。') + '\n\n'
+                    + i18n.tr('ADI 是通用日志交换格式，不含编辑者、编辑时间、版本、加密状态等属性。') + '\n'
+                    + i18n.tr('请「另存为」带属性的 .fhla 项目文件后再查看。'))
+                return
             QMessageBox.information(
                 window, i18n.tr('项目属性'),
                 i18n.tr('不支持的格式：当前项目不是 .fhla 文件。') + '\n\n'
@@ -2741,7 +2860,7 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
           不留任何自定义字段）；只重置表格，点「保存更改」才落盘。
         * 字段定义只存在于 .fhla 的 xml 块里 → .fhl 属**不受支持的格式**，直接提示并拒绝打开。
         """
-        global custom_fields_window
+        nonlocal custom_fields_window
         if not is_fhla_path(save_path):
             # 多段文案逐段 tr 后再拼：整条拼完再翻会漏翻（i18n 词表按整串匹配）
             QMessageBox.information(
@@ -2754,6 +2873,8 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
             custom_fields_window.close()
         dlg = QMainWindow()
         custom_fields_window = dlg
+        window._custom_fields_window = dlg
+        globals()['custom_fields_window'] = dlg   # 模块镜像
         dlg.setWindowTitle('自定义日志字段')
         dlg.resize(620, 560)
         central = QWidget()
@@ -2891,7 +3012,7 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
             toast_tip.show_toast(i18n.tr('已恢复默认，点「保存更改」后生效。'), dlg)
 
         def save_fields():
-            global custom_fields_window
+            nonlocal custom_fields_window
             rows, taken = [], list(FIELD_LABELS)
             for r in range(tbl.rowCount()):
                 name_item = tbl.item(r, 0)
@@ -2934,6 +3055,8 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
             custom_count = sum(1 for e in rows if e[4])
             dlg.close()
             custom_fields_window = None
+            window._custom_fields_window = None
+            globals()['custom_fields_window'] = None   # 模块镜像
             _h1, _f1, _w1 = _main_cols()
             if (tuple(_h1), tuple(_f1), tuple(_w1)) != old_cols:
                 table_update()      # 主页列（表头 / 顺序 / 宽度）变了 → 重建
@@ -3172,7 +3295,7 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
                 QMessageBox.warning(window, "排序失败", str(e))
 
     def research_call(file_param=None):
-        global research_window
+        nonlocal research_window
         # 弹出高级搜索对话：选择字段 + 关键词 + 匹配方式
         dlg = QDialog(window)
         dlg.resize(320, 180)
@@ -3726,7 +3849,6 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
                                 f'替换完成：影响 {affected} 条记录，共 {total} 处替换。')
 
     def show_statistics(records=None, parent=None, scope_labels=None, scope_resolver=None, default_scope=None):
-        global file
         owner = parent if parent is not None else window
         dlg = QDialog(owner)
         dlg.setWindowTitle('统计图')  # 窗口标题
@@ -3872,6 +3994,11 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
     def append_to_project(records):
         """复用卫星过境窗口“记录”按钮的保存逻辑：把记录（一条或多条）直接追加到
         当前打开的项目文件并落盘（不再弹出保存方式选择）。"""
+        # 启动批量记录的**这个项目窗口**可能已经被关掉：此时不能往已销毁的窗口 /
+        # 已作废的记录列表里写（否则就是「日志串到别的项目」）。抛给调用方，让它
+        # 退回「完成」页重新选保存位置。
+        if not _qt_alive(window):
+            raise RuntimeError('原项目窗口已关闭，无法直接添加到该项目。')
         snapshot_before()
         for rec in records:
             file.append(rec)
@@ -3894,15 +4021,22 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
                 if not _do_save():
                     return
         # 追加即落盘：视为已保存，清空备份并更新快照
-        backup.clear_backup(backup.PROJECT_BACKUP)
+        _bk_clear()
         _bk_snapshot()
+
+    def _batch_log_name():
+        """批量记录窗口上「自动保存到日志文件（…）」里显示的日志名。"""
+        if save_path:
+            return os.path.basename(save_path)
+        return '当前项目'   # 多人日志 / 尚未落盘：没有文件名，用个中性的说法
 
     def quick_log(preset):
         """由卫星过境窗口“记录”按钮回调：打开批量记录窗口并预填卫星信息。"""
         from f_hamlog import batch_project
         bw = QMainWindow()
         bw.setWindowTitle('批量记录 - ' + str(preset.get('sat_name', '')))
-        batch_project.main(bw, preset=preset, on_saved=append_to_project)
+        batch_project.main(bw, preset=preset, on_saved=append_to_project,
+                           auto_target=_batch_log_name())
         _open_windows.append(bw)
 
     def open_batch_record():
@@ -3911,7 +4045,8 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         from f_hamlog import batch_project
         bw = QMainWindow()
         bw.setWindowTitle('批量记录')
-        batch_project.main(bw, preset=None, on_saved=append_to_project)
+        batch_project.main(bw, preset=None, on_saved=append_to_project,
+                           auto_target=_batch_log_name())
         _open_windows.append(bw)
 
     def open_satellite_window():
@@ -4005,7 +4140,6 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
                 pass
 
         def handler():
-            global file,key
             if key != None:
                 QMessageBox.information(window,'加密项目','F HamLog 会将项目解密后提供给插件，\n请确保插件来自可信的开发者。')
             import json
@@ -4070,7 +4204,7 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
                                         f"插件 {pack_name} 的输出不是记录列表！")
                 else:
                     snapshot_before()
-                    file = new_recs
+                    _set_file(new_recs)
                     if new_meta is not None:
                         # 属性块也可能被插件改过（自定义字段）→ 换掉并标脏，
                         # 保证紧跟其后的 table_update()/save() 写的是新属性、且算一次编辑
@@ -4204,11 +4338,11 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
             pass
 
         def _on_sync(new_list):
-            global file, project_others_window
             # 窗口已销毁时不再刷新表格（避免操作已删除的 C++ 对象）
             if not _qt_alive(window):
                 return
             # 正在编辑“更多信息/新建日志”窗口时跳过刷新，避免覆盖正在编辑的行索引
+            # （只看本窗口自己的对话框：别的项目窗口开着对话框与本窗口无关）
             if project_others_window is not None and project_others_window.isVisible():
                 return
             try:
@@ -4223,7 +4357,7 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
                 # 服务端内容时（如他人先改成了同样的内容），否则会一直被判为“有未保存更改”。
                 _bk_snapshot()
                 return
-            file = new_list
+            _set_file(new_list)
             # 沿用原有表格刷新逻辑：先移除并销毁旧表格再重建，界面始终只有一个表格。
             # persist=False 避免把刚拉取到的内容立刻再回写服务端（否则会来回同步）。
             table_update(persist=False)
@@ -4559,6 +4693,9 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         # 列数/表头（自定义字段勾了「在主页显示」时会多出列）
         'main_table': lambda: table,
         'save': save,
+        # 本窗口的记录列表 / 密钥（窗口私有；测试脚本用它观察与注入密钥）
+        'get_file': lambda: file,
+        'set_key': _set_key,
         # .fhla 属性（上一次编辑者/上一次编辑时间/版本/加密状态）：可读可写，供冒烟脚本断言
         'fhla_meta': _fhla,
         'fhla_editor': _fhla_editor,

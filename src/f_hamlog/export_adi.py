@@ -136,6 +136,19 @@ def records_to_adif(records):
     return '\n'.join(lines) + '\n'
 
 
+def write_adif_file(path, records):
+    """把记录写成 ADIF 文件（不做 QFileDialog / 不弹提示）。
+
+    供「另存为 .adi」与「直接编辑 .adi 项目后保存」使用：与下面的导出对话框
+    共用同一份 ``records_to_adif``，保证三处产出的 ADIF 完全一致。
+    返回写入的记录条数（``record_to_adif`` 跳过没有对方呼号的记录）。
+    """
+    text = records_to_adif(records)
+    with open(path, 'w', encoding='utf-8', newline='\n') as f:
+        f.write(text)
+    return sum(1 for rec in (records or []) if record_to_adif(rec))
+
+
 def export_adif_dialog(records, parent=None):
     """弹出保存对话框，将记录导出为 ADIF 文件（供 TQSL 签名）。"""
     if not records:

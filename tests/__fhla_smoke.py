@@ -254,7 +254,8 @@ ok('B17b 属性文案不再含「创建者 / 创建时间」',
    '创建者' not in text and '创建时间' not in text, text.replace('\n', ' | ')[:160])
 
 # —— 应用内加密保存 ——
-pj.key = 'pwd123'
+# 密钥现在是**窗口私有**的（多项目并存时不能共用一个全局 key），经 _perf_api 注入
+api['set_key']('pwd123')
 api['save']()
 pump(4)
 ok('B18 加密保存后文件是密文', fhla_rw.detect_encrypted(FHLA) is True)
@@ -274,7 +275,7 @@ finally:
     QMessageBox.information = _orig_info
 ok('B22 加密状态在属性窗口显示为「已加密」',
    '加密状态：已加密' in captured.get('text', ''))
-pj.key = None
+api['set_key'](None)
 
 # —— .fhl 项目：格式不变 + 属性窗口给提示 ——
 win2 = QtWidgets.QMainWindow()
@@ -356,8 +357,9 @@ print('--- E 保存格式自选 ---', flush=True)
 
 filters = fhla_rw.project_save_filters()
 parts = filters.split(';;')
-ok('E1 保存过滤器是两条，且默认（第一条）是 .fhla',
-   len(parts) == 2 and '*.fhla' in parts[0] and '*.fhl' in parts[1], filters)
+ok('E1 保存过滤器三条（.fhla / .fhl / .adi），且默认（第一条）是 .fhla',
+   len(parts) == 3 and '*.fhla' in parts[0] and '*.fhl' in parts[1]
+   and '*.adi' in parts[2], filters)
 ok('E1b .fhla 的中文名是「F HamLog 项目」',
    parts[0].startswith('F HamLog 项目'), parts[0])
 ok('E1c .fhl 的中文名是「F HamLog 兼容项目」',
@@ -417,10 +419,11 @@ try:
 finally:
     _i18n._lang = _saved_lang
 ok('E8 英文界面下过滤器已翻译（无中文残留）',
-   not any('\u4e00' <= c <= '\u9fff' for c in _en_filters) and _en_filters.count(';;') == 1,
+   not any('\u4e00' <= c <= '\u9fff' for c in _en_filters) and _en_filters.count(';;') == 2,
    _en_filters)
 ok('E9 中文界面下过滤器就是源码原文（.fhla 在前）',
-   _zh_filters == fhla_rw.SAVE_FILTER_FHLA + ';;' + fhla_rw.SAVE_FILTER_FHL, _zh_filters)
+   _zh_filters == ';;'.join((fhla_rw.SAVE_FILTER_FHLA, fhla_rw.SAVE_FILTER_FHL,
+                             fhla_rw.SAVE_FILTER_ADI)), _zh_filters)
 
 # —— E10 操作者身份：填了呼号就用呼号，没填才用系统用户名 ——
 _real_settings = pj.load_settings

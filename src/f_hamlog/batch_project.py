@@ -325,7 +325,240 @@ class _NavFilter(QObject):
         return False
 
 
-def main(window, preset=None, on_saved=None, preset_records=None, recovered=False):
+# ---------------------------------------------------------------------------
+#  「记录保存到哪儿」——完成页与「自动保存到日志文件」共用同一套选择界面
+# ---------------------------------------------------------------------------
+# 目标一律用元组描述，第一个元素是类型：
+#   ('append', path)                  追加到已有日志文件（.fhla / .fhl / .adi）
+#   ('new', path)                     另存为新的日志文件（只放本次记录）
+#   ('default', path)                 默认通联日志（主页「通联日志」那个文件）
+#   ('remote', host, port, password)  多人日志
+def default_log_path():
+    """主页「通联日志」打开的那个文件：**优先 main.fhla**，只有旧的 main.fhl 才退回它。
+
+    旧写法写死 main.fhl——迁移成 .fhla 后主页读的是 main.fhla，记录加进去了却看不见。
+    """
+    path = app_path(os.path.join('file', 'main.fhla'))
+    legacy = app_path(os.path.join('file', 'main.fhl'))
+    if not os.path.exists(path) and os.path.exists(legacy):
+        return legacy
+    return path
+
+
+def target_name(target):
+    """目标显示名：文件类用文件名，多人日志用 ``host:port``。"""
+    if target[0] in ('append', 'new', 'default'):
+        return os.path.basename(target[1]) or target[1]
+    return '{}:{}'.format(target[1], target[2])
+
+
+def _load_records_file(path):
+    """读日志文件 → ``(records, key, meta)``；文件不存在按空日志处理。"""
+    if not os.path.exists(path):
+        return [], None, None
+    from f_hamlog import project
+    return project.read_project_file(path)
+
+
+def _write_records_file(records, path, key=None, meta=None):
+    """写日志文件：按扩展名分派（.fhla 带属性块 / .adi 写 ADIF / .fhl 只写记录）。"""
+    from f_hamlog import project   # 延迟导入：project 亦以延迟方式引用本模块
+    project.save_project_file(path, records, key, meta=meta)
+
+
+def _append_to_remote(host, port, password, records):
+    """把 records 追加到指定多人日志服务端（连上先拉现有日志，再整体发回去）。"""
+    from f_hamlog.project import RemoteConnection
+    conn = RemoteConnection(host, port, password, role='guest')
+    try:
+        conn.connect()                                  # 连接并拉取服务端现有日志
+        conn.send_save(list(conn.initial_file) + list(records))
+        # 等服务端回 OK 再关闭，避免立即关闭触发 RST
+        try:
+            conn.sock.settimeout(5.0)
+            from f_hamlog.remote_server import recv_frame
+            while True:
+                frame = recv_frame(conn.sock)
+                if frame is None or frame[0] == 'OK':
+                    break
+        except Exception:
+            pass
+        conn.close()
+    except Exception:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        raise
+
+
+def apply_save_target(target, records):
+    """把 records 写到 target 指定的地方；失败直接抛异常，由调用方提示。"""
+    kind = target[0]
+    if kind == 'new':
+        _write_records_file(records, target[1])
+    elif kind in ('append', 'default'):
+        old, key, meta = _load_records_file(target[1])
+        _write_records_file(list(old or []) + list(records), target[1], key, meta)
+    elif kind == 'remote':
+        _append_to_remote(target[1], target[2], target[3], records)
+    else:
+        raise ValueError('unknown save target: %r' % (target,))
+
+
+def done_message(target, count):
+    """保存成功后的提示文案（按去处分别措辞，便于确认写到了哪个日志）。"""
+    kind = target[0]
+    if kind == 'new':
+        return '已另存为项目文件：{}'.format(target[1])
+    if kind == 'default':
+        return '已添加 {} 条记录到默认通联日志'.format(count)
+    if kind == 'remote':
+        return '已添加 {} 条记录到多人日志（{}:{}）。'.format(count, target[1], target[2])
+    return '已添加 {} 条记录到项目。'.format(count)
+
+
+def ask_remote_target(parent):
+    """问多人日志的地址 / 端口 / 密码；取消返回 None。"""
+    dlg = QDialog(parent)
+    dlg.setWindowTitle('添加到多人日志')
+    dlg.setMinimumWidth(380)
+    dlg.setModal(True)
+    v = QVBoxLayout(dlg)
+    v.setSpacing(8)
+    v.setContentsMargins(18, 16, 18, 14)
+    host_e = QLineEdit()
+    host_e.setPlaceholderText('服务端地址（IP 或域名）')
+    port_e = QLineEdit('8000')
+    pw_e = QLineEdit()
+    pw_e.setEchoMode(QLineEdit.Password)
+    pw_e.setPlaceholderText('密码（可留空）')
+    btn_tgl = QPushButton('显示/隐藏')
+    btn_tgl.setFixedWidth(84)
+
+    def _toggle_password():
+        pw_e.setEchoMode(QLineEdit.Normal if pw_e.echoMode() == QLineEdit.Password
+                         else QLineEdit.Password)
+
+    btn_tgl.clicked.connect(_toggle_password)
+    r1 = QHBoxLayout(); r1.addWidget(QLabel('服务端：')); r1.addWidget(host_e, 1)
+    r2 = QHBoxLayout(); r2.addWidget(QLabel('端口：')); r2.addWidget(port_e, 1)
+    r3 = QHBoxLayout(); r3.addWidget(QLabel('密码：')); r3.addWidget(pw_e, 1); r3.addWidget(btn_tgl)
+    v.addLayout(r1); v.addLayout(r2); v.addLayout(r3)
+    bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+    bb.accepted.connect(dlg.accept)
+    bb.rejected.connect(dlg.reject)
+    v.addWidget(bb)
+    if dlg.exec() != QDialog.Accepted:
+        return None
+    host = host_e.text().strip()
+    if not host:
+        QMessageBox.warning(parent, '添加到多人日志', '请输入服务端地址。')
+        return None
+    try:
+        port = int(port_e.text().strip() or '8000')
+    except ValueError:
+        port = 8000
+    return (host, port, pw_e.text())
+
+
+def choose_save_target(parent, heading):
+    """「记录保存到哪儿」选择页（完成页 / 勾选自动保存时提示位置，同一个界面）。
+
+    只有一个标题 + 四条单选项，**不摆灰色说明文字**：去处本身就是「日志文件 /
+    默认通联日志 / 多人日志」，一眼能分辨，多一行灰字只会显得啰嗦。
+    返回目标元组；取消返回 None。文案写中文原文，由 i18n 在显示时统一翻译。
+    """
+    from f_hamlog import project
+    # 定稿：一律说「日志文件」，不再按格式叫「F HamLog 项目」——现在 .fhla / .fhl / .adi
+    # 三种都能进（追加时按扩展名分派，另存为时在文件对话框里选格式）。
+    options = (
+        ('append', '添加到日志文件'),
+        ('new', '另存为日志文件'),
+        ('default', '添加到默认通联日志'),
+        ('remote', '添加到多人日志'),
+    )
+
+    dlg = QDialog(parent)
+    dlg.setWindowTitle('保存记录')
+    dlg.setMinimumWidth(340)
+    dlg.setModal(True)
+    v = QVBoxLayout(dlg)
+    v.setSpacing(0)
+    v.setContentsMargins(24, 20, 24, 16)
+
+    title = QLabel(heading)
+    title.setStyleSheet('font-size:11pt;')
+    v.addWidget(title)
+    v.addSpacing(14)
+
+    group = QButtonGroup(dlg)
+    radios = []
+    for i, (_kind, label) in enumerate(options):
+        rb = QRadioButton(label)
+        rb.setStyleSheet('font-size:10pt;')
+        group.addButton(rb, i)
+        radios.append(rb)
+        v.addSpacing(10 if i else 0)
+        v.addWidget(rb)
+
+    radios[0].setChecked(True)
+
+    v.addSpacing(16)
+    btns = QHBoxLayout()
+    btns.addStretch(1)
+    btn_cancel = QPushButton('取消')
+    btn_cancel.setFixedWidth(88)
+    btn_ok = QPushButton('确定')
+    btn_ok.setFixedWidth(88)
+    btn_ok.setDefault(True)
+    btns.addWidget(btn_cancel)
+    btns.addWidget(btn_ok)
+    v.addLayout(btns)
+
+    picked = {'target': None}
+
+    def _confirm():
+        idx = group.checkedId()
+        kind = options[idx][0]
+        if kind == 'append':
+            path, _ = QFileDialog.getOpenFileName(
+                dlg, i18n.tr('添加到 F HamLog项目'), desktop_dir(),
+                project.project_open_filters())
+            if not path:
+                return                      # 没选文件就停在选择页，别悄悄按取消处理
+            target = ('append', path)
+        elif kind == 'new':
+            path, sel = QFileDialog.getSaveFileName(
+                dlg, i18n.tr('另存为 F HamLog项目'), desktop_dir(),
+                project.project_save_filters())   # 默认 .fhla；想存纯记录切到 .fhl 那条
+            if not path:
+                return
+            target = ('new', project.complete_project_suffix(path, sel))
+        elif kind == 'default':
+            target = ('default', default_log_path())
+        else:
+            remote = ask_remote_target(dlg)
+            if remote is None:
+                return
+            target = ('remote',) + remote
+        picked['target'] = target
+        dlg.accept()
+
+    btn_cancel.clicked.connect(dlg.reject)
+    btn_ok.clicked.connect(_confirm)
+    dlg.exec()
+    return picked['target']
+
+
+def main(window, preset=None, on_saved=None, preset_records=None, recovered=False,
+         auto_target=None):
+    """打开批量记录窗口。
+
+    on_saved：由某个项目窗口启动时传入的「追加到该日志」回调（卫星「记录」按钮 /
+              项目窗口菜单「批量记录」）；从主页启动时为 None。
+    auto_target：启动窗口的那个日志名（显示在「自动保存到日志文件」复选框上）。
+    """
     _install_qt_msg_filter()  # 过滤冻结列良性 Qt 警告
     window.resize(1200, 790)
     window.setWindowTitle('批量记录')
@@ -407,6 +640,33 @@ def main(window, preset=None, on_saved=None, preset_records=None, recovered=Fals
     cb_freeze = QCheckBox('固定模板列')
     cb_freeze.setChecked(True)
     opt_row.addWidget(cb_freeze)
+    # 「自动保存到日志文件」：勾上时点「完成」直接把记录写回选定的日志，不再弹完成页。
+    #   · 由项目窗口启动（on_saved 非空）→ 默认勾选，目标就是那个项目的日志文件；
+    #   · 从主页启动 → 没有「当前日志」，默认不勾选；**一勾上就先问「存到哪个日志」**
+    #     （复用完成页那套选择界面），选好之后点「完成」就直接写过去，不再问第二次。
+    cb_auto = QCheckBox('自动保存到日志文件')
+    cb_auto.setChecked(on_saved is not None)
+    if auto_target:
+        # 写中文原文，由 i18n 在窗口显示时统一翻译（别在这里先 tr，否则切回中文还原不回来）
+        cb_auto.setText('自动保存到日志文件（{}）'.format(auto_target))
+    # 主页启动时勾选后选定的去处（元组，见本模块顶部的「记录保存到哪儿」）
+    auto_pick = {'target': None}
+
+    def _on_auto_toggled(checked):
+        """主页启动的场景：勾上即问「保存到哪个日志」，取消则把勾去掉。"""
+        if not checked or on_saved is not None:
+            return
+        if auto_pick['target'] is not None:
+            return                      # 本次已经选过，别重复问
+        target = choose_save_target(window, '已录入的记录要保存到哪里？')
+        if target is None:
+            cb_auto.setChecked(False)   # 没选成 → 保持未勾选，完成时仍按原流程选保存方式
+            return
+        auto_pick['target'] = target
+        cb_auto.setText('自动保存到日志文件（{}）'.format(target_name(target)))
+
+    cb_auto.toggled.connect(_on_auto_toggled)
+    opt_row.addWidget(cb_auto)
     opt_row.addStretch(1)
     layout.addLayout(opt_row)
 
@@ -748,193 +1008,52 @@ def main(window, preset=None, on_saved=None, preset_records=None, recovered=Fals
 
         fhl_list = records  # 供下方保存逻辑使用（与旧逻辑保持一致）
 
-        # 若由卫星窗口（项目界面）传入 on_saved，则直接追加到项目文件，不弹保存方式选择
-        if on_saved is not None:
-            try:
-                on_saved(fhl_list)
-                QMessageBox.information(window, '完成',
-                                        f'已添加 {len(fhl_list)} 条记录到当前项目。')
+        # 「自动保存到日志文件」
+        #   · 由项目窗口启动（on_saved 非空）→ 直接追加到那个日志，不弹完成页；
+        #   · 从主页启动 → 勾选时就已经选好去处（auto_pick），直接写到那里。
+        # 写失败（例如目标项目窗口已被关掉）不吞掉记录：提示一句后落到下面的选择页，
+        # 让用户重新挑一个位置。
+        auto_save = cb_auto.isChecked()
+        auto_done = False
+        if auto_save:
+            if on_saved is not None:
+                try:
+                    on_saved(fhl_list)
+                except Exception as e:
+                    QMessageBox.warning(window, '保存失败',
+                                        f'添加到项目失败：\n{e}\n\n请在下一步选择保存位置。')
+                else:
+                    QMessageBox.information(window, '完成',
+                                            f'已添加 {len(fhl_list)} 条记录到当前项目。')
+                    auto_done = True
+            elif auto_pick['target'] is not None:
+                try:
+                    apply_save_target(auto_pick['target'], fhl_list)
+                except Exception as e:
+                    QMessageBox.warning(window, '保存失败',
+                                        f'保存失败：\n{e}\n\n请在下一步选择保存位置。')
+                else:
+                    QMessageBox.information(window, '完成',
+                                            done_message(auto_pick['target'], len(fhl_list)))
+                    auto_done = True
+            if auto_done:
                 _bk_after_save()
                 return True
-            except Exception as e:
-                QMessageBox.warning(window, '保存失败',
-                                    f'添加到项目失败：\n{e}')
-                return False
 
-        if not fhl_list:
-            QMessageBox.warning(window, "提示", "没有可保存的记录。")
+        # 没勾自动保存（或自动保存失败）→ 打开「保存到哪里」选择页：
+        # 与勾选时的提示是同一个界面，用户只会看到一种选择方式。
+        target = choose_save_target(
+            window, '已成功录入 {} 条记录'.format(len(fhl_list)))
+        if target is None:
+            return False                # 取消：窗口保持打开，记录还在
+        try:
+            apply_save_target(target, fhl_list)
+        except Exception as e:
+            QMessageBox.warning(window, '保存失败', f'保存失败：\n{e}')
             return False
-
-        def save_records_to_path(records, save_path, key=None, meta=None):
-            # 按扩展名分派：.fhla 连同属性块（最后编辑者/最后编辑时间/版本/加密状态）一起写，
-            # 其余（.fhl 等）与旧版完全一致。实现见 project.py「.fhla 文件格式」一节。
-            from f_hamlog import project   # 延迟导入：project 亦以延迟方式引用本模块
-            project.save_project_file(save_path, records, key, meta=meta)
-
-        def load_records_from_path(load_path):
-            """读项目文件 → (records, key, meta)；meta 只有 .fhla 才有，回写时原样带回。"""
-            if not os.path.exists(load_path):
-                return [], None, None
-            from f_hamlog import project
-            return project.read_project_file(load_path)
-
-        finish_dialog = QDialog(window)
-        finish_dialog.setWindowTitle('批量记录')
-        finish_dialog.setMinimumWidth(460)
-        finish_dialog.setModal(True)
-
-        finish_layout = QVBoxLayout(finish_dialog)
-        finish_layout.setSpacing(14)
-        finish_layout.setContentsMargins(20, 18, 20, 16)
-
-        summary_label = QLabel(f'已成功录入 {len(fhl_list)} 条记录，请选择保存方式：')
-        summary_label.setAlignment(Qt.AlignCenter)
-        summary_label.setStyleSheet('font-size: 10pt; color: %s;'
-                                    % theme.hint_color().name())
-        finish_layout.addWidget(summary_label)
-
-        finish_layout.addSpacing(6)
-
-        grid = QGridLayout()
-        grid.setSpacing(10)
-        grid.setColumnStretch(0, 1)
-        grid.setColumnStretch(1, 1)
-
-        def add_to_project():
-            from f_hamlog import project   # 延迟导入：project 亦以延迟方式引用本模块
-            project_path, _ = QFileDialog.getOpenFileName(
-                finish_dialog,
-                i18n.tr('添加到 F HamLog项目'),
-                desktop_dir(),
-                i18n.tr(project.OPEN_FILTER_BOTH)
-            )
-            if project_path == '':
-                return
-            records, key, meta = load_records_from_path(project_path)
-            records = list(records or [])
-            records.extend(fhl_list)
-            save_records_to_path(records, project_path, key, meta)
-            QMessageBox.information(finish_dialog, '完成', f'已添加 {len(fhl_list)} 条记录到项目。')
-            finish_dialog.accept()
-
-        def save_as_project():
-            from f_hamlog import project   # 延迟导入：project 亦以延迟方式引用本模块
-            save_path, sel = QFileDialog.getSaveFileName(
-                finish_dialog,
-                i18n.tr('另存为 F HamLog项目'),
-                desktop_dir(),
-                project.project_save_filters()   # 默认 .fhla；想存纯记录切到 .fhl 那条
-            )
-            if save_path == '':
-                return
-            save_path = project.complete_project_suffix(save_path, sel)
-            save_records_to_path(fhl_list, save_path)
-            QMessageBox.information(finish_dialog, '完成', f'已另存为项目文件：{save_path}')
-            finish_dialog.accept()
-
-        def add_to_default_log():
-            default_path = app_path('file/main.fhl')   # 数据目录下的绝对路径，勿用 cwd 相对路径
-            records, key, meta = load_records_from_path(default_path)
-            records = list(records or [])
-            records.extend(fhl_list)
-            save_records_to_path(records, default_path, key, meta)
-            QMessageBox.information(finish_dialog, '完成', f'已添加 {len(fhl_list)} 条记录到默认通联日志')
-            finish_dialog.accept()
-
-        def add_to_multiplayer():
-            """把本次批量记录追加到指定的多人日志服务端（连接后拉取现有日志再整体保存）。"""
-            dlg2 = QDialog(finish_dialog)
-            dlg2.setWindowTitle('添加到多人日志')
-            dlg2.resize(360, 200)
-            v = QVBoxLayout(dlg2)
-            host_e = QLineEdit(); host_e.setPlaceholderText('服务端地址（IP 或域名）')
-            port_e = QLineEdit('8000')
-            pw_e = QLineEdit(); pw_e.setEchoMode(QLineEdit.Password); pw_e.setPlaceholderText('密码（可留空）')
-            btn_tgl = QPushButton('显示/隐藏')
-            def _tgl():
-                if pw_e.echoMode() == QLineEdit.Password:
-                    pw_e.setEchoMode(QLineEdit.Normal)
-                else:
-                    pw_e.setEchoMode(QLineEdit.Password)
-            btn_tgl.clicked.connect(_tgl)
-            r1 = QHBoxLayout(); r1.addWidget(QLabel('服务端：')); r1.addWidget(host_e, 1)
-            r2 = QHBoxLayout(); r2.addWidget(QLabel('端口：')); r2.addWidget(port_e, 1)
-            r3 = QHBoxLayout(); r3.addWidget(QLabel('密码：')); r3.addWidget(pw_e, 1); r3.addWidget(btn_tgl)
-            v.addLayout(r1); v.addLayout(r2); v.addLayout(r3)
-            bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-            bb.accepted.connect(dlg2.accept); bb.rejected.connect(dlg2.reject)
-            v.addWidget(bb)
-            if dlg2.exec() != QDialog.Accepted:
-                return
-            host = host_e.text().strip()
-            if not host:
-                QMessageBox.warning(finish_dialog, '添加到多人日志', '请输入服务端地址。')
-                return
-            try:
-                port = int(port_e.text().strip() or '8000')
-            except ValueError:
-                port = 8000
-            password = pw_e.text()
-            # 复用 project.RemoteConnection（同一份客户端逻辑，功能只写一次）
-            try:
-                from f_hamlog.project import RemoteConnection
-            except Exception as e:
-                QMessageBox.warning(finish_dialog, '添加到多人日志', f'无法加载多人日志客户端：{e}')
-                return
-            conn = RemoteConnection(host, port, password, role='guest')
-            try:
-                conn.connect()   # 连接并拉取服务端现有日志
-                merged = list(conn.initial_file) + list(fhl_list)
-                conn.send_save(merged)
-                # 等服务端回 OK 再关闭，避免立即关闭触发 RST
-                try:
-                    conn.sock.settimeout(5.0)
-                    from f_hamlog.remote_server import recv_frame
-                    while True:
-                        f = recv_frame(conn.sock)
-                        if f is None or f[0] == 'OK':
-                            break
-                except Exception:
-                    pass
-                conn.close()
-            except Exception as e:
-                try:
-                    conn.close()
-                except Exception:
-                    pass
-                QMessageBox.warning(finish_dialog, '添加到多人日志', f'添加失败：{e}')
-                return
-            QMessageBox.information(finish_dialog, '完成',
-                f'已添加 {len(fhl_list)} 条记录到多人日志（{host}:{port}）。')
-            finish_dialog.accept()
-
-        btn_project = QPushButton('添加到 F HamLog 项目')
-        btn_save_as = QPushButton('另存为 F HamLog 项目')
-        btn_default = QPushButton('添加到默认通联日志')
-        btn_multi = QPushButton('添加到多人日志')
-        for _b in (btn_project, btn_save_as, btn_default, btn_multi):
-            _b.setMinimumHeight(38)
-        btn_project.clicked.connect(add_to_project)
-        btn_save_as.clicked.connect(save_as_project)
-        btn_default.clicked.connect(add_to_default_log)
-        btn_multi.clicked.connect(add_to_multiplayer)
-        grid.addWidget(btn_project, 0, 0)
-        grid.addWidget(btn_save_as, 0, 1)
-        grid.addWidget(btn_default, 1, 0)
-        grid.addWidget(btn_multi, 1, 1)
-        finish_layout.addLayout(grid)
-
-        finish_layout.addStretch(1)
-
-        cancel_button = QPushButton('取消')
-        cancel_button.setFixedWidth(96)
-        cancel_button.clicked.connect(finish_dialog.reject)
-        finish_layout.addWidget(cancel_button, alignment=Qt.AlignRight)
-
-        if finish_dialog.exec() == QDialog.Accepted:
-            _bk_after_save()
-            return True
-        return False
+        QMessageBox.information(window, '完成', done_message(target, len(fhl_list)))
+        _bk_after_save()
+        return True
 
     # 按钮区（按钮文字与提示中显示对应快捷键，方便查看）
     btn_row = QHBoxLayout()

@@ -30,6 +30,9 @@
 - 显示名：`.fhla` = **F HamLog 项目**，`.fhl` = **F HamLog 兼容项目**；菜单动作名不改。
 - **保存默认 `.fhla`**：`project_save_filters()` 首条 + `complete_project_suffix()`；`*.fhl` 是 `*.fhla` 前缀
   → **先判 `.fhla`**。
+- **`.adi` = 第三种可打开格式**（2026-11-15）：`is_adi_path()`（认 `.adi`/`.adif`）→ 读 `input_adi.
+  read_adi_records`、写 `export_adi.write_adif_file`（导入/导出/直开三处共用同一实现）；无属性块、无加密；
+  **打开后没改动就不写盘**（ADIF 重写会丢未映射标签）。
 - **打开 `.fhl` 每次问「迁移 / 暂不迁移」**（无开关）：迁移 = 写同名 `.fhla`（读回校验条数）→ 删原 `.fhl`，
   失败不挡打开；`default_quick_project_path()` 优先 `main.fhla` → `main.fhl`。
 - `encrypted` 只是声明，**以字节能否 UTF-8 解为准**；**不记「创建者 / 创建时间」**；**「打开即自动保存」不算
@@ -42,6 +45,18 @@
 - 含**标准 20 行**；**该表顺序 = 新建行序 = 更多信息行序 = 主页列序** → 呼号大写委托**按 key 找行号**。
 - 「必填」「在主页显示」**所有字段可改**，**xml 只记偏离默认的键**；落 `other_item` + `field_order` +
   `field_meta`；**「恢复默认」只重置表格，点保存才写盘**；**`.fhl` 一律不给**。
+
+## 多项目并存 / 窗口私有状态（2026-11-15）
+- **记录列表 / 密钥 / 子窗口引用属于单个窗口**：`project.main()` 里是局部变量（闭包 `nonlocal`），
+  换列表走 `_set_file()`、换密钥走 `_set_key()`。模块级 `file` / `key` / `project_others_window` /
+  `custom_fields_window` **只是「最近一个窗口」的镜像**（给 tests 观察），**逻辑里一律不许读**；
+  否则多项目并存时又会串数据。
+- 项目窗口**可以多开**（`main.py: project_windows` + `_new_project_window()`），别再写「只留一个
+  project_window、靠丢引用回收旧窗口」那套。
+- 未保存备份**按项目文件路径分开**：`backup.project_backup_path(save_path)`（未落盘的项目仍用
+  公共 `PROJECT_BACKUP`）；启动恢复用 `backup.list_project_backups()` 逐个恢复。
+- 批量记录「自动保存到日志文件」：默认勾选 = 调用方给了 `on_saved`（从项目窗口启动）；
+  主页启动默认不勾，勾上后仍走「完成」页选日志。复选框文案写**中文原文**，由 i18n 显示时翻。
 
 ## 主题 / 对话框 / i18n
 - 浅深**一律原生调色板**：不建兜底色、不上全局 QSS、不用 `Fusion`；颜色走 `theme.hint_css()/warn_css()/
@@ -104,7 +119,8 @@
 ## 多人日志 / 服务端
 - **`remote_crypto.py` 是密码学唯一出处**（全帧加密、nonce 滑窗防重放、服务端先说话）；**退出必走
   `RemoteConnection.shutdown()`**；Qt 关窗只隐藏不触发 `destroyed`；独立服务端目录**自带两份副本 → 改协议须
-  三份同步**；`main.py` 只留一个 `project_window`，须保留 `_confirm_replace_session()`。
+  三份同步**；`main.py` 用 `project_windows` 持有**全部**项目窗口（旧窗口不再被回收），
+  `_confirm_replace_session()` 保留为恒 True 的空壳。
 - 服务端 exe：启动即建 `keys/`、`main.fhl`、`password_xml.txt`；`_app_dir()` **不能信 `sys.executable`**；带
   `--windows-uac-admin`，端到端验证要另打**去掉 uac-admin** 的临时包。
 

@@ -21,6 +21,37 @@ window = None
 project_window = None
 batch_window = None
 set_window = None
+# **所有**已打开的项目窗口。project_window 只是「最近一个」，这里才是全量：
+# 2026-11-15 起项目可以多开（各窗口的日志/密钥已是窗口私有的），这里持有强引用，
+# 让「打开第二个项目不会顺手关掉第一个」，也便于统一检查多人日志会话。
+project_windows = []
+
+
+def _window_alive(win):
+    """窗口的 C++ 对象是否还活着（关掉/销毁后不能再碰）。"""
+    if win is None:
+        return False
+    try:
+        win.windowTitle()
+        return True
+    except Exception:
+        return False
+
+
+def _prune_project_windows():
+    """丢掉已销毁的项目窗口引用，返回当前仍活着的窗口列表。"""
+    global project_windows
+    project_windows = [w for w in project_windows if _window_alive(w)]
+    return project_windows
+
+
+def _new_project_window():
+    """新建一个项目窗口并登记：project_window = 最近一个，project_windows = 全量。"""
+    global project_window, project_windows
+    _prune_project_windows()
+    project_window = QMainWindow()
+    project_windows.append(project_window)
+    return project_window
 
 
 def _cleanup_remote_rooms(days=1):
@@ -104,38 +135,22 @@ def main():
     _cleanup_remote_rooms(days=1)
 
     def _confirm_replace_session():
-        """打开新的项目窗口前先确认。
+        """打开新窗口前不再需要「结束多人日志」确认。
 
-        main() 只保存一个项目窗口引用（project_window），创建新窗口会让旧窗口失去
-        引用而被回收；若旧窗口正作为多人日志的服务端/客户端，会话（含内嵌服务端）
-        就会被静默结束——其他端看不到任何日志更新，表现为「日志无法同步」。
+        旧实现只保存一个 project_window 引用：打开第二个项目会让第一个窗口失去引用、
+        连同其中正在跑的多人日志会话（含内嵌服务端）一起被回收，所以要在这里拦一句。
+
+        现在**所有项目窗口都被持有**（见 project_windows），打开新项目不会关掉旧项目，
+        会话自然继续 —— 这个确认已无必要，保留函数名只是为了调用点不用改。
         """
-        global project_window
-        win = project_window
-        if win is None:
-            return True
-        try:
-            conn = getattr(win, '_remote', None)
-            in_session = conn is not None
-        except Exception:
-            return True
-        if not in_session:
-            return True
-        role = '服务端' if getattr(win, '_is_host', False) else '客户端'
-        addr = f'{getattr(conn, "host", "?")}:{getattr(conn, "port", "?")}'
-        return QMessageBox.question(
-            window, '结束多人日志',
-            f'当前项目窗口正作为多人日志{role}（{addr}）。\n'
-            '打开新窗口会结束这个会话，其他用户将无法再与之同步日志。\n\n是否继续？'
-        ) == QMessageBox.Yes
+        return True
 
     def quick_project():
         print("通联日志")
         from f_hamlog import project
         if not _confirm_replace_session():
             return
-        global project_window  # 保持引用，防止被回收
-        project_window = QMainWindow()
+        _new_project_window()
         # 优先 .fhla（迁移后的正式格式），没有才退回老的 main.fhl
         save_path = default_quick_project_path()
         print(save_path)
@@ -153,8 +168,7 @@ def main():
         from f_hamlog import project
         if not _confirm_replace_session():
             return
-        global project_window  # 保持引用，防止被回收
-        project_window = QMainWindow()
+        _new_project_window()
         project.main(project_window)
 
     def open_project():
@@ -164,7 +178,7 @@ def main():
             window,  # 父窗口
             i18n.tr("打开项目"),  # 对话框标题
             desktop_dir(),  # 初始目录：桌面
-            i18n.tr(project.OPEN_FILTER_BOTH)  # 合并过滤器：.fhla 与 .fhl 一次看全
+            project.project_open_filters()  # 三条：所有支持的文件 / 项目 / ADI
         )
         if save_path == '':
             return
@@ -180,8 +194,7 @@ def main():
         # 迁移成功就用新路径 + 新属性块打开，窗口此后的保存直接落到 .fhla。
         save_path, fhla_meta = project.offer_migration(window, save_path, data,
                                                        key=key, meta=fhla_meta)
-        global project_window  # 保持引用，防止被回收
-        project_window = QMainWindow()
+        _new_project_window()
         project.main(project_window, data, save_path, key_=key, fhla_meta=fhla_meta)
 
     def join_server():
@@ -244,15 +257,14 @@ def main():
         except Exception as e:
             QMessageBox.warning(window, '加入失败', f'无法连接服务端：{e}')
             return
-        # 旧的 project_window 若正在会话中，直接替换会把它连同会话一起回收 → 先确认
+        # 已在多人日志会话中的旧窗口不会被关掉（见 project_windows），直接开新窗口即可
         if not _confirm_replace_session():
             try:
                 conn.shutdown()
             except Exception:
                 pass
             return
-        global project_window  # 保持引用，防止被回收
-        project_window = QMainWindow()
+        _new_project_window()
         # 直接进入项目窗口（不再弹「已加入」提示）；
         # 加入后可在「多人日志 → 多人日志管理」查看在线设备。
         project.main(project_window, filee=conn.initial_file, key_=None, remote=conn)
@@ -477,9 +489,9 @@ def main():
     def _check_recovery():
         from f_hamlog import project
         from f_hamlog import batch_project
-        items = []
-        if backup.is_backup_nonempty(backup.PROJECT_BACKUP):
-            items.append(('project', backup.PROJECT_BACKUP))
+        # 项目备份是**按项目分开的**（backup.project_backup_path）：多个项目窗口并存时
+        # 各写各的文件，这里把非空的全部列出来逐个恢复，不会只恢复「最后写备份的那个」。
+        items = [('project', p) for p in backup.list_project_backups()]
         if backup.is_backup_nonempty(backup.BATCH_BACKUP):
             items.append(('batch', backup.BATCH_BACKUP))
         if not items:
@@ -499,8 +511,7 @@ def main():
                     data, key = fhl_rw.read_fhl_file(path)
                     if data is None:
                         continue
-                    global project_window
-                    project_window = QMainWindow()
+                    _new_project_window()
                     project.main(project_window, data, '', key_=key, recovered=True)
                 else:
                     data, _ = fhl_rw.read_fhl_file(path)

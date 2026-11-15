@@ -24,8 +24,9 @@ TRANSLATIONS = {
     '保存更改': 'Save changes',
     '保存并退出': 'Save and exit',
     '另存为': 'Save as',
-    '另存为 F HamLog 项目': 'Save as F HamLog project',
+    '另存为日志文件': 'Save as log file',
     '取消': 'Cancel',
+    '确定': 'OK',
     '关闭': 'Close',
     '删除': 'Delete',
     '删除选中': 'Delete selected',
@@ -70,7 +71,7 @@ TRANSLATIONS = {
     '开放多人日志': 'Host online log',
     '关闭多人日志': 'Close online log',
     '加入多人日志': 'Join online log',
-    '添加到 F HamLog 项目': 'Add to F HamLog project',
+    '添加到日志文件': 'Add to log file',
     '添加到默认通联日志': 'Add to default log',
     '添加到多人日志': 'Add to online log',
     '定位': 'Locate',
@@ -258,6 +259,9 @@ TRANSLATIONS = {
     '字段：': 'Field:',
     '显示:': 'Show:',
     '固定模板列': 'Freeze template column',
+    # 批量记录的「自动保存到日志文件」：勾上时「完成」直接写回启动它的那个日志
+    '自动保存到日志文件': 'Save to log file automatically',
+    '自动保存到日志文件（{}）': 'Save to log file automatically ({})',
     '使用卫星编号搜索': 'Search by NORAD ID',
     '搜索卫星名…': 'Search satellite name…',
     '搜索卫星名或编号…': 'Search satellite name or ID…',
@@ -465,6 +469,13 @@ TRANSLATIONS = {
     'F HamLog 项目 (*.fhla *.fhl)': 'F HamLog project (*.fhla *.fhl)',
     'F HamLog 项目 (*.fhla *.fhl);;All Files (*)':
         'F HamLog project (*.fhla *.fhl);;All Files (*)',
+    # 2026-11-15：.adi 支持直接打开 / 编辑 / 保存
+    'ADI 日志 (*.adi)': 'ADI log (*.adi)',
+    # 「打开」对话框的三条过滤器（2026-11-15 起可分类筛选）
+    '所有支持的文件 (*.fhla *.fhl *.adi)':
+        'All supported files (*.fhla *.fhl *.adi)',
+    'F HamLog 项目文件 (*.fhla *.fhl)': 'F HamLog project files (*.fhla *.fhl)',
+    'ADI 文件 (*.adi)': 'ADI files (*.adi)',
     '另存为 F HamLog项目': 'Save as F HamLog project',
     '添加到 F HamLog项目': 'Add to F HamLog project',
     # 打开 .fhl 时的迁移提示
@@ -666,8 +677,10 @@ TRANSLATIONS = {
     '已保存到服务端！': 'Saved to the server!',
     '已保存到服务端，多人日志已关闭。': 'Saved to the server; online log closed.',
     '无法保存到服务端：{}': 'Cannot save to the server: {}',
-    '已成功录入 {} 条记录，请选择保存方式：':
-        '{} record(s) entered. Choose how to save:',
+    # 批量记录「完成页 / 自动保存选位置」共用的选择页（2026-11-15 定稿：
+    # 只有标题 + 四条单选项，不摆灰色说明文字）
+    '已成功录入 {} 条记录': '{} record(s) entered',
+    '已录入的记录要保存到哪里？': 'Where should these records be saved?',
     '检测到 {} 条导入记录与现有记录重复。请选择处理方式：':
         '{} imported record(s) duplicate existing ones. Choose how to handle them:',
     '已导出 {} 条记录到：\n{}\n\n可用 TQSL 打开该 ADIF 文件进行签名，再上传到 LoTW。':
@@ -881,6 +894,9 @@ TRANSLATIONS = {
     '.fhl 是纯记录格式，不含编辑者、编辑时间、版本、加密状态等属性。':
         '.fhl is a records-only format; it carries no editor/edited-time/version/encryption '
         'properties.',
+    'ADI 是通用日志交换格式，不含编辑者、编辑时间、版本、加密状态等属性。':
+        'ADI is a generic log interchange format; it carries no '
+        'editor/edited-time/version/encryption properties.',
     '请「另存为」带属性的 .fhla 项目文件后再查看。':
         'Please use "Save As" to write a .fhla project file first, then check again.',
 
