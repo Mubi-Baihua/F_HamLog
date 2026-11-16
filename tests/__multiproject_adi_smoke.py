@@ -175,6 +175,47 @@ ok('M7 A 文件已落盘 3 条', _calls(_read(A)) == ['BG1A1', 'BG1A2', 'BG1A3']
 ok('M8 B 文件一条都没变', _calls(_read(B)) == ['BG2B1', 'BG2B2', 'BG2B3'],
    str(_calls(_read(B))))
 
+# 同一个文件被两个窗口打开（主页点两次「通联日志」就会这样）：一个窗口写盘后，
+# 另一个窗口的内存必须跟上；否则它下一次自动保存会拿旧内容把新记录整份覆盖，
+# 表现成「批量记录的自动保存没生效」。
+S = os.path.join(TMP, 'same.fhla')
+project.save_project_file(S, [_rec('BG5S1')])
+win_s1 = QtWidgets.QMainWindow()
+project.main(win_s1, [_rec('BG5S1')], S)
+pump()
+win_s2 = QtWidgets.QMainWindow()
+project.main(win_s2, [_rec('BG5S1')], S)
+pump()
+api_s1 = win_s1._perf_api
+api_s2 = win_s2._perf_api
+api_s1['append_to_project']([_rec('BG5S2')])
+pump(3)
+ok('M9 同一文件的两个窗口：一个追加后，另一个的内存自动跟上',
+   _calls(api_s2['get_file']()) == ['BG5S1', 'BG5S2'],
+   str(_calls(api_s2['get_file']())))
+api_s2['save']()
+pump(3)
+ok('M10 另一个窗口的保存不会把刚追加的记录覆盖掉',
+   _calls(_read(S)) == ['BG5S1', 'BG5S2'], str(_calls(_read(S))))
+
+# 磁盘被外部（别的进程 / 编辑器）改过、本窗口没动过内容 → 静默保存应改读磁盘
+project.save_project_file(S, [_rec('BG5S1'), _rec('BG5S3')])
+api_s2['table_update']()
+pump(3)
+ok('M11 磁盘被外部改过时，静默保存以磁盘为准（不写回旧内容）',
+   _calls(_read(S)) == ['BG5S1', 'BG5S3']
+   and _calls(api_s2['get_file']()) == ['BG5S1', 'BG5S3'],
+   'disk=%s mem=%s' % (_calls(_read(S)), _calls(api_s2['get_file']())))
+
+# 另一个窗口正在编辑（内存有未保存改动）时，别人的写入不能把它吞掉
+api_s2['get_file']().append(_rec('BG9EDIT'))
+api_s1['append_to_project']([_rec('BG5S4')])
+pump(3)
+ok('M12 有未保存改动的窗口不会被别人的写入整份重载（编辑不丢）',
+   'BG9EDIT' in _calls(api_s2['get_file']())
+   and 'BG9EDIT' not in _calls(_read(S)),
+   'mem=%s disk=%s' % (_calls(api_s2['get_file']()), _calls(_read(S))))
+
 # ==========================================================================
 # B. 批量记录：自动保存到「启动它的那个日志」
 # ==========================================================================
@@ -249,8 +290,8 @@ batch_project.choose_save_target = lambda parent, heading: ('default', HOME_LOG)
 cbs2[0].setChecked(True)
 pump(3)
 batch_project.choose_save_target = _real_choose
-ok('B14 选好目标后复选框显示日志名',
-   os.path.basename(HOME_LOG) in cbs2[0].text(), cbs2[0].text())
+ok('B14 选「默认通联日志」后复选框**不带**文件名（定稿：默认去处不挂 main.fhla）',
+   cbs2[0].text() == '自动保存到日志文件', cbs2[0].text())
 
 tbl2 = bw2.findChild(QTableWidget)
 _fill_log_col(tbl2, batch_project.KEYS,
@@ -268,6 +309,21 @@ ok('B16 不再弹选择页（目标已在勾选时定好）', not DIALOG_TEXTS, 
 ok('B17 没有偷偷写到别的日志',
    'BG8YYY' not in _calls(_read(A)) and 'BG8YYY' not in _calls(_read(B)),
    str(_calls(_read(A))))
+
+# 只有「选具体文件」才在复选框上挂日志名（默认通联日志是固定去处，不挂）
+APP_LOG = os.path.join(TMP, 'app_log.fhla')
+project.save_project_file(APP_LOG, [])
+bw4 = QtWidgets.QMainWindow()
+batch_project.main(bw4)
+pump(3)
+cb4 = [c for c in bw4.findChildren(QCheckBox)
+       if c.text().startswith('自动保存到日志文件')][0]
+batch_project.choose_save_target = lambda parent, heading: ('append', APP_LOG)
+cb4.setChecked(True)
+pump(3)
+batch_project.choose_save_target = _real_choose
+ok('B17b 选具体日志文件时复选框显示日志名',
+   os.path.basename(APP_LOG) in cb4.text(), cb4.text())
 
 # 不勾「自动保存」时点「完成」→ 同一个选择页（标题换成「已成功录入 N 条记录」）
 bw3 = QtWidgets.QMainWindow()

@@ -681,6 +681,11 @@ TRANSLATIONS = {
     # 只有标题 + 四条单选项，不摆灰色说明文字）
     '已成功录入 {} 条记录': '{} record(s) entered',
     '已录入的记录要保存到哪里？': 'Where should these records be saved?',
+    # 批量记录「自动保存到日志文件」的边改边写（实时同步）
+    '实时同步失败：{}': 'Live sync failed: {}',
+    '无法读取目标日志': 'Cannot read the target log',
+    '实时同步没有成功，请在下一步选择保存位置。':
+        'Live sync did not succeed. Choose where to save in the next step.',
     '检测到 {} 条导入记录与现有记录重复。请选择处理方式：':
         '{} imported record(s) duplicate existing ones. Choose how to handle them:',
     '已导出 {} 条记录到：\n{}\n\n可用 TQSL 打开该 ADIF 文件进行签名，再上传到 LoTW。':

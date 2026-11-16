@@ -1029,6 +1029,68 @@ except Exception:  # pragma: no cover - 极端情况下退化为仅判 None
     def _qt_alive(widget):
         return widget is not None
 
+# ---------------------------------------------------------------------------
+# 同一个项目文件可能被**多个窗口**同时打开（多项目并存 / 批量记录往当前项目里写）。
+# 每个窗口打开时记下磁盘文件的指纹，写盘前再比一次：指纹变了说明文件已经被别人写过，
+# 内存里的内容就是过期的 —— 此时若照旧「首次保存必执行」，会拿旧内容整份覆盖别人的
+# 新增，表现为「批量记录的『自动保存到日志文件』看起来没生效」。
+# ---------------------------------------------------------------------------
+_doc_windows = []   # [{'window': 窗口, 'path': 取当前路径, 'reload': 重新读盘}]，进程内共享
+_notify_busy = False   # 防止 A 通知 B、B 通知 A 的互相重载循环
+
+
+def _file_stamp(path):
+    """磁盘文件指纹 ``(mtime_ns, size)``；文件不存在 / 无法 stat 时返回 None。"""
+    if not path:
+        return None
+    try:
+        st = os.stat(path)
+    except Exception:
+        return None
+    return (st.st_mtime_ns, st.st_size)
+
+
+def _same_file(a, b):
+    """两个路径是否指向同一个文件（大小写 / 相对路径不敏感）。"""
+    if not a or not b:
+        return False
+    try:
+        return os.path.normcase(os.path.abspath(a)) == os.path.normcase(os.path.abspath(b))
+    except Exception:
+        return a == b
+
+
+def notify_file_changed(path, skip=None):
+    """某个项目文件刚被本进程内的另一处写过（批量记录 / 另一个项目窗口）。
+
+    让正打开该文件的项目窗口重新读盘，避免它们之后用自己的旧内容把文件覆盖。
+    ``skip``：发起写入的窗口，不通知自己。
+    """
+    global _notify_busy
+    if not path or _notify_busy:
+        return
+    _notify_busy = True
+    try:
+        for entry in list(_doc_windows):
+            w = entry.get('window')
+            if w is skip:
+                continue
+            if w is not None and not _qt_alive(w):
+                try:
+                    _doc_windows.remove(entry)
+                except ValueError:
+                    pass
+                continue
+            try:
+                if not _same_file(entry['path'](), path):
+                    continue
+                entry['reload']()
+            except Exception:
+                pass
+    finally:
+        _notify_busy = False
+
+
 def _ensure_log_keys(entry):
     # 确保单条记录包含新加的字段
     for k in ['freq_rx', 'prop_mode', 'sat_name']:
@@ -1675,6 +1737,9 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
     # 本会话最近一次「真正写到本机文件」的路径与内容：用于跳过重复的整份重写，
     # 又不会误跳过首次保存（详见 save() 内注释）。
     _last_written = {'path': None, 'snap': None}
+    # 当前文件在本窗口「打开时 / 上次写盘后」的磁盘指纹：写盘前再比一次，用来发现
+    # 「文件已经被别的窗口或批量记录写过」（详见 save() 内的外部改动检查）。
+    _disk = {'path': save_path or None, 'stamp': _file_stamp(save_path)}
 
     # ---------- .fhla 扩展格式的属性（上一次编辑者 / 上一次编辑时间 / 上次打开版本 / 加密状态） ----------
     # 属性只在「保存成 .fhla」时写入磁盘；.fhl 保持原样，不给老文件引入新结构
@@ -2064,10 +2129,11 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         tbl.setItemDelegateForColumn(len(headers) - 1, MoreButtonDelegate(tbl))
         return tbl
 
-    def _fill_rows(tbl, rows, more_cb):
-        """把 rows（每条为 (记录 dict, ...)）批量填进表格。
+    def _fill_rows(tbl, rows, more_cb, start=0):
+        """把 rows（每条为 (记录 dict, ...)）批量填进表格，从第 start 行开始。
 
         more_cb(row) 接收行号——「更多」委托按点击到的 index.row() 回调，无需逐行设回调。
+        start 用于「末尾追加几行」：批量记录边记边同步时只补新行，不重建整表。
 
         写法上**每行先把 item 建齐、再逐个挂上**：比「建一个挂一个」少一半
         `setItem` 属性查找，1 万行 × 14 列实测 0.41 s → 0.36 s（约 12%）。
@@ -2088,7 +2154,7 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         gc_was_enabled = gc.isenabled()
         gc.disable()
         try:
-            for r, pair in enumerate(rows):
+            for r, pair in enumerate(rows, start=start):
                 rec = pair[0]
                 items = [Item()]         # 第 0 列：勾选列（状态由 _CHECK_ROLE 承载）
                 items[0].setData(_CHECK_ROLE, False)
@@ -2526,6 +2592,18 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
             # 「普通项目打开即自动保存一次」的既有行为。
             # 比较用值快照（15 ms/5 万条），不再把整份内容序列化成字符串。
             _cur = _content_snap() if not message else None
+            # 外部改动检查要放在「内容没变就跳过」**之前**：本窗口没变，不代表磁盘没变
+            # （别的窗口 / 批量记录刚写过这个文件）。
+            #   · 本窗口没改过内容 → **不写盘**，改为把磁盘内容读回来；否则就是拿过期
+            #     内存整份覆盖别人刚写进去的记录（用户看到的就是「自动保存没生效」）。
+            #   · 本窗口也改过 → 仍以本窗口内容为准（自己的改动优先），写完对齐指纹。
+            if not message and _same_file(_disk['path'], save_path) \
+                    and _disk['stamp'] is not None:
+                _now_stamp = _file_stamp(save_path)
+                if _now_stamp is not None and _now_stamp != _disk['stamp']:
+                    if _cur == _fhla['open_snap'] and not _fhla['dirty']:
+                        if _reload_from_disk(save_path):
+                            return True
             if not message and _last_written.get('path') == save_path \
                     and _last_written.get('snap') == _cur:
                 return True
@@ -2542,6 +2620,59 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
             if message:
                 toast_tip.show_toast("保存成功！", window)
         return True
+
+    def _reload_from_disk(path):
+        """把磁盘上的最新内容读回内存并刷新表格；成功返回 True。
+
+        用在「文件已被别的窗口 / 批量记录写过、而本窗口没动过内容」的时候：
+        读回来就不会拿过期内存整份覆盖别人刚写进去的记录。读不回来（加密项目密钥
+        不匹配 / 文件损坏）时返回 False，让调用方按原流程继续（宁可照旧保存）。
+        """
+        if not path:
+            return False
+        # 正开着单元格编辑器（输入还没提交进 model）时也别重载：重建表格会把
+        # 输入框连同用户刚敲的内容一起销毁。
+        try:
+            if table is not None and table.state() == QAbstractItemView.EditingState:
+                return False
+        except Exception:
+            pass
+        # 本窗口还有未保存的改动时**不重载**：别人的写入不能吞掉用户正在编辑的内容
+        # （返回 False，让调用方按自己内存里的内容处理——自己的改动优先）。
+        if _content_snap() != _bk_state['last']:
+            return False
+        try:
+            recs, _k, _m = read_project_file(path, key=key, ask_key=False)
+        except Exception:
+            return False
+        if recs is None:
+            return False
+        _set_file(recs)
+        _upgrade_file_records(file)
+        if is_fhla_path(path) and isinstance(_m, dict):
+            _fhla['meta'] = dict(_m)      # 属性块（上一次编辑者 / 时间 / 版本）也跟着更新
+        _fhla['dirty'] = False
+        snap = _content_snap()
+        _fhla['open_snap'] = [dict(r) for r in snap]
+        _bk_state['last'] = [dict(r) for r in snap]
+        _bk_state['local'] = [dict(r) for r in snap]
+        # 内存内容已经等于磁盘内容：对齐「已写入」与指纹，后面 table_update 触发的
+        # 静默保存会照常跳过，不会把刚读回来的内容再写一遍。
+        _last_written['path'] = path
+        _last_written['snap'] = snap
+        _disk['path'] = path
+        _disk['stamp'] = _file_stamp(path)
+        table_update()
+        return True
+
+    # 登记本窗口：别的写入方（批量记录 / 另一个项目窗口）写同一文件时通知本窗口重载。
+    # 重复对同一 window 调 main() 时先摘掉旧条目，避免一个窗口被注册两次。
+    _doc_windows[:] = [e for e in _doc_windows if e.get('window') is not window]
+    _doc_windows.append({
+        'window': window,
+        'path': lambda: save_path,
+        'reload': lambda: _reload_from_disk(save_path),
+    })
 
     def _write_project_file(path, snap=None):
         """把当前 file 写到 path，并记录「本会话已写入」的路径与内容（供 save() 跳过重复写）。
@@ -2571,7 +2702,52 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         # 记录“已写入内容”，供调用方的 _bk_snapshot 复用
         _last_written['path'] = path
         _last_written['snap'] = snap
+        # 对齐磁盘指纹，并通知**也打开着同一文件**的其他窗口重新读盘：
+        # 它们内存里还是写盘前的内容，不重载就会在下一次自动保存时把它整份覆盖。
+        _disk['path'] = path
+        _disk['stamp'] = _file_stamp(path)
+        notify_file_changed(path, skip=window)
         return snap
+
+    def _append_table_rows(start, end):
+        """把 ``file[start:end]`` 追加进表格末尾（不重建整表）。"""
+        table.setUpdatesEnabled(False)
+        try:
+            table.setRowCount(end)
+            _fill_rows(table, [(file[i],) for i in range(start, end)],
+                       project_others, start=start)
+        finally:
+            table.setUpdatesEnabled(True)
+
+    def _table_sync_from_file(old):
+        """记录列表变了之后刷新表格：能就地改就别整表重建。
+
+        批量记录「自动保存」每记一条都会走到这里。1 万条日志整表重建约 0.6 s，
+        边打边记时用户会明显感到一顿；而三种常见改动都有便宜得多的做法：
+          · 只改了几条（同一位置上就地更新）→ table_refresh_row 刷那几行；
+          · 末尾追加了几条 → 只把新行填进表格；
+          · 其它（删除 / 行数变少 / 顺序或日期时间变了）→ 整表重建（保留滚动位置）。
+        表格刷新失败一律退回整表重建，宁可慢一点也不能显示错内容。
+        """
+        try:
+            n_old, n_new = len(old), len(file)
+            if n_old == n_new:
+                diff = [i for i in range(n_new) if old[i] != file[i]]
+                if not diff:
+                    return                  # 内容没变（例如只同步了属性块）→ 不用重画
+                # 日期 / 时间是排序键：改过就必须重建，否则行序会和列表不一致
+                moved = any(old[i].get('date') != file[i].get('date')
+                            or old[i].get('time') != file[i].get('time')
+                            for i in diff)
+                if not moved and len(diff) <= 64:
+                    if all(table_refresh_row(i) for i in diff):
+                        return
+            elif n_new > n_old and file[:n_old] == old:
+                _append_table_rows(n_old, n_new)   # 纯追加：只补新行
+                return
+        except Exception:
+            pass
+        table_update(persist=False)
 
     def osave():
         import json
@@ -4025,10 +4201,51 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         _bk_snapshot()
 
     def _batch_log_name():
-        """批量记录窗口上「自动保存到日志文件（…）」里显示的日志名。"""
-        if save_path:
-            return os.path.basename(save_path)
-        return '当前项目'   # 多人日志 / 尚未落盘：没有文件名，用个中性的说法
+        """批量记录窗口上「自动保存到日志文件（…）」里显示的日志名。
+
+        默认通联日志（主页「通联日志」那个 main.fhla / main.fhl）返回空串：
+        那个去处是固定的，复选框上挂「（main.fhla）」既没信息量、又像「只能存这个文件」。
+        """
+        if not save_path:
+            return '当前项目'   # 多人日志 / 尚未落盘：没有文件名，用个中性的说法
+        try:
+            from f_hamlog import batch_project
+            if _same_file(save_path, batch_project.default_log_path()):
+                return ''
+        except Exception:
+            pass
+        return os.path.basename(save_path)
+
+    def _live_sync_io():
+        """批量记录「自动保存到日志文件」的实时读写接口（边改边写用）。
+
+        读写都走**本窗口**已有的实现：读 = 本窗口的记录列表；写 = 原地替换列表 →
+        重画表格 → 落盘（多人日志则推给服务端）。这样加密密钥、.fhla 属性块、自定义
+        字段、服务端同步都不会分叉，批量记录也不会写到别的项目上去。
+        没有落盘路径（恢复项目 / 尚未保存）又不在多人日志里 → 返回 None，批量记录
+        退回「点完成再选保存位置」。
+        """
+        if _rc() is None and not save_path:
+            return None
+
+        def read():
+            return list(file), None
+
+        def write(records, _token):
+            if not _qt_alive(window):
+                raise RuntimeError('原项目窗口已关闭')
+            old = list(file)
+            file[:] = list(records)      # 原地替换：其他闭包持有的仍是同一个列表
+            if _rc() is not None:
+                _rc().send_save(file)
+            else:
+                _write_project_file(save_path)
+            # 只重画变了的部分（整表重建在万条级要 0.6 s，边打边记时会一顿一顿的）
+            _table_sync_from_file(old)
+            _bk_clear()
+            _bk_snapshot()
+
+        return {'read': read, 'write': write}
 
     def quick_log(preset):
         """由卫星过境窗口“记录”按钮回调：打开批量记录窗口并预填卫星信息。"""
@@ -4036,7 +4253,9 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         bw = QMainWindow()
         bw.setWindowTitle('批量记录 - ' + str(preset.get('sat_name', '')))
         batch_project.main(bw, preset=preset, on_saved=append_to_project,
-                           auto_target=_batch_log_name())
+                           auto_target=_batch_log_name(),
+                           sync_io=_live_sync_io(),
+                           auto_target_path=(save_path or None))
         _open_windows.append(bw)
 
     def open_batch_record():
@@ -4046,7 +4265,9 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         bw = QMainWindow()
         bw.setWindowTitle('批量记录')
         batch_project.main(bw, preset=None, on_saved=append_to_project,
-                           auto_target=_batch_log_name())
+                           auto_target=_batch_log_name(),
+                           sync_io=_live_sync_io(),
+                           auto_target_path=(save_path or None))
         _open_windows.append(bw)
 
     def open_satellite_window():
@@ -4682,6 +4903,8 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         'redo': redo,
         'project_others': project_others,
         'append_to_project': append_to_project,
+        # 批量记录「自动保存到日志文件」的实时读写接口（边改边写）；供冒烟脚本注入
+        'live_sync_io': _live_sync_io,
         'new': new,
         'checked_rows': _checked_rows,
         'get_table': lambda: table,

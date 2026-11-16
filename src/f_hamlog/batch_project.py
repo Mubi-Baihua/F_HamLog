@@ -404,6 +404,63 @@ def apply_save_target(target, records):
         _append_to_remote(target[1], target[2], target[3], records)
     else:
         raise ValueError('unknown save target: %r' % (target,))
+    if kind != 'remote':
+        # 这个日志可能正被某个项目窗口打开着：让它把磁盘内容重新读回来。
+        # 否则那个窗口的内存还停在写入前的样子，它下一次自动保存就会把刚写进去的
+        # 记录整份覆盖掉（用户看到的就是「自动保存没生效」）。
+        from f_hamlog import project
+        project.notify_file_changed(target[1])
+
+
+def _stamp_of(path):
+    """文件指纹（修改时间 + 大小）；不存在返回 None。用来判断「要不要重新解析」。"""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    return (st.st_mtime_ns, st.st_size)
+
+
+def path_sync_io(path, fresh=False):
+    """按路径实时读写的同步接口（主页启动的批量记录用）。
+
+    read() → ``(records, token)``：``records`` 为 None 表示读不出来（例如加密日志
+             又没有密钥）——调用方据此放弃实时同步，**绝不**把明文写回去。
+    write(records, token)：按扩展名分派写盘，并通知打开同一文件的项目窗口重载，
+             这样那个窗口的表格能立刻显示出批量记录写进去的内容。
+
+    fresh=True（「另存为日志文件」）时文件只放本次记录，不读旧内容。
+    连续同步同一个文件时用文件指纹做缓存：自己刚写完就不用再解析一遍。
+    """
+    cache = {'stamp': None, 'records': None, 'token': None}
+
+    def read():
+        if fresh:
+            return [], (None, None)
+        stamp = _stamp_of(path)
+        if cache['records'] is not None and stamp == cache['stamp']:
+            return list(cache['records']), cache['token']
+        if not os.path.exists(path):
+            return [], (None, None)
+        from f_hamlog import project
+        recs, k, m = project.read_project_file(path, key=None, ask_key=False)
+        if recs is None:
+            return None, None
+        cache['records'] = list(recs)
+        cache['token'] = (k, m)
+        cache['stamp'] = stamp
+        return list(recs), cache['token']
+
+    def write(records, token):
+        key_, meta_ = token or (None, None)
+        _write_records_file(records, path, key_, meta_)
+        cache['records'] = list(records)
+        cache['token'] = token
+        cache['stamp'] = _stamp_of(path)
+        from f_hamlog import project
+        project.notify_file_changed(path)
+
+    return {'read': read, 'write': write}
 
 
 def done_message(target, count):
@@ -552,12 +609,18 @@ def choose_save_target(parent, heading):
 
 
 def main(window, preset=None, on_saved=None, preset_records=None, recovered=False,
-         auto_target=None):
+         auto_target=None, sync_io=None, auto_target_path=None):
     """打开批量记录窗口。
 
     on_saved：由某个项目窗口启动时传入的「追加到该日志」回调（卫星「记录」按钮 /
               项目窗口菜单「批量记录」）；从主页启动时为 None。
     auto_target：启动窗口的那个日志名（显示在「自动保存到日志文件」复选框上）。
+    auto_target_path：启动窗口的日志文件路径（没有落盘时给 None）；只用于判断
+              「点完成时选的去处是不是还是这个日志」，避免同一批记录被重复追加。
+    sync_io：实时同步用的读写接口（``{'read':…, 'write':…}``，见 path_sync_io）。
+              由项目窗口启动时传入，让「边改边写」直接落到那个窗口自己的记录列表
+              与落盘实现上（加密密钥 / .fhla 属性块 / 多人日志都不会分叉）；
+              从主页启动时由本模块按所选文件目标临时构造。
     """
     _install_qt_msg_filter()  # 过滤冻结列良性 Qt 警告
     window.resize(1200, 790)
@@ -640,10 +703,12 @@ def main(window, preset=None, on_saved=None, preset_records=None, recovered=Fals
     cb_freeze = QCheckBox('固定模板列')
     cb_freeze.setChecked(True)
     opt_row.addWidget(cb_freeze)
-    # 「自动保存到日志文件」：勾上时点「完成」直接把记录写回选定的日志，不再弹完成页。
+    # 「自动保存到日志文件」：勾上后**边改边写**——表格里每改动 / 新建一列，都会把
+    # 已经填完整的记录同步进目标日志（项目窗口的表格随之刷新），点「完成」只是补一次
+    # 同步然后关窗。
     #   · 由项目窗口启动（on_saved 非空）→ 默认勾选，目标就是那个项目的日志文件；
     #   · 从主页启动 → 没有「当前日志」，默认不勾选；**一勾上就先问「存到哪个日志」**
-    #     （复用完成页那套选择界面），选好之后点「完成」就直接写过去，不再问第二次。
+    #     （复用完成页那套选择界面），选好之后就开始实时同步。
     cb_auto = QCheckBox('自动保存到日志文件')
     cb_auto.setChecked(on_saved is not None)
     if auto_target:
@@ -652,18 +717,63 @@ def main(window, preset=None, on_saved=None, preset_records=None, recovered=Fals
     # 主页启动时勾选后选定的去处（元组，见本模块顶部的「记录保存到哪儿」）
     auto_pick = {'target': None}
 
+    # 实时同步的运行时状态（函数体在后面 table 建好之后定义）：
+    #   io      读写接口；active 是否真的在同步（读不出来就是 False）
+    #   last    目标日志当前内容（我们最后一次读到 / 写下的版本）
+    #   pos/wrote  各列写进日志后的下标与内容——下次同步就地改这一条，而不是再追加一条
+    #   times   各列「日期/时间留空」时补的当前时间（同一列只用第一次补的那份）
+    #   pending 有改动还没写；hold 暂停（回填恢复内容时不要自动写盘）
+    live = {'io': None, 'active': False, 'target': None, 'last': None,
+            'pos': {}, 'wrote': {}, 'times': {}, 'pending': False, 'hold': False,
+            'warned': False, 'gone': [], 'detached': []}
+    # 逐格提交 + 连续几格编辑会被合并成一次写盘（日志是整份重写，别敲一下就写一次）
+    live['timer'] = QTimer(window)
+    live['timer'].setSingleShot(True)
+    live['timer'].setInterval(400)
+    live['timer'].timeout.connect(lambda: _live_sync())
+
     def _on_auto_toggled(checked):
-        """主页启动的场景：勾上即问「保存到哪个日志」，取消则把勾去掉。"""
-        if not checked or on_saved is not None:
+        """勾选 / 取消「自动保存到日志文件」。"""
+        if not checked:
+            # 取消勾选：停止实时同步。已经写进日志的记录不撤回，但记下它们是哪几条——
+            # 之后点「完成」若还是写回同一个日志，就别再追加一遍（否则就是重复记录）。
+            if live['active']:
+                live['detached'] = [dict(r) for r in live['wrote'].values()]
+            live['active'] = False
+            live['io'] = None
+            live['timer'].stop()
+            live['pending'] = False
+            return
+        if on_saved is not None:
+            # 项目窗口启动：目标就是这个项目，直接开始实时同步
+            if not live['active'] and _live_enable(sync_io, keep=True):
+                _live_touch()           # 取消过再勾回来：把这段时间的改动补写一次
             return
         if auto_pick['target'] is not None:
-            return                      # 本次已经选过，别重复问
+            # 目标已经选过（取消勾选后又勾回来）：接着同步，别重复问一遍
+            if not live['active'] and auto_pick['target'][0] != 'remote':
+                io = path_sync_io(auto_pick['target'][1],
+                                  fresh=(auto_pick['target'][0] == 'new'))
+                if _live_enable(io, keep=True):
+                    _live_touch()
+            return
         target = choose_save_target(window, '已录入的记录要保存到哪里？')
         if target is None:
             cb_auto.setChecked(False)   # 没选成 → 保持未勾选，完成时仍按原流程选保存方式
             return
         auto_pick['target'] = target
-        cb_auto.setText('自动保存到日志文件（{}）'.format(target_name(target)))
+        live['target'] = target
+        # 默认通联日志是固定的去处，复选框上不挂文件名（「（main.fhla）」看着像
+        # 「只能存这个文件」，且那个文件名对用户没有信息量）；只有选了具体文件
+        # 才把日志名带上，方便确认写到哪里。
+        cb_auto.setText('自动保存到日志文件' if target[0] == 'default'
+                        else '自动保存到日志文件（{}）'.format(target_name(target)))
+        if target[0] == 'remote':
+            # 多人日志不做逐格同步：每改一格就连一次网、把整份日志发回去，代价太大。
+            # 它仍按原来的方式工作——点「完成」时一次性追加。
+            return
+        if _live_enable(path_sync_io(target[1], fresh=(target[0] == 'new'))):
+            _live_touch()               # 勾选前已经填好的记录，立刻补一次同步
 
     cb_auto.toggled.connect(_on_auto_toggled)
     opt_row.addWidget(cb_auto)
@@ -722,6 +832,8 @@ def main(window, preset=None, on_saved=None, preset_records=None, recovered=Fals
         refresh_headers()
         table.updateFrozenGeometry()
         _set_suspend(False)
+        _live_shift_cols(c, +1)      # 后面各列的列号往后挪一格（写进日志的位置不变）
+        _live_touch()
 
     def _remove_col(c):
         _set_suspend(True)
@@ -729,6 +841,9 @@ def main(window, preset=None, on_saved=None, preset_records=None, recovered=Fals
         refresh_headers()
         table.updateFrozenGeometry()
         _set_suspend(False)
+        # 这一列写进日志的那条记录也要跟着删（交给下次同步）；后面各列列号往前挪一格
+        _live_shift_cols(c, -1, removed=(live['pos'].get(c), live['wrote'].get(c)))
+        _live_touch()
 
     def focus_o_call(col):
         """把焦点定位到指定列的「对方呼号」单元格并进入编辑。
@@ -811,6 +926,8 @@ def main(window, preset=None, on_saved=None, preset_records=None, recovered=Fals
                 self._tbl.setItem(self._r, self._c, item)
             item.setText(text)
             self._nf.suspend[0] = False
+            if self._c >= 1:
+                _live_touch()     # 撤销 / 重做也要同步（否则日志里留下的是撤销前的内容）
 
         def redo(self):
             self._apply(self._new)
@@ -849,6 +966,8 @@ def main(window, preset=None, on_saved=None, preset_records=None, recovered=Fals
     def on_cell_changed(r, c):
         if nav_filter.suspend[0]:
             return
+        if c >= 1:
+            _live_touch()     # 勾了自动保存 → 合并一次，把这一格同步进日志
 
         if nav_filter._pending is None:
             return
@@ -896,6 +1015,245 @@ def main(window, preset=None, on_saved=None, preset_records=None, recovered=Fals
         _w.installEventFilter(nav_filter)
     table.cellChanged.connect(on_cell_changed)
 
+    # ---------- 实时同步：勾选「自动保存到日志文件」后边改边写 ----------
+    def _col_record(c):
+        """把第 c 列收成一条记录 → ``(记录, 是否可写, 是否全空)``。
+
+        「可写」= 这一列不是全空、日期/时间格式对、必填项都填了。批量记录本来就是
+        边打边填：没填完的列先不写进日志，等填完那一下再同步，用户不会看到半条记录。
+        """
+        rec = {}
+        empty = True
+        for r in range(table.rowCount()):
+            k = KEYS[r]
+            it = table.item(r, c)
+            v = it.text() if it is not None else ''
+            rec[k] = v
+            if v != '':
+                empty = False
+        if empty:
+            live['times'].pop(c, None)
+            return None, False, True
+        # 日期 / 时间留空 → 补当前时间；同一列只用第一次补的那份（否则每同步一次时间就变）
+        fb = live['times'].get(c)
+        if fb is None:
+            fb = (time_.strftime("%Y-%m-%d", time_.localtime()),
+                  time_.strftime("%H:%M", time_.localtime()))
+            live['times'][c] = fb
+        if rec['date'] == '':
+            rec['date'] = fb[0]
+        if rec['time'] == '':
+            rec['time'] = fb[1]
+        if not DATE_RE.match(rec['date']) or not TIME_RE.match(rec['time']):
+            return rec, False, False
+        for k in REQUIRED_KEYS:
+            if rec.get(k, '') == '':
+                return rec, False, False
+        return rec, True, False
+
+    def _live_enable(io, keep=False):
+        """为当前目标建立实时同步；读不出来就不启用（退回「完成时再写」）。
+
+        keep=True 用于「取消勾选后又勾回来」：保留各列写进日志的位置，这样再改那一列
+        时会就地更新，而不是再追加一条重复记录。
+        """
+        live['io'] = None
+        live['active'] = False
+        if not keep:
+            live['pos'], live['wrote'], live['gone'] = {}, {}, []
+        live['pending'] = False
+        live['detached'] = []
+        live['last'] = None
+        if io is None:
+            return False
+        try:
+            base, _token = io['read']()
+        except Exception:
+            return False
+        if base is None:
+            return False
+        live['io'] = io
+        live['last'] = list(base)
+        live['active'] = True
+        return True
+
+    def _live_failed(err):
+        """记录一次同步失败：只提示一次（别每敲一格弹一次），下次改动照常重试。"""
+        if not live['warned']:
+            live['warned'] = True
+            try:
+                from f_hamlog import toast_tip
+                toast_tip.show_toast(i18n.tr('实时同步失败：{}').format(err),
+                                     window, kind='warning')
+            except Exception:
+                pass
+        return False
+
+    def _live_shift_cols(at, delta, removed=None):
+        """增删列之后重排下标键：写进日志的位置不变，只是列号挪了一格。
+
+        removed：被删掉那一列写进日志的那条记录（位置已按删除前算好），交给下一次
+        同步把它从日志里删掉——不能直接丢掉，否则日志里会留一条对不上的记录。
+        """
+        if removed is not None:
+            live['gone'].append(removed)
+        for name in ('wrote', 'pos', 'times'):
+            old = live[name]
+            new = {}
+            for c, v in old.items():
+                if c == at and removed is not None:
+                    continue                 # 删掉的那一列：键跟着丢掉
+                new[c + delta if c >= at else c] = v
+            live[name] = new
+
+    def _live_sync(force=False):
+        """把表格里已经填完整的记录同步进目标日志；成功返回 True。
+
+        做法：读目标日志的当前内容 → 对每一列，把「上次写进去的那一条」就地改成现在
+        的内容（找不到就补一条）→ 列被删掉 / 被清空时，把之前写进去的那条拿掉。
+        这样反复同步不会产生重复记录，也不会动到别人写进去的记录；没填完的列先跳过
+        （日志里保留它上一次的完整内容，等填完再更新）。
+        """
+        if not live['active'] or live['hold']:
+            return True
+        if not cb_auto.isChecked():
+            live['active'] = False
+            return True
+        io = live['io']
+        if io is None:
+            return True
+        if not force and not live['pending']:
+            return True
+
+        cols, in_table = [], set()
+        for c in range(1, table.columnCount()):
+            rec, ok, empty = _col_record(c)
+            if ok:
+                cols.append((c, rec))
+                in_table.add(c)
+            elif not empty:
+                in_table.add(c)      # 还在填：日志里那条先留着
+
+        try:
+            base, token = io['read']()
+        except Exception as e:
+            return _live_failed(e)
+        if base is None:
+            return _live_failed(i18n.tr('无法读取目标日志'))
+
+        records = list(base)
+
+        # ① 先删：列被删掉（_live_shift_cols 记的 gone）+ 列已被清空 / 不存在了
+        doomed = list(live['gone'])
+        for c, old in list(live['wrote'].items()):
+            if c not in in_table:
+                doomed.append((live['pos'].get(c), old))
+        cut = []
+        for i, rec in doomed:
+            if i is None or not (0 <= i < len(records)) or i in cut:
+                continue
+            if rec is not None and records[i] == rec:
+                cut.append(i)
+        for i in sorted(cut, reverse=True):
+            del records[i]
+        live['gone'] = []
+
+        def _adj(i):
+            """删除之后的下标（左边删了几条就往前挪几格）。"""
+            if i is None:
+                return None
+            return i - sum(1 for d in cut if d < i)
+
+        pos, wrote = {}, {}
+        writable = {c for c, _ in cols}
+
+        # ② 没填完的列：日志里保留它上次写进去的那条，位置原地不动
+        for c in in_table:
+            if c in writable:
+                continue
+            old = live['wrote'].get(c)
+            i = _adj(live['pos'].get(c))
+            if old is not None and i is not None and 0 <= i < len(records) \
+                    and records[i] == old:
+                wrote[c] = old
+                pos[c] = i
+
+        # ③ 可写的列：就地更新上次写进去的那条，找不到就补一条
+        for c, rec in cols:
+            old = live['wrote'].get(c)
+            i = _adj(live['pos'].get(c))
+            if old is not None and i is not None and 0 <= i < len(records) \
+                    and records[i] == old:
+                records[i] = rec
+                pos[c] = i
+            elif old is not None and old in records and records.index(old) not in pos.values():
+                # 位置对不上（文件被别的写入方动过）：按内容找回原记录，就地更新
+                j = records.index(old)
+                records[j] = rec
+                pos[c] = j
+            else:
+                # 宁可多一条，也不要覆盖别人的记录
+                records.append(rec)
+                pos[c] = len(records) - 1
+            wrote[c] = rec
+
+        if not force and records == live['last']:
+            # 内容没变（例如只改了模板列）→ 不写盘
+            live['pos'], live['wrote'] = pos, wrote
+            live['pending'] = False
+            return True
+        try:
+            io['write'](records, token)
+        except Exception as e:
+            return _live_failed(e)
+        live['last'] = records
+        live['pos'], live['wrote'] = pos, wrote
+        live['pending'] = False
+        _bk_clear()          # 已写进日志 → 清掉「未保存批量记录」备份
+        _bk_snapshot()       # 基线跟到当前表格：已同步的记录不再算未保存
+        if _pending_input():
+            _bk_write()      # 但没填完的列还在内存里，照样留一份备份（别在崩溃时丢掉）
+        return True
+
+    def _live_flush():
+        """立刻把待同步的改动写进目标（点「完成」/ 关窗前）。"""
+        try:
+            live['timer'].stop()
+        except Exception:
+            pass
+        return _live_sync()
+
+    def _pending_input():
+        """表格里还有「填了一半、还没写进日志」的列吗？
+
+        实时同步时「已保存」= 记录已经写进日志文件；只有这种填了但没填完的列还在内存里，
+        关窗会丢，所以要算作「未保存的更改」（关窗时问一句、并留备份）。
+        """
+        try:
+            for c in range(1, table.columnCount()):
+                _rec, ok, empty = _col_record(c)
+                if not empty and not ok:
+                    return True
+        except Exception:
+            return False
+        return False
+
+    def _live_touch():
+        """表格有改动（编辑单元格 / 增删列）→ 稍后合并写一次。"""
+        if live['hold'] or not live['active']:
+            return
+        live['pending'] = True
+        live['timer'].start()
+
+    live['flush'] = _live_flush
+
+    # 由项目窗口启动（默认勾选）→ 立刻开始实时同步，目标就是那个项目的日志文件
+    if cb_auto.isChecked() and on_saved is not None:
+        if auto_target_path:
+            live['target'] = ('append', auto_target_path)
+        _live_enable(sync_io)
+
+
     # ---------- 未保存内容自动备份（batch_backup.fhl） ----------
     def _bk_cur_records():
         """从表格收集当前所有日志列（列>=1）为记录列表。"""
@@ -915,6 +1273,12 @@ def main(window, preset=None, on_saved=None, preset_records=None, recovered=Fals
         _bk_state['last'] = json.dumps(_bk_cur_records(), ensure_ascii=False, sort_keys=True)
 
     def _bk_is_dirty():
+        # 勾了「自动保存到日志文件」时先把待同步的改动写掉，再判断是否还有未保存内容：
+        # 刚敲完就往 X 关窗（防抖还没到点）也应该是「已保存」，不该再问一次。
+        _live_flush()
+        if live['active']:
+            # 实时同步下「已保存」= 已写进日志文件；只有没填完的列还在内存里
+            return _pending_input()
         try:
             return json.dumps(_bk_cur_records(), ensure_ascii=False, sort_keys=True) != _bk_state['last']
         except Exception:
@@ -936,9 +1300,13 @@ def main(window, preset=None, on_saved=None, preset_records=None, recovered=Fals
 
     # 恢复场景：把上次未保存的批量记录回填到表格
     if preset_records:
+        # 回填期间暂停实时同步：恢复出来的内容还没确认过，不能悄悄写进日志
+        live['hold'] = True
         for _rec in preset_records:
             _data = [_rec.get(k, '') for k in KEYS]
             _insert_col(table.columnCount(), _data)
+        live['hold'] = False
+        live['pending'] = False
 
     # 打开批量记录时：把当前内容写入备份作为基线；若为空则清空
     _bk_snapshot()
@@ -997,61 +1365,110 @@ def main(window, preset=None, on_saved=None, preset_records=None, recovered=Fals
             records.append(rec)
         return records, ''
 
+    def _live_message(count):
+        """「完成」时的提示：说清这次写到了哪个日志。"""
+        target = live.get('target')
+        if target is None:
+            return f'已添加 {count} 条记录到当前项目。'
+        return done_message(target, count)
+
+    def _strip_synced(records):
+        """取消勾选「自动保存」后又点「完成」：把已经实时同步过的那几条剔掉。
+
+        不这么做的话，中途取消勾选再点完成，同一批记录会被**再追加一遍**——日志里
+        就多出一份重复记录。只在目标还是同一个日志时才剔（换了去处当然要全写）。
+        """
+        if not live['detached']:
+            return list(records)
+        out = list(records)
+        for old in live['detached']:
+            try:
+                out.remove(old)
+            except ValueError:
+                pass
+        return out
+
     def save_all():
         records, err = collect_and_validate()
         if err:
             QMessageBox.warning(window, '格式错误', err)
             return False
-        if not records:
-            QMessageBox.warning(window, '提示', '没有可保存的记录（日志列均为空）。')
-            return False
 
         fhl_list = records  # 供下方保存逻辑使用（与旧逻辑保持一致）
 
-        # 「自动保存到日志文件」
-        #   · 由项目窗口启动（on_saved 非空）→ 直接追加到那个日志，不弹完成页；
-        #   · 从主页启动 → 勾选时就已经选好去处（auto_pick），直接写到那里。
-        # 写失败（例如目标项目窗口已被关掉）不吞掉记录：提示一句后落到下面的选择页，
-        # 让用户重新挑一个位置。
-        auto_save = cb_auto.isChecked()
-        auto_done = False
-        if auto_save:
+        # 「自动保存到日志文件」+ 实时同步
+        #   每次改格子 / 增删列都已经把记录写进目标日志了（见 _live_sync），这里只要
+        #   把最后一点待同步的改动补上就能关窗——**不再**整份追加一遍，否则就是重复记录。
+        # 补同步失败（例如原项目窗口已被关掉）不吞掉记录：提示一句后落到下面的选择页。
+        if cb_auto.isChecked() and live['active']:
+            if _live_flush():
+                if fhl_list:
+                    QMessageBox.information(window, '完成', _live_message(len(fhl_list)))
+                return True
+            QMessageBox.warning(window, '保存失败',
+                                '实时同步没有成功，请在下一步选择保存位置。')
+
+        if not fhl_list:
+            QMessageBox.warning(window, '提示', '没有可保存的记录（日志列均为空）。')
+            return False
+
+        # 勾了自动保存、但这个目标做不了实时同步（多人日志 / 加密日志没密钥 /
+        # 项目还没有保存路径）→ 仍按原来的方式：点「完成」一次性写过去。
+        if cb_auto.isChecked() and not live['active']:
+            done = False
+            write_list = _strip_synced(fhl_list)   # 中途取消过勾选的话，已同步的别再写一遍
             if on_saved is not None:
+                if not write_list:
+                    QMessageBox.information(window, '完成', _live_message(len(fhl_list)))
+                    return True
                 try:
-                    on_saved(fhl_list)
+                    on_saved(write_list)
                 except Exception as e:
                     QMessageBox.warning(window, '保存失败',
                                         f'添加到项目失败：\n{e}\n\n请在下一步选择保存位置。')
                 else:
                     QMessageBox.information(window, '完成',
-                                            f'已添加 {len(fhl_list)} 条记录到当前项目。')
-                    auto_done = True
+                                            f'已添加 {len(write_list)} 条记录到当前项目。')
+                    done = True
             elif auto_pick['target'] is not None:
+                if not write_list:
+                    QMessageBox.information(
+                        window, '完成', done_message(auto_pick['target'], len(fhl_list)))
+                    return True
                 try:
-                    apply_save_target(auto_pick['target'], fhl_list)
+                    apply_save_target(auto_pick['target'], write_list)
                 except Exception as e:
                     QMessageBox.warning(window, '保存失败',
                                         f'保存失败：\n{e}\n\n请在下一步选择保存位置。')
                 else:
                     QMessageBox.information(window, '完成',
-                                            done_message(auto_pick['target'], len(fhl_list)))
-                    auto_done = True
-            if auto_done:
+                                            done_message(auto_pick['target'], len(write_list)))
+                    done = True
+            if done:
                 _bk_after_save()
                 return True
 
-        # 没勾自动保存（或自动保存失败）→ 打开「保存到哪里」选择页：
+        # 没勾自动保存（或实时同步不可用）→ 打开「保存到哪里」选择页：
         # 与勾选时的提示是同一个界面，用户只会看到一种选择方式。
         target = choose_save_target(
             window, '已成功录入 {} 条记录'.format(len(fhl_list)))
         if target is None:
             return False                # 取消：窗口保持打开，记录还在
+        # 中途取消过勾选、又选回同一个日志 → 已经同步过的那几条别再追加一遍
+        write_list = fhl_list
+        if live['detached'] and live['target'] is not None \
+                and target[:2] == live['target'][:2]:
+            write_list = _strip_synced(fhl_list)
+        if not write_list:
+            QMessageBox.information(window, '完成', done_message(target, len(fhl_list)))
+            _bk_after_save()
+            return True
         try:
-            apply_save_target(target, fhl_list)
+            apply_save_target(target, write_list)
         except Exception as e:
             QMessageBox.warning(window, '保存失败', f'保存失败：\n{e}')
             return False
-        QMessageBox.information(window, '完成', done_message(target, len(fhl_list)))
+        QMessageBox.information(window, '完成', done_message(target, len(write_list)))
         _bk_after_save()
         return True
 
