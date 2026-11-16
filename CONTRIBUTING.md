@@ -287,7 +287,7 @@ QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe test/__toast_smoke.py
 
 | 文件 | 作用 |
 | --- | --- |
-| `.github/workflows/main.yml` | **手动**发布：打包 → 生成安装包 → 兼容版 zip → 回写分支 → 发布 Release（默认草稿） |
+| `.github/workflows/main.yml` | **手动**发布：打包 → 生成安装包 → 兼容版 zip → 回写分支 → 发布 Release（默认草稿；版本号取自 `src/f_hamlog/__init__.py` 的 `__version__`，无需手填） |
 | `.github/workflows/preview.yml` | **定时**（每天）打包预览版，产出 Artifact，不建 Release |
 | `.github/inno/F HamLog 2.iss` | CI 专用 Inno Setup 脚本（版本号/包名等由命令行注入） |
 
@@ -629,7 +629,7 @@ Releases are automated by GitHub Actions. Related files:
 
 | File | Purpose |
 | --- | --- |
-| `.github/workflows/main.yml` | **Manual** release: build → generate installer → compatible zip → write back to branch → publish Release (draft by default) |
+| `.github/workflows/main.yml` | **Manual** release: build → generate installer → compatible zip → write back to branch → publish Release (draft by default; the version comes from `__version__` in `src/f_hamlog/__init__.py`, no manual input) |
 | `.github/workflows/preview.yml` | **Scheduled** (daily) preview build, produces an Artifact, no Release |
 | `.github/inno/F HamLog 2.iss` | CI-only Inno Setup script (version/name etc. injected via the command line) |
 

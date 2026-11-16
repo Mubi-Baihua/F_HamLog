@@ -1,12 +1,14 @@
 name: 发布 F HamLog（Nuitka → Inno Setup → Releases）
 
 # 触发方式：仅在 Actions 页面手动点击 "Run workflow"
-# 只需填写 version（同时作为 tag，例如 2.4.0），其余保留默认即可完成全流程：
+# 版本号无需手填：直接从 src/f_hamlog/__init__.py 的 __version__ 读取（唯一版本来源），
+# 同时作为 Release 的 tag 与安装包版本。要发新版本，先把 __init__.py 的版本号改好
+# 再点「Run workflow」；输入项全部保留默认即可完成全流程：
 #   1. Nuitka 打包（保留 pip / 虚拟环境 / Nuitka 构建目录缓存，加速下次打包）
 #   2. Inno Setup 6 生成安装包（版本号自动注入，文件名形如 "F HamLog 2.4 setup.exe"）
 #   3. 把安装包回写到运行分支的约定目录并提交（安装包 → F HamLog 2 Inno Setup/）
 #      ⚠️ 可用输入 commit_artifacts=false 跳过这一步（只发 Release，不动 git）
-#   4. 发布到 Releases（tag = 填入的版本号；附件 = 安装包 + 远程日志服务端）
+#   4. 发布到 Releases（tag = __init__.py 的版本号；附件 = 安装包 + 远程日志服务端）
 #      注：自 2.8.0 起不再生成「兼容版」zip（解压即用包），仓库体积与构建时长都省一半。
 #      默认发布为**草稿**，确认无误后在 Releases 页面手动点击发布
 #      说明内容留空，由作者在 Releases 页面手动填写
@@ -19,9 +21,6 @@ name: 发布 F HamLog（Nuitka → Inno Setup → Releases）
 on:
   workflow_dispatch:
     inputs:
-      version:
-        description: '版本号（同时用作 Release 的 tag，如 2.4.0 → 安装包 F HamLog 2.4 setup.exe）'
-        required: true
       python_version:
         description: '构建所用 Python 版本'
         required: false
@@ -78,19 +77,39 @@ jobs:
 
     steps:
       # ------------------------------------------------------------------
-      # 0. 解析版本号，推导全部产物名称
+      # 0. 检出代码（版本号要从工作区里的 src/f_hamlog/__init__.py 读，必须先检出）
       # ------------------------------------------------------------------
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      # ------------------------------------------------------------------
+      # 0a. 解析版本号，推导全部产物名称
+      # ------------------------------------------------------------------
+      # 版本号唯一来源 = src/f_hamlog/__init__.py 的 __version__（pyproject.toml 的
+      # dynamic+attr 读的也是这一行），不再由 workflow_dispatch 手填：手填值一旦和
+      # 包内版本不一致，就会发出「安装包叫 2.9.1、程序里显示 2.9.0」这种自相矛盾的版本。
+      # 要发新版本，先把 __init__.py 的版本号改好，再点「Run workflow」。
       - name: 解析版本号与产物名称
         env:
-          IN_VERSION: ${{ inputs.version }}
           IN_APP_EXE: ${{ inputs.app_exe_name }}
         run: |
           $ErrorActionPreference = 'Stop'
 
-          $version = ([string]$Env:IN_VERSION).Trim()
+          $init = Join-Path $env:GITHUB_WORKSPACE 'src\f_hamlog\__init__.py'
+          if (-not (Test-Path $init)) { throw "找不到版本号文件：$init" }
+
+          # 按无 BOM 的 UTF-8 读；只认 __version__ = "x.y.z" 这一行（单双引号都收）
+          $text = [System.IO.File]::ReadAllText($init, [System.Text.Encoding]::UTF8)
+          $m = [regex]::Match($text, '__version__\s*=\s*["'']([^"'']*)["'']')
+          if (-not $m.Success) { throw "没能从 $init 读到 __version__（格式变了？）" }
+          $version = $m.Groups[1].Value.Trim()
+
+          # 版本串要进 tag、安装包文件名与 ProductVersion：只接受纯 ASCII 的数字点版本。
+          # 预览版串（Preview UTC-…）由 preview.yml 生成，绝不能进正式发布。
           if ($version -notmatch '^\d+\.\d+(\.\d+)*$') {
-            throw "版本号格式不合法：「$version」，应形如 2.4.0"
+            throw "版本号不合法：「$version」（读自 $init），应形如 2.9.1；含 Preview/UTC 的预览版串不能走正式发布"
           }
+          Write-Host "版本号（读自 src/f_hamlog/__init__.py）：$version"
 
           # 2.4.0 → 2.4 ；补丁版本 2.4.1 保持原样，避免同名覆盖
           $display = $version -replace '\.0$', ''
@@ -173,9 +192,6 @@ jobs:
             throw ($msg -join "`n")
           }
           Write-Host "预检通过：.github/workflows/ 与默认分支（$default）一致"
-
-      - name: 检出代码
-        uses: actions/checkout@v4
 
       - name: 设置 Python ${{ inputs.python_version }}
         uses: actions/setup-python@v5
