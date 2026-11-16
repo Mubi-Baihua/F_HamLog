@@ -106,7 +106,10 @@ window.show()
 
 t0 = time.time()
 set_mod._start_update_check(window, button)
-ok('F0 检查期间按钮变灰', not button.isEnabled(), button.text())
+# 「忙」只用改文字表示，**绝不禁用按钮**（禁用会把焦点甩到「我的呼号」并全选文本）；
+# 重入由 isRunning() 拦，所以这里断言按钮仍可用、文字变成「检查中…」。
+ok('F0 检查期间按钮只改文字不禁用', button.isEnabled() and button.text() == '检查中…',
+   '%s / enabled=%s' % (button.text(), button.isEnabled()))
 # 等后台查版本线程回来（check() 是异步的，立刻断言会读到「检查中…」）
 while button.text() != '检查更新' and time.time() - t0 < 10:
     app.processEvents()

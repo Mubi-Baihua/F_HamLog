@@ -17,7 +17,6 @@ from f_hamlog import __version__
 import json
 import os
 import re
-import shutil
 import subprocess
 import tempfile
 import threading
@@ -40,11 +39,13 @@ PERMANENT_CODES = (400, 401, 404, 410, 451)
 
 # ---------------------------------------------------------------- 下载参数
 WORKERS = 16                # 默认线程数：GitHub 的 CDN 对**单连接**限速，多开几条并行提升最明显
-MAX_WORKERS = 32            # 上限：再多只是把带宽切成更碎的片，反而拖慢合并
-CHUNK_MIN_BYTES = 4 << 20   # 小于 4 MB 不分段：切块与合并的开销比省下的时间还多
-PART_MIN_BYTES = 512 << 10  # 每段至少 512 KB：段太碎时建连开销占大头
+MAX_WORKERS = 32            # 上限：再多只是把带宽切成更碎的片，建连开销占大头
+CHUNK_MIN_BYTES = 4 << 20   # 小于 4 MB 不分段：建连与落盘的开销比省下的时间还多
+PART_MIN_BYTES = 512 << 10  # 每次 Range 请求至少 512 KB：请求太碎时建连开销占大头
+CHUNK_SPLIT = 3             # 块数 ≈ 线程数 × 3：快的抢先多拿几块，慢的自动少干几块
+CHUNK_MAX_BYTES = 8 << 20   # 单块上限：块太大就退化成「段数 = 线程数」的定长切法
 READ_BLOCK = 64 << 10       # 单次读 64 KB
-PART_TRIES = 3              # 单个分段最多下 3 次（每次重下该段）
+PART_TRIES = 3              # 单块最多取 3 次（断点续传，已落盘的字节不重下）
 PART_TIMEOUT = 15           # 分段连接的空闲超时：卡住 15 秒就断开重连（换条连接常常就快了）
 
 # ---------------------------------------------------------------- 镜像择优
@@ -442,7 +443,7 @@ class _Meter:
 
 
 def _clean_parts(dest):
-    """删掉上次留下的分段文件（``xxx.exe.part0`` / ``xxx.exe.merging``）。"""
+    """删掉上次留下的半成品（``xxx.exe.part`` / 旧版的 ``.part0`` / ``.merging``）。"""
     folder = os.path.dirname(dest) or '.'
     base = os.path.basename(dest)
     try:
@@ -481,80 +482,178 @@ def _download_stream(url, dest, meter, cancel):
         raise
 
 
-def _download_parts(url, dest, total, parts, meter, cancel):
-    """把文件切成 parts 段并行下载，最后合并成 ``dest``。"""
-    step = total // parts
+class _Stopped(Exception):
+    """内部信号：某一块彻底失败后让其余线程尽快收手（不是用户取消）。"""
+
+
+def chunk_bytes(total, workers):
+    """动态划分时单块多大 —— 块数 ≈ ``workers × CHUNK_SPLIT``。
+
+    块太小：每条连接刚建好（DNS + TCP + TLS）就又要重建，建连开销吃掉并行收益；
+    块太大：又回到「段数 = 线程数」的老路上，慢连接手里那一大块就是收尾时的长尾。
+    所以取 ``总长 / (线程数 × CHUNK_SPLIT)``，再夹到 [PART_MIN_BYTES, CHUNK_MAX_BYTES]。
+    """
+    return max(PART_MIN_BYTES,
+               min(CHUNK_MAX_BYTES, int(total) // max(1, int(workers) * CHUNK_SPLIT)))
+
+
+def chunk_spans(total, workers):
+    """把 ``[0, total)`` 切成一批等长小块，返回 ``[(起点, 终点)]``（两端都含）。"""
+    total = int(total)
+    step = chunk_bytes(total, workers)
+    n = max(1, -(-total // step))           # 向上取整 = 块数
+    step = -(-total // n)                   # 再均分一次，别在末尾切出几十字节的碎块
     spans = []
     start = 0
-    for i in range(parts):
-        end = total - 1 if i == parts - 1 else start + step - 1
-        spans.append((i, start, end))
+    while start < total:
+        end = min(start + step, total) - 1
+        spans.append((start, end))
         start = end + 1
+    return spans
 
-    def work(idx, start, end):
-        part = '%s.part%d' % (dest, idx)
-        expect = end - start + 1
-        for attempt in range(PART_TRIES):
+
+def _check_range(resp, pos):
+    """确认服务器给的确实是「从 ``pos`` 开始」的那一段。
+
+    Range 被忽略（回 200 整包）、或代理把起点挪了，字节就会落到错的偏移上，
+    合出来的包静默损坏 —— 比下载失败难受得多，所以这里宁可报错重试。
+    """
+    status = getattr(resp, 'status', None) or resp.getcode()
+    if status != 206:
+        raise IOError('服务器没有按 Range 返回（HTTP %s）' % status)
+    crange = (resp.headers.get('Content-Range') or '').strip()
+    m = re.match(r'bytes\s+(\d+)-', crange)
+    if m and int(m.group(1)) != pos:
+        raise IOError('Content-Range 起点不符：%s（要的是 %d）' % (crange, pos))
+
+
+def _write_at(out, pos, buf):
+    """把 ``buf`` 写到 ``out`` 的 ``pos`` 偏移（调用方已持有写锁，不会交错）。"""
+    while buf:
+        out.seek(pos)
+        n = out.write(buf)
+        if not n:                       # 理论上不会发生（普通文件不会 0 写入）
+            raise IOError('写入失败：偏移 %d' % pos)
+        buf = buf[n:]
+        pos += n
+
+
+def _download_parallel(url, dest, total, spans, workers, meter, cancel):
+    """动态分块并行下载：边下边按偏移写进同一个文件，写完就是成品。
+
+    为什么不再「切成 N 段、一段一条线程、最后合并」：
+
+      · **尾部拖尾**：快的线程下完就闲着了，收尾只剩一两条连接在跑 ——
+        进度条最后 10% 特别慢，正是「前面快、后面慢」；
+      · **一起掉速**：CDN 对每条新连接都先给一阵高速再限速，N 条同时建连就会
+        差不多同时被掐，聚合速度在中间突然下一台阶；
+      · **合并空转**：进度到 100% 之后还要把整包再读一遍拼起来，看着像卡死。
+
+    这里的做法是「小块 + 抢着取」：把文件切成线程数的几倍（见 :func:`chunk_spans`），
+    谁下完手头这块就抢下一块 —— 快的自然多干、慢的自动少干，收尾时仍然有十几条
+    连接在跑；每块一条新连接，等于反复白拿「刚建连那阵高速」；写到偏移上，
+    省掉合并，也省掉 100% 之后的空转。
+    """
+    tmp = dest + '.part'
+    locker = threading.Lock()
+    io_lock = threading.Lock()
+    state = {'next': 0}
+    failures = []
+    stopped = threading.Event()
+
+    def take():
+        with locker:
+            i = state['next']
+            if i >= len(spans):
+                return None
+            state['next'] = i + 1
+            return spans[i]
+
+    def fetch(out, start, end):
+        """把 ``[start, end]`` 下完；断线从断点续，已落盘的字节不重下。
+
+        重试按「有没有进展」算：这一趟哪怕只多读到 1 KB，也算续传而不是失败，
+        计数器清零；连续 ``PART_TRIES`` 趟一个字节都没进才判死。为避免「每次掉一点
+        永远下不完」，另加一个 ``PART_TRIES × 8`` 的总次数上限。
+        """
+        pos = start
+        stalls = 0                      # 连续「零进展」的次数
+        tries = 0                       # 本块总尝试次数（防掉线循环）
+        last = ''
+        while True:
             if cancel.is_set():
                 raise Cancelled()
-            got = 0
+            if stopped.is_set():
+                raise _Stopped()
+            if stalls >= PART_TRIES or tries >= PART_TRIES * 8:
+                raise IOError('分段 %d-%d 下载失败：%s（已到 %d/%d 字节）' % (
+                    start, end, last or '连接反复中断', pos - start, end - start + 1))
+            tries += 1
+            before = pos
             try:
-                req = _request(url, {'Range': 'bytes=%d-%d' % (start, end)})
-                with urllib.request.urlopen(req, timeout=PART_TIMEOUT) as r, open(part, 'wb') as f:
-                    while True:
+                req = _request(url, {'Range': 'bytes=%d-%d' % (pos, end)})
+                with urllib.request.urlopen(req, timeout=PART_TIMEOUT) as r:
+                    _check_range(r, pos)
+                    while pos <= end:
                         if cancel.is_set():
                             raise Cancelled()
-                        buf = r.read(READ_BLOCK)
+                        if stopped.is_set():
+                            raise _Stopped()
+                        buf = r.read(min(READ_BLOCK, end - pos + 1))
                         if not buf:
                             break
-                        f.write(buf)
-                        got += len(buf)
+                        with io_lock:
+                            _write_at(out, pos, buf)
+                        pos += len(buf)
                         meter.add(len(buf))
-                if got != expect:
-                    raise IOError('分段 %d 长度不符：%d/%d 字节' % (idx, got, expect))
-                return
-            except Cancelled:
+                if pos > end:
+                    return
+                last = '连接提前中断，只读到 %d/%d 字节' % (pos - start, end - start + 1)
+            except (Cancelled, _Stopped):
                 raise
             except Exception as e:
-                if got:
-                    meter.add(-got)        # 这一段要重下，先把已计的数字退回去
-                try:
-                    os.remove(part)
-                except OSError:
-                    pass
-                if attempt == PART_TRIES - 1:
-                    raise IOError('分段 %d 下载失败：%s' % (idx, e))
-                time.sleep(0.5 * (attempt + 1))
+                last = str(e)
+            stalls = 0 if pos > before else stalls + 1
+            if stalls:
+                time.sleep(0.5 * stalls)        # 真卡住了才退避：有进展就立刻续
 
-    failures = []
-
-    def runner(idx, start, end):
+    def runner(out):
         try:
-            work(idx, start, end)
+            while True:
+                span = take()               # 抢下一块：抢不到就是干完了
+                if span is None:
+                    return
+                fetch(out, span[0], span[1])
         except Cancelled:
             failures.append(Cancelled())
+        except _Stopped:
+            pass
         except Exception as e:
             failures.append(e)
+            stopped.set()                   # 别让剩下的线程白下，反正要退回单线程
 
-    threads = [threading.Thread(target=runner, args=(i, s, e), daemon=True)
-               for i, s, e in spans]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join()
-
-    if cancel.is_set():
-        raise Cancelled()
-    if failures:
-        raise failures[0]
-
-    merging = dest + '.merging'
-    with open(merging, 'wb') as out:
-        for i in range(parts):
-            with open('%s.part%d' % (dest, i), 'rb') as f:
-                shutil.copyfileobj(f, out, 1 << 20)
-    os.replace(merging, dest)
-    _clean_parts(dest)
+    tmp_ready = False
+    try:
+        with open(tmp, 'w+b', buffering=0) as out:
+            out.truncate(total)             # 预分配：每块都往里写，尺寸一开始就是对的
+            threads = [threading.Thread(target=runner, args=(out,), daemon=True)
+                       for _ in range(max(1, min(workers, len(spans))))]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+            tmp_ready = not failures and not cancel.is_set()
+        if not tmp_ready:
+            if cancel.is_set():
+                raise Cancelled()
+            raise failures[0]
+        os.replace(tmp, dest)
+    except BaseException:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def _host_of(url):
@@ -680,20 +779,20 @@ def _download_once(source, dest, total_hint, progress, workers, cancel):
         print('[更新] 不支持分段探测，改单线程：%s' % e)
         ranged, total, name = False, total_hint, _filename_of(source)
 
-    parts = 1
+    spans = []
     if ranged and total and total >= CHUNK_MIN_BYTES:
-        parts = max(1, min(workers, int(total // PART_MIN_BYTES)))
+        spans = chunk_spans(total, workers)
 
     _clean_parts(dest)
     meter = _Meter(total, progress)
-    if parts > 1:
+    if spans:
         try:
-            _download_parts(source, dest, total, parts, meter, cancel)
+            _download_parallel(source, dest, total, spans, workers, meter, cancel)
         except Cancelled:
             _clean_parts(dest)
             raise
         except Exception as e:
-            print('[更新] %d 线程分段下载失败，改用单线程：%s' % (parts, e))
+            print('[更新] %d 块动态分块下载失败，改用单线程：%s' % (len(spans), e))
             _clean_parts(dest)
             meter = _Meter(total, progress)
             _download_stream(source, dest, meter, cancel)
@@ -885,8 +984,9 @@ def download(url, dest=None, progress=None, workers=None, cancel=None, sha256=No
              force=False):
     """多线程下载 ``url``，返回本地文件绝对路径。
 
-    能分段就分段并行（默认 16 线程，按文件大小自动减少段数）；服务器不支持
-    Range、文件太小、或分段中途失败时，**自动退回单线程**重下，不让用户卡在错误里。
+    能分段就把文件切成「线程数 × 3」的小块**动态分配**（默认 16 线程，谁下完谁抢下一块，
+    快的多干、慢的少干，收尾不会只剩一条连接在拖）；服务器不支持 Range、文件太小、
+    或分块中途失败时，**自动退回单线程**重下，不让用户卡在错误里。
     GitHub 地址会先跟镜像比一比速度（见 :func:`choose_source`），走镜像时用
     :func:`_spot_check` 抽样比对官方字节；给了 ``sha256`` 就整包校验。
 

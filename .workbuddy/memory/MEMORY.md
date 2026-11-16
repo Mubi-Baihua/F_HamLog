@@ -122,6 +122,7 @@
   `git checkout -- file/…`**；`project.main()` 不触碰星历。
 
 ## 检查更新（`check_update.py` 唯一出处）
+<<<<<<< HEAD
 - **不 import Qt**：`check()` → `preview|error|latest|new`；`download()` 多线程分段（≥4 MB 才切、16 线程、
   每段 ≥512 KB、失败退单线程）；`run_installer()` `/SILENT`；界面按钮在 `set.py`（`BgThread` + 强引用）。
 - **进度窗**：`setValue()` 内部会 `show()`，关窗后有帧就弹回 → `state['closed']` 拦住并**先 `reset()` 再
@@ -129,6 +130,23 @@
   **别只删 hint**）。
 - **QMessageBox 无 RejectRole 时叉号和 Esc 全失效**；要自定义按钮顺序就自己用 QDialog 排。
 - **速度 / ETA 必须平滑**：1 s 滑动窗；ETA 用累计平均 + 只降不升；`_Meter.add()` 回调必须在锁内。
+=======
+- **不 import Qt**：`check()` → `preview|error|latest|new`；`download()` 动态分块并行（≥4 MB 才切、16 线程、块数
+  ≈线程数×3、块 ≥512 KB、共享队列抢块、**按偏移直写 `dest.part` 不再分段合并**、失败退单线程）；
+  `run_installer()` `/SILENT`；界面按钮在 `set.py`（`BgThread` + **模块级强引用**）。
+- **别退回「段数 = 线程数 + 末尾合并」**（2026-11-16）：那样快的线程下完就闲着、收尾只剩一两条连接，
+  加上 CDN 每条连接「先快后限速」一起被掐，就是「前面快、后面慢」。块细 + 每块一条新连接 = 反复白拿
+  建连那阵高速；写偏移省掉合并那段 100% 空转。重试按「有没有进展」算（`stalls` 清零 + `PART_TRIES×8` 上限）。
+- **进度窗**：`setValue()` 内部 `ensureDialog() → show()`，关窗后只要有帧就弹回 → 用 `state['closed']` 拦住并
+  **先 `reset()` 再 `hide()`**；QProgressDialog **只增不减**。
+- **QMessageBox 无 RejectRole 时叉号和 Esc 全失效**；要自定义按钮顺序就自己用 QDialog 排（Windows 下 Reject
+  紧跟 Accept，role 救不了）。
+- **下载/提示窗一律不可最大化**：`_no_maximize()` = `WindowMaximizeButtonHint=False` +
+  `MSWindowsFixedSizeDialogHint=True` + `changeEvent` 里 `isMaximized() → showNormal()`；**别只删 hint**。
+  进度窗还要 `WindowMinimizeButtonHint` + `Qt.NonModal` + `parent=None`，收尾用 `_alive()` 探活。
+- **速度 / ETA 必须平滑**：1 s 滑动窗（`Speedometer`）、ETA 用累计平均 + 只降不升 + 死区随 eta 缩放；
+  `_Meter.add()` 的**回调必须在锁内**；`done` 回退当帧不重算、**别重设基准**。
+>>>>>>> workbuddy/develop-b2de59d7
 - **加速**：GitHub 限单连接 → 多线程 + `PART_TIMEOUT=15` + `choose_source()` 镜像择优（快 1.3 倍才换、换前验
   Range），走镜像时 `_spot_check()` 抽样比对；版本文件可写第三段 sha256。
 - **预览版不自我更新**（含 `UTC`/`Preview` 连网都不连）；`preview.yml` 改版本号**必须夹在 `pip install -e .`
