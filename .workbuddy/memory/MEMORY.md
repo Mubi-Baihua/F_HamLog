@@ -131,8 +131,12 @@
   `git checkout -- file/…`**；`project.main()` 不触碰星历。
 
 ## 检查更新（`check_update.py` 唯一出处）
-- **不 import Qt**：`check()` → `preview|error|latest|new`；`download()` 多线程分段（≥4 MB 才切、16 线程、每段
-  ≥512 KB、失败退单线程）；`run_installer()` `/SILENT`；界面按钮在 `set.py`（`BgThread` + **模块级强引用**）。
+- **不 import Qt**：`check()` → `preview|error|latest|new`；`download()` 动态分块并行（≥4 MB 才切、16 线程、块数
+  ≈线程数×3、块 ≥512 KB、共享队列抢块、**按偏移直写 `dest.part` 不再分段合并**、失败退单线程）；
+  `run_installer()` `/SILENT`；界面按钮在 `set.py`（`BgThread` + **模块级强引用**）。
+- **别退回「段数 = 线程数 + 末尾合并」**（2026-11-16）：那样快的线程下完就闲着、收尾只剩一两条连接，
+  加上 CDN 每条连接「先快后限速」一起被掐，就是「前面快、后面慢」。块细 + 每块一条新连接 = 反复白拿
+  建连那阵高速；写偏移省掉合并那段 100% 空转。重试按「有没有进展」算（`stalls` 清零 + `PART_TRIES×8` 上限）。
 - **进度窗**：`setValue()` 内部 `ensureDialog() → show()`，关窗后只要有帧就弹回 → 用 `state['closed']` 拦住并
   **先 `reset()` 再 `hide()`**；QProgressDialog **只增不减**。
 - **QMessageBox 无 RejectRole 时叉号和 Esc 全失效**；要自定义按钮顺序就自己用 QDialog 排（Windows 下 Reject
