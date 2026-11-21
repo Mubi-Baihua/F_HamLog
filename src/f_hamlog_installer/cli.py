@@ -134,7 +134,7 @@ def _load(args, include_prerelease=True):
                                offline=getattr(args, 'offline', False))
     rels = releases.collect(raw, include_prerelease=include_prerelease)
     if not rels:
-        raise CliError('GitHub 上没取到任何版本（仓库地址或网络有问题）')
+        raise CliError('未获取到任何版本（仓库地址或网络异常）')
     return rels
 
 
@@ -146,7 +146,7 @@ def _resolve(rels, text):
     if cands:
         raise CliError('「%s」对应多个版本，请写全：%s'
                        % (text, '、'.join(r['tag'] for r in cands)))
-    raise CliError('找不到版本「%s」。用 list 看看都有哪些' % text)
+    raise CliError('未找到版本「%s」，可用 list 查看全部版本' % text)
 
 
 def _targets(rels, args):
@@ -220,7 +220,7 @@ def cmd_list(args):
         picked = releases.choose_assets(rel)
         flag = rel['tag'] + ('*' if rel['prerelease'] else '')
         if not picked:
-            print(_row((flag, '-', '-', rel['date'] or '-', '没发安装包'), widths))
+            print(_row((flag, '-', '-', rel['date'] or '-', '未发布安装包'), widths))
             continue
         asset = picked[0]
         print(_row((flag, asset['kind'], cu.format_size(asset.get('size') or 0),
@@ -241,7 +241,7 @@ def cmd_latest(args):
     print('发布：%s' % (rel['date'] or '未知'))
     print('页面：%s' % (rel['page'] or config.RELEASES_URL))
     if not picked:
-        print('安装包：这个版本没有发布安装包')
+        print('安装包：该版本未发布安装包')
         return 1
     _print_asset(rel, picked[0])
     print('  地址 %s' % picked[0]['url'])
@@ -258,7 +258,7 @@ def cmd_download(args):
     if args.dry_run:
         for job in jobs:
             if job['asset'] is None:
-                print('%s  没有安装包，跳过' % job['release']['tag'])
+                print('%s  未发布安装包，跳过' % job['release']['tag'])
                 continue
             print('%s  %s（%s）→ %s' % (
                 job['release']['tag'], job['asset']['name'],
@@ -273,7 +273,7 @@ def cmd_download(args):
     for index, job in enumerate(jobs, 1):
         rel, asset = job['release'], job['asset']
         if asset is None:
-            print('[%d/%d] %s  没有发布安装包，跳过' % (index, total, rel['tag']))
+            print('[%d/%d] %s  未发布安装包，跳过' % (index, total, rel['tag']))
             continue
         head = '[%d/%d] %s  %s  %s' % (index, total, rel['tag'], asset['name'],
                                        cu.format_size(asset.get('size') or 0))
@@ -311,7 +311,7 @@ def cmd_install(args):
     rel = targets[-1]                      # 装最后一个：一次装一个才说得通
     picked = releases.choose_assets(rel)
     if not picked:
-        raise CliError('版本 %s 没有发布安装包' % rel['tag'])
+        raise CliError('版本 %s 未发布安装包' % rel['tag'])
     asset = picked[0]
     dest = download.dest_path(out, rel['tag'], asset['name'])
 
@@ -338,9 +338,9 @@ def cmd_install(args):
 
     if not args.yes and sys.stdin.isatty():
         mode = '静默安装' if not args.gui else '打开安装向导'
-        answer = input('开始%s？会弹 UAC 提权（Y/n）：' % mode).strip().lower()
+        answer = input('开始%s？将请求 UAC 提权（Y/n）：' % mode).strip().lower()
         if answer and answer not in ('y', 'yes', '是', ''):
-            print('已取消，安装包留在：%s' % rec['path'])
+            print('已取消，安装包位置：%s' % rec['path'])
             return 0
 
     print('正在启动安装包…')
@@ -349,7 +349,7 @@ def cmd_install(args):
     except OSError as e:
         raise CliError('启动安装包失败：%s' % e)
     if code is None:
-        print('已拉起安装包（未等待结束）：%s' % rec['path'])
+        print('已启动安装包（未等待结束）：%s' % rec['path'])
         return 0
     print(install.code_text(code))
     # 3010 = 装好了但要重启（msi 常见），算成功
@@ -387,7 +387,7 @@ def cmd_verify(args):
 
 def cmd_cache(args):
     if args.action == 'clear':
-        print('已清空版本列表缓存' if github.clear_cache() else '本来就没什么可清的')
+        print('已清空版本列表缓存' if github.clear_cache() else '缓存已为空')
         return 0
     cached = github.load_cache()
     if not cached:
@@ -431,7 +431,7 @@ def _common_args(parser, top):
 def build_parser():
     parser = argparse.ArgumentParser(
         prog=PROG,
-        description='F HamLog 安装器：下载最新版并安装，或把 GitHub 上所有版本收下来。',
+        description='F HamLog 安装器：下载最新版并安装、按需下载指定版本。',
         epilog='示例：\n'
                '  %s                       下载并安装最新版\n'
                '  %s list                  看所有版本\n'

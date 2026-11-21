@@ -2051,8 +2051,9 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
             return result
         if _checked_rows:
             return [r for r in sorted(_checked_rows) if 0 <= r < table.rowCount()]
-        for idx in table.selectionModel().selectedRows():
-            result.append(idx.row())
+        # 单元格选择模式（SelectItems）：一个格子被选中就代表这一行，按行号去重
+        for row in sorted({idx.row() for idx in table.selectionModel().selectedIndexes()}):
+            result.append(row)
         return result
 
     def copy_records_to_clipboard(records):
@@ -2169,7 +2170,10 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
             tbl.setParent(parent)
         tbl.setHorizontalHeaderLabels(headers)
         tbl.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        tbl.setSelectionBehavior(QAbstractItemView.SelectRows)
+        # 选择一格而不是一整行：点哪格就只高亮哪格（原先 SelectRows 会让整行变蓝，
+        # 容易让人以为「这一行已被勾选」）。注意 SelectItems 下
+        # selectionModel().selectedRows() 会返回空——取选中行一律用 selectedIndexes()。
+        tbl.setSelectionBehavior(QAbstractItemView.SelectItems)
         tbl.setSelectionMode(QAbstractItemView.ExtendedSelection)
         tbl.setContextMenuPolicy(Qt.CustomContextMenu)
         tbl.setUpdatesEnabled(False)        # 填充期间冻结重绘
@@ -3867,12 +3871,11 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
                 window.activateWindow()
             except Exception:
                 pass
-            # 2) 滚动到该行并选中高亮
+            # 2) 滚动到该行并选中高亮（表格是单元格选择模式：只点亮首格，不整行反白）
             item = table.item(orig, 0)
             if item is not None:
                 table.scrollToItem(item, QAbstractItemView.PositionAtCenter)
             table.clearSelection()
-            table.selectRow(orig)
             table.setCurrentCell(orig, 0)
 
         table_r = _new_table(len(matches), on_toggle=_sr_toggle)
@@ -3958,8 +3961,9 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
                 # 勾选集合为先（O(1) 判定），未勾选时回退到表格高亮选中行
                 recs = [file[orig] for orig in sorted(_sr_checked_rows)]
                 if not recs:
-                    for idx in table_r.selectionModel().selectedRows():
-                        recs.append(file[matches[idx.row()][0]])
+                    # 表格是单元格选择模式：选中任意一格即算选中该行（按行号去重）
+                    for r in sorted({i.row() for i in table_r.selectionModel().selectedIndexes()}):
+                        recs.append(file[matches[r][0]])
                 if not recs:
                     toast_tip.show_toast("请先勾选要复制的行。", window)
                     return

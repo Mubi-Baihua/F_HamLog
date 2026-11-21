@@ -50,6 +50,7 @@
 - 复选框**一律叫「日志文件」**，默认通联日志不挂文件名；`choose_save_target(parent, heading)` 只有标题 + 四条单选项，**不摆灰色说明**。
 
 ## 主表格 / 性能
+- 主表与搜索结果表是**单元格选择**（`SelectItems`，点哪格只亮哪格）；因此 **`selectedRows()` 恒为空**，要行号一律 `sorted({i.row() for i in ...selectedIndexes()})`（`get_selected_row_indexes` / 搜索窗「复制选中行」）；「定位到此条」只 `setCurrentCell(orig,0)`，不 `selectRow`。
 - 勾选 /「更多」列**一律自绘委托**，**禁止逐行 `setCellWidget`**；勾选权威 = `_checked_rows`；不启用 `stretchLastSection`、不强制行高、每列显式设宽（「选择」45、「更多」80）；重建要还原滚动位置。
 - 内容比较用值快照（`_content_snap()` + `==`），**别比 `json.dumps`**；**单条编辑/少量删除禁止整表重建**（`table_refresh_row`/`table_remove_rows`），date/time 变了必须 `table_update()`。
 - 列表变了先 `_table_sync_from_file(old)`：少量改动 → `table_refresh_row`；纯末尾追加 → `_append_table_rows`；删除/顺序变 → `table_update(persist=False)`。

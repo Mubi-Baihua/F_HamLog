@@ -150,7 +150,8 @@ if rw is not None:
             Qt.LeftButton, Qt.LeftButton, Qt.NoModifier))
     for _ in range(5):
         app.processEvents()
-    sel = sorted(r.row() for r in table.selectionModel().selectedRows())
+    # 主表是单元格选择模式（SelectItems）→ 用 selectedIndexes 取行号
+    sel = sorted({i.row() for i in table.selectionModel().selectedIndexes()})
     # 主表行号 == 搜索结果里的原始索引（file 未重排）
     expected = target
     ok('点击定位后主表选中对应行', sel == [expected] or (expected in sel), f'sel={sel} expected={expected}')
@@ -158,7 +159,7 @@ if rw is not None:
     tr.itemDelegateForColumn(tr.columnCount() - 1)._click_cb(9)
     for _ in range(5):
         app.processEvents()
-    sel2 = sorted(r.row() for r in table.selectionModel().selectedRows())
+    sel2 = sorted({i.row() for i in table.selectionModel().selectedIndexes()})
     ok('定位回调驱动主表选中', sel2 == [9], f'sel={sel2}')
 
     # 右键菜单里含「定位到此条」

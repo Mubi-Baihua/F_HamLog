@@ -14,7 +14,8 @@
    省掉未登录 GitHub 每小时只有 60 次的接口额度。
 
 命令行入口：``python -m f_hamlog_installer``（装进环境后是 ``f-hamlog-installer``）。
-本包**不 import Qt**，可以在纯控制台里跑，也能单独用 Nuitka 打成 exe。
+内核（``download`` / ``install``）不 import Qt，控制台与离屏测试都能直接用；
+只有 ``gui.py`` 依赖 PySide6。
 """
 
 __version__ = "1.0.0"

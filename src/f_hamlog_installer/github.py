@@ -116,10 +116,10 @@ def api_get(url, token=None, retries=1):
                     raise GithubError('GitHub 上找不到这个资源（HTTP 404）：%s' % url)
                 if e.code in (403, 429) and ('rate limit' in low or 'api rate' in low):
                     raise RateLimited(
-                        'GitHub 接口额度已用完（未登录只有 60 次/小时）。\n'
-                        '  办法一：设置环境变量 GITHUB_TOKEN（或 --token 参数）后重试；\n'
-                        '  办法二：等一小时；\n'
-                        '  办法三：加 --offline 用本地缓存里的版本列表。')
+                        'GitHub 接口额度已用尽（未登录限制为 60 次/小时）。\n'
+                        '  方式一：设置环境变量 GITHUB_TOKEN（或 --token 参数）后重试；\n'
+                        '  方式二：等待一小时；\n'
+                        '  方式三：使用 --offline 读取本地缓存的版本列表。')
                 errors.append('%s → HTTP %s' % (_host(source), e.code))
                 break
             except Exception as e:          # 超时 / DNS / TLS / 连接重置 / JSON 坏
@@ -130,7 +130,7 @@ def api_get(url, token=None, retries=1):
             _remember(source, url)
             return data
     detail = '\n'.join('  ' + e for e in errors) or '  （没有任何可用来源）'
-    raise GithubError('访问 GitHub 失败（直连与 %d 个镜像都试过了）：\n%s'
+    raise GithubError('访问 GitHub 失败（直连与 %d 个镜像均不可用）：\n%s'
                       % (len(mirror_prefixes()), detail))
 
 
@@ -203,7 +203,7 @@ def list_releases(token=None, refresh=False, offline=False):
     if offline:
         if cached:
             return cached['items']
-        raise GithubError('离线模式下本地没有版本列表缓存，先联网跑一次 list')
+        raise GithubError('离线模式下无本地版本列表缓存，请联网执行一次 list')
     if cached and not refresh and time.time() - cached.get('time', 0) <= config.CACHE_TTL:
         return cached['items']
     try:

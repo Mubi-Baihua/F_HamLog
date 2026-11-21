@@ -37,31 +37,32 @@ _BTN_HEIGHT = 32                 # 按钮行统一高度：主按钮高一档才
 
 # 「GitHub token 是什么」的完整解释（界面上那个「这是什么」按钮弹它）
 _TOKEN_HELP = """\
-**GitHub token 是一串个人访问令牌**（Personal Access Token），相当于给这个安装器
-办的一张只读门禁卡：GitHub 看到它就知道请求来自你，给的接口额度更高。
+**GitHub token（个人访问令牌，Personal Access Token）**
 
-**为什么会有这个输入框**
+GitHub 用它识别请求来源，并据此提供更高的接口额度。
 
-安装器要读本仓库的版本列表。GitHub 对未登录调用限制为每小时 60 次，反复点
-「刷新列表」很容易用完，界面就会提示接口报错。填了 token 之后是每小时 5000 次。
+**用途**
 
-**要不要填**
+安装器需读取本仓库的版本列表。未登录访问 GitHub 接口限制为每小时 60 次，
+频繁刷新会触发接口报错；填写 token 后为每小时 5000 次。
 
-一般不用填。只有反复刷新、真的遇到「接口额度用尽」时，再去申请一个。
+**是否需要填写**
 
-**怎么弄（约 1 分钟）**
+通常不需要。仅在出现「接口额度用尽」提示时申请。
+
+**申请步骤（约 1 分钟）**
 
 1. 打开 <https://github.com/settings/tokens>
-2. 点 Generate new token → Generate new token (classic)
-3. Note 随便填；Expiration 选 7 天；Scopes 一个都不用勾
-   （读公开仓库不需要任何权限）
-4. 生成后复制那串 ghp_ 开头的字符，粘贴到输入框
+2. 选择 Generate new token → Generate new token (classic)
+3. Note 任意填写；Expiration 选择 7 天；Scopes 无需勾选
+   （读取公开仓库不需要权限）
+4. 复制生成的 `ghp_` 开头字符，粘贴到输入框
 
 **注意**
 
-* token 等同于密码，不要发给别人；
-* 本安装器只把它放在内存里，关掉窗口就没了，不会写进任何文件；
-* 如果填了 token 仍然报额度问题，多半是 token 过期了，重新生成一个。
+* token 等同于密码，请勿外传；
+* 安装器仅在内存中保存，关闭窗口即清除，不写入任何文件；
+* 填写后仍提示额度不足，通常为 token 已过期，请重新生成。
 """
 
 
@@ -320,7 +321,7 @@ class MainWindow(QMainWindow):
         font.setPointSizeF(font.pointSizeF() + 3)
         font.setBold(True)
         title.setFont(font)
-        sub = QLabel('下载最新版并安装，或按需挑版本下载')
+        sub = QLabel('下载并安装最新版，或按需下载指定版本')
         sub.setForegroundRole(QPalette.ColorRole.PlaceholderText)
 
         lay.addWidget(title)
@@ -458,7 +459,7 @@ class MainWindow(QMainWindow):
         self.notes = QTextBrowser()
         self.notes.setOpenExternalLinks(True)
         self.notes.setMinimumHeight(240)        # 说明区不能缩成一条缝
-        self.notes.setPlaceholderText('在上面的列表里选一个版本，这里显示它完整的发布说明')
+        self.notes.setPlaceholderText('在列表中选择版本以查看完整发布说明')
         lay.addWidget(self.notes_title)
         lay.addWidget(self.notes, 1)
         return page
@@ -581,14 +582,14 @@ class MainWindow(QMainWindow):
         try:
             os.makedirs(folder, exist_ok=True)
         except OSError as e:
-            QMessageBox.warning(self, '打不开目录', str(e))
+            QMessageBox.warning(self, '无法打开目录', str(e))
             return
         QDesktopServices.openUrl(QUrl.fromLocalFile(folder))
 
     def _explain_token(self):
         """「这是什么」——长解释放独立对话框，主界面只留一个输入框。"""
         dlg = QDialog(self)
-        dlg.setWindowTitle('GitHub token 是什么')
+        dlg.setWindowTitle('GitHub token 说明')
         dlg.resize(560, 440)
         lay = QVBoxLayout(dlg)
         view = QTextBrowser(dlg)
@@ -597,7 +598,7 @@ class MainWindow(QMainWindow):
         lay.addWidget(view, 1)
         row = QHBoxLayout()
         row.addStretch(1)
-        ok = QPushButton('知道了')
+        ok = QPushButton('关闭')
         ok.setDefault(True)
         ok.clicked.connect(dlg.accept)
         row.addWidget(ok)
@@ -639,7 +640,7 @@ class MainWindow(QMainWindow):
             tag = rel['tag'] + (' *' if rel['prerelease'] else '')
             state = ''
             if asset is None:
-                state = '没发安装包'
+                state = '未发布安装包'
             else:
                 dest = download.dest_path(self._out_dir(), rel['tag'], asset['name'])
                 if download.complete(dest, asset.get('size') or 0):
@@ -647,7 +648,7 @@ class MainWindow(QMainWindow):
                 elif os.path.exists(dest):
                     state = '不完整'
                 elif download.record_key(rel['tag'], asset['name']) in manifest:
-                    state = '记录在册但文件没了'
+                    state = '记录存在但文件缺失'
             values = (tag, asset['kind'] if asset else '—',
                       cu.format_size(asset.get('size') or 0) if asset else '—',
                       rel['date'] or '—', state)
@@ -704,7 +705,7 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------ 下载
     def _install_latest(self):
         if self._busy:
-            self.statusBar().showMessage('正在忙（下载或安装进行中），请稍候')
+            self.statusBar().showMessage('下载或安装正在进行，请稍候')
             return
         if not self._rels:
             # 列表还没到：先取，回来再接着装
@@ -713,22 +714,22 @@ class MainWindow(QMainWindow):
             return
         rel = releases.latest(self._rels)
         if rel is None:
-            QMessageBox.information(self, '没有可安装的版本', '版本列表是空的，先刷新一下')
+            QMessageBox.information(self, '没有可安装的版本', '版本列表为空，请先刷新列表')
             return
         self._install_rel(rel)
 
     def _download_selected(self):
         rels = self._selected_rels()
         if not rels:
-            QMessageBox.information(self, '先选版本',
-                                    '在列表里点一下要下载的版本（按住 Ctrl 可多选），再点下载')
+            QMessageBox.information(self, '未选择版本',
+                                    '请在列表中选择要下载的版本（可按住 Ctrl 多选）')
             return
         self._start_jobs(download.plan(rels, self._out_dir()))
 
     def _install_selected(self):
         rels = self._selected_rels()
         if not rels:
-            QMessageBox.information(self, '先选版本', '在列表里点一下要装的版本，再点安装')
+            QMessageBox.information(self, '未选择版本', '请在列表中选择要安装的版本')
             return
         self._install_rel(rels[0])
 
@@ -740,12 +741,12 @@ class MainWindow(QMainWindow):
         用户目录里别的东西。
         """
         if self._busy:
-            self.statusBar().showMessage('正在忙（下载或安装进行中），请稍候')
+            self.statusBar().showMessage('下载或安装正在进行，请稍候')
             return
         rels = self._selected_rels()
         if not rels:
-            QMessageBox.information(self, '先选版本',
-                                    '在列表里点一下要删的版本，再点「删除本地包」')
+            QMessageBox.information(self, '未选择版本',
+                                    '请在列表中选择要删除本地包的版本')
             return
         out = self._out_dir()
         manifest = download.load_manifest(out)
@@ -777,21 +778,21 @@ class MainWindow(QMainWindow):
         self._fill_table()
         if removed:
             self.statusBar().showMessage(
-                '已删除 %d 个安装包，释放 %s（需要时重新下载即可）'
+                '已删除 %d 个安装包，释放 %s'
                 % (removed, cu.format_size(freed)))
         else:
-            self.statusBar().showMessage('没有可删的本地安装包（这些版本还没下载过）')
+            self.statusBar().showMessage('所选版本没有本地安装包')
         if failed:
-            QMessageBox.warning(self, '有些文件没删掉',
+            QMessageBox.warning(self, '部分文件删除失败',
                                 '\n'.join(failed[:8])
                                 + ('\n…' if len(failed) > 8 else '')
-                                + '\n\n多半是安装程序正在使用它，关掉再试。')
+                                + '\n\n通常为安装程序正在使用该文件，请关闭后重试。')
 
     def _install_rel(self, rel):
         picked = releases.choose_assets(rel)
         if not picked:
             QMessageBox.information(self, '没有安装包',
-                                    '版本 %s 没有发布安装包' % rel['tag'])
+                                    '版本 %s 未发布安装包' % rel['tag'])
             return
         asset = picked[0]
         dest = download.dest_path(self._out_dir(), rel['tag'], asset['name'])
@@ -807,7 +808,7 @@ class MainWindow(QMainWindow):
         jobs = [j for j in jobs if j.get('asset')]
         if not jobs:
             QMessageBox.information(self, '没有可下载的安装包',
-                                    '这些版本都没发布安装包')
+                                    '所选版本均未发布安装包')
             return
         self._install_after = install_after
         self._speed.reset()
@@ -852,21 +853,20 @@ class MainWindow(QMainWindow):
             self._launch_installer(after)
         elif failed:
             QMessageBox.warning(self, '部分下载失败',
-                                '有 %d 个安装包没下成，详情见状态栏；再点一次会只补失败的。'
+                                '有 %d 个安装包下载失败，详情见状态栏；再次下载将仅补齐失败项。'
                                 % failed)
 
     def _cancel(self):
-        thread = self._thread
-        stopper = getattr(thread, 'stop', None) if thread is not None else None
+        stopper = getattr(self._thread, 'stop', None) if self._thread is not None else None
         if callable(stopper):
             stopper()
-            self.statusBar().showMessage('正在取消…')
+        self.statusBar().showMessage('正在取消…')
 
     # ------------------------------------------------------------ 安装
     def _launch_installer(self, path, wizard=False):
         """确认后启动安装程序，并在后台等它结束 —— 只看启动成功是不够的。"""
         if self._busy:
-            self.statusBar().showMessage('正在忙（下载或安装进行中），请稍候')
+            self.statusBar().showMessage('下载或安装正在进行，请稍候')
             return
         name = os.path.basename(path)
         tag = os.path.basename(os.path.dirname(path))
@@ -874,22 +874,22 @@ class MainWindow(QMainWindow):
         same = [item for item in install.installed_versions()
                 if item[1] and item[1] == tag]
         if same:
-            where = same[0][2] or '（注册表没记安装位置）'
+            where = same[0][2] or '（注册表未记录安装位置）'
             lines.append('本机已安装 %s：%s' % (tag, where))
-            lines.append('继续会覆盖安装，用户数据（日志、密钥）不会被删。')
+            lines.append('继续将覆盖安装，用户数据（日志、密钥）不受影响。')
             lines.append('')
-        lines.append('安装程序会弹出 UAC 提权确认 —— 请看清屏幕上的'
-                     '「用户账户控制」窗口并点「是」。')
+        lines.append('安装程序将请求 UAC 提权，请在「用户账户控制」窗口中'
+                     '选择「是」。')
         if wizard:
-            lines.append('这次走完整安装向导，能看到每一步和真实错误。')
+            lines.append('本次使用完整安装向导，可查看各步骤与错误信息。')
         else:
-            lines.append('装完这里会显示结果。继续？')
+            lines.append('安装结束后将在此显示结果。是否继续？')
         if QMessageBox.question(self, '安装 F HamLog', '\n'.join(lines)) \
                 != QMessageBox.StandardButton.Yes:
-            self.statusBar().showMessage('已取消安装，安装包留在：%s' % path)
+            self.statusBar().showMessage('已取消安装，安装包位置：%s' % path)
             return
 
-        self._begin('正在等待安装程序结束（请在 UAC 窗口点「是」）…', progress=False)
+        self._begin('正在等待安装程序结束（请在「用户账户控制」窗口选择「是」）…', progress=False)
         self._install_thread = _InstallThread(path, silent=not wizard)
         self._install_thread.done.connect(self._on_install_done)
         self._install_thread.start()
@@ -897,27 +897,27 @@ class MainWindow(QMainWindow):
     def _on_install_done(self, path, result):
         self._end()
         if isinstance(result, Exception):
-            self.statusBar().showMessage('安装程序没能启动')
+            self.statusBar().showMessage('安装程序启动失败')
             QMessageBox.warning(self, '无法启动安装包',
                                 '%s\n\n安装包位置：%s' % (result, path))
             return
         if result is None:
-            self.statusBar().showMessage('已拉起安装程序（未等待结果）')
+            self.statusBar().showMessage('已启动安装程序')
             return
         text = install.code_text(result)
         if result == 0:
             self.statusBar().showMessage('%s（%s）' % (text, os.path.basename(path)))
             QMessageBox.information(
                 self, '安装完成',
-                '%s\n\n如果 F HamLog 正在运行，请关掉再重新打开。' % text)
+                '%s\n\n如 F HamLog 正在运行，请关闭后重新打开。' % text)
             return
 
         self.statusBar().showMessage('安装没有完成：%s' % text)
         answer = QMessageBox.warning(
             self, '安装没有完成',
             '%s\n\n安装包：%s\n\n'
-            '常见原因：UAC 提权被取消（弹窗没点「是」）、被安全软件拦下、'
-            '或安装包不完整。\n\n要改用完整安装向导再试一次吗（能看到真实错误）？'
+            '常见原因：UAC 提权被取消、被安全软件拦截、安装包不完整。'
+            '\n\n是否改用完整安装向导重试（可查看具体错误）？'
             % (text, path),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.Yes)
