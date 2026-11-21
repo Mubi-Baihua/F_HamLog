@@ -21,18 +21,25 @@
 - 显示名：`.fhla` = F HamLog 项目，`.fhl` = F HamLog 兼容项目；菜单动作名不改。
 - 保存默认 `.fhla`（`project_save_filters()` 首条 + `complete_project_suffix()`）；`*.fhl` 是 `*.fhla` 前缀 → **先判 `.fhla`**；打开用 `project_open_filters()`。
 - `.adi`/`.adif`：`is_adi_path()` → `input_adi.read_adi_records` / `export_adi.write_adif_file`；无属性块、无加密；**没改动不写盘**（重写丢未映射标签）。
+- 「项目属性」「自定义日志字段」共用 `format_reject_text(path, feature)`，**按真实格式分开措辞**：`.fhla` 走属性块/正常窗口；`.adi` 说 ADI（不提 .fhl）；`.fhl` 才说「纯记录格式」；未保存说「先保存」。ADI 的提示**版式与 .fhl 一致**（都是 QMessageBox 提示，不摆条数/大小信息卡）。
+- ADI **也有「加密此项目」入口**（别藏功能），点了走 `aes_open_` 首行的 ADI 分支给「不支持加密」提示。
 - 开 `.fhl` 每次问「迁移/暂不迁移」：迁移 = 写同名 `.fhla`（读回校验条数）→ 删原 `.fhl`；`default_quick_project_path()` 优先 `main.fhla` → `main.fhl`。
 - `encrypted` 只是声明，**以字节能否 UTF-8 解为准**；不记创建者/创建时间；「打开即自动保存」不算编辑；属性窗口 `Alt+I`；操作者 = 设置里的呼号（大写去空白），空则系统用户名。
+- **加密 / 解密必须走 `_write_project_now()`**（`_write_project_file` 直写），**不能靠 `save(message=False)`**：静默保存有「内容没变就跳过」，会把加密动作整个吞掉（表现为「加密后仍是明文」）；失败要回滚 key。改 key 时置 `_fhla['dirty']=True` 才算一次编辑。
+- 新建密钥只走 `fhl_rw.get_new_key_dialog()`（**两次输入**、空/不一致重弹）；读加密文件仍用 `get_user_key_dialog()`（单次）。
+- `osave()` 会**换 save_path** 到新文件（标题跟着走）；`save_path` 为空时加密前必须先存盘。
 
 ## 自定义字段（`.fhla` 专属）
 - 只填字段名称；键 = 首次创建名（撞名 `_2`），改名只改显示名 → 记录键不动。
 - 含标准 20 行；**该表顺序 = 新建行序 = 更多信息行序 = 主页列序** → 呼号大写委托按 key 找行号。
 - 「必填」「在主页显示」所有字段可改；xml 只记偏离默认的键；「恢复默认」只重置表格、点保存才写盘；**`.fhl` 一律不给**。
+- **搜索 / 查找替换 / 统计图的字段清单唯一出处 = `field_entries()`**（`search_field_choices()` + `bind_field_combo()`），**禁止再写死清单**（写死 = 自定义字段搜不到）；自定义字段名不翻（`combo._i18n_skip=True`），统计图 `skip=('date','time')`。
 
 ## 多窗口 / 并发写
 - 记录列表 / 密钥 / 子窗口引用**属于单个窗口**（`project.main()` 局部变量 + `nonlocal`，`_set_file()`/`_set_key()`）；模块级同名变量只是镜像，**逻辑里不许读**。
 - 项目窗口可多开（`project_windows` + `_new_project_window()`）；`_confirm_replace_session()` 是恒 True 空壳。
 - 未保存备份**按文件路径分开**（`backup.project_backup_path()`）；启动用 `list_project_backups()` 逐个恢复。
+- **备份文件只在真有未保存内容时存在**：`clear_backup` = 删文件（不存在就什么都不做）、`write_backup(空)` 也删除、开窗**不写**（`_bk_tick` 仅在脏时写）、`list_project_backups` 顺手清 0 字节空壳。别再生成 `project_backup_<hash>.fhl` 空壳。
 - 同文件可能被多窗口/批量记录同时写：`_disk` 记 `(mtime_ns, size)`；`save()` 里**外部改动检查在「内容没变就跳过」之前**；本窗口没改过 → `_reload_from_disk()` 且不写盘；写盘后 `notify_file_changed(path, skip=window)`。重载两条护栏：**有未保存改动**、**开着单元格编辑器** → 不重载。
 
 ## 批量记录（`batch_project.py`）
@@ -47,6 +54,7 @@
 - 内容比较用值快照（`_content_snap()` + `==`），**别比 `json.dumps`**；**单条编辑/少量删除禁止整表重建**（`table_refresh_row`/`table_remove_rows`），date/time 变了必须 `table_update()`。
 - 列表变了先 `_table_sync_from_file(old)`：少量改动 → `table_refresh_row`；纯末尾追加 → `_append_table_rows`；删除/顺序变 → `table_update(persist=False)`。
 - 撤销点逐条浅拷贝（别 `deepcopy`）；`_fill_rows` 期间 `gc.disable()`；`write_fhl_file` 必须一次 `f.write`。
+- 搜索结果窗口 = `_main_cols()` + 「定位到此条」；**被搜字段不在主页列时补一列，必须插在「更多」之前**，并把 `_new_table` 挂在旧末列上的 `MoreButtonDelegate` 显式摘掉（`setItemDelegateForColumn(last_col-1, None)`），否则字段列会画出「更多」按钮。
 - **格式与落盘函数不因性能改动**；改前跑 `__perf_tick_bench.py`/`__perf_long_fhl_bench.py`，验 `__inplace_edit_smoke.py`。
 
 ## 主题 / i18n / 布局
@@ -58,6 +66,8 @@
 - 设置页 = 自动保存：文本 300 ms 防抖，开关/数字立即写；`_save()` 每次重读 `file/m_xml.txt` 再 update 自己的键；坐标解析失败保留上一次有效值；「自动更新」与「检查更新」同一行、默认 True、预览版置灰。
 - 所有 `.setToolTip(...)` 已整段注释 → `__sat_window_smoke` 的「提示列出数据源」必然失败。
 - `show_toast()`：非模态、无边框、置顶、1 秒关、可堆叠；**分层窗口禁用 `QGraphicsDropShadowEffect`**。
+- **悬浮提示一律不带感叹号、句末也不带句号**：`toast_tip.strip_bang()` 在 `_Toast.__init__` 兜底（「！」/「!」先统一成句号，再把**句末**的「。」/「.」去掉），源文案也别写；句中/文件名里的点不动。`show_toast` 是所有提示的唯一出口。
+- 自定义日志字段保存后只提示「已保存字段更改」（不再报条数）。
 - **删除日志无二次确认**：直接删 + toast，安全网 = `snapshot_before()`。
 - **别用 `setEnabled(False)` 表示「忙」**（焦点跳到「我的呼号」并全选）；改文字 + `isRunning()` 拦重入。
 - `setFixedSize` 之后**禁止**再设 `setMinimumHeight/setMaximumWidth`；超高改 `QSpacerItem(…, Expanding)`，末尾别 `addStretch`（验 `__main_layout_settle_smoke.py`）。

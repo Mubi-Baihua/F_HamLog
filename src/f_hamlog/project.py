@@ -451,6 +451,35 @@ def other_item_text(other_item):
     return '、'.join(v if k == v else f'{k}（{v}）' for k, v in other_item.items())
 
 
+def format_reject_text(path, feature='属性'):
+    """「这个文件格式没有该功能」的提示正文——**按真实格式分别措辞**。
+
+    用户要求：不管在哪个窗口，``.fhla`` / ``.fhl`` / ``.adi`` 都要分开说。以前只有一句
+    「.fhl 是纯记录格式…」，ADI 用户也被甩这句话，看着像打开了错误的文件。
+
+    ``feature``：``'属性'``（项目属性 Alt+I）/``'自定义字段'``（自定义日志字段）。
+    每段**逐段 tr 再拼**：词表按整串匹配，拼完再翻会漏翻。
+    """
+    is_prop = feature == '属性'
+    if is_adi_path(path):
+        # ADI 的话里不提 .fhl，也不摆「不支持的格式」那一行——只说它自己没有，
+        # 再给一条能落地的去处（需要这些时另存为 .fhla）。
+        body = (i18n.tr('ADI 是通用日志交换格式，不含编辑者、编辑时间、版本、加密状态等属性。')
+                if is_prop else i18n.tr('ADI 是通用日志交换格式，不含自定义日志字段。'))
+        tail = (i18n.tr('需要项目属性时，可用「另存为」保存为 .fhla 项目。') if is_prop
+                else i18n.tr('需要自定义日志字段时，可用「另存为」保存为 .fhla 项目。'))
+        return body + '\n\n' + tail
+    if not path:
+        return (i18n.tr('当前项目还没有保存到磁盘。') + '\n\n'
+                + (i18n.tr('保存后（Ctrl+S）才能查看项目属性。') if is_prop
+                   else i18n.tr('保存后（Ctrl+S）才能使用自定义日志字段。')))
+    body = (i18n.tr('.fhl 是纯记录格式，不含编辑者、编辑时间、版本、加密状态等属性。')
+            if is_prop else i18n.tr('.fhl 是纯记录格式，不含自定义日志字段。'))
+    tail = (i18n.tr('请「另存为」带属性的 .fhla 项目文件后再查看。') if is_prop
+            else i18n.tr('请「另存为」带属性的 .fhla 项目文件后再使用。'))
+    return i18n.tr('不支持的格式：当前项目不是 .fhla 文件。') + '\n\n' + body + '\n' + tail
+
+
 def describe_meta(meta=None, other_item=None, path=''):
     """把属性块整理成 ``[(显示名, 值)]``，供「项目属性」窗口逐行展示。"""
     m = normalize_meta(meta)
@@ -1785,6 +1814,30 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         """要显示在主页表格里的自定义字段：``[(键, 名称)]``，顺序随字段顺序。"""
         return [(k, lb) for k, lb, _r, m, is_c in field_entries() if is_c and m]
 
+    # ---------- 「搜索 / 查找替换 / 统计图」的可选字段 ----------
+    # 以前这三处各自写死一份字段清单，于是**自定义字段永远搜不到**（清单里没有它），
+    # 标准字段也漏了几个（接收频率 / 己方接收信号 / 己方天线…）。现在统一从
+    # field_entries() 取：标准 20 个 + 本项目自定义字段，顺序与「自定义日志字段」
+    # 表格一致（排一次，三处一起跟着走），以后再加字段也不用改这三处。
+    def search_field_choices(skip=()):
+        """可选字段 ``[(键, 显示名, 是否自定义)]``；``skip`` 里的键不列出。"""
+        out = []
+        for k, label, _req, _main, is_custom in field_entries():
+            if k in skip:
+                continue
+            # 标准字段名查词表（词表里有「对方呼号」这些）；自定义字段名是用户自己
+            # 填的数据，原样显示，绝不过翻译。
+            out.append((k, label if is_custom else i18n.tr(label), is_custom))
+        return out
+
+    def bind_field_combo(combo, skip=()):
+        """把可选字段填进下拉框：显示名在前、字段键存在 itemData 里。"""
+        for k, label, _is_custom in search_field_choices(skip):
+            combo.addItem(label, k)
+        # 上面已经按当前语言翻好了（自定义字段名保持原样）→ 关掉控件树的自动翻译，
+        # 否则用户自定义的字段名可能被词表「顺手翻掉」。
+        combo._i18n_skip = True
+
     def set_field_defs(entries):
         """整体替换字段定义（顺序 / 名称 / 必填 / 主页显示），并立即落盘。
 
@@ -2565,7 +2618,7 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
                 return False
             _bk_snapshot()
             if message:
-                toast_tip.show_toast("已保存到服务端！", window)
+                toast_tip.show_toast("已保存到服务端。", window)
             return True
 
         with open(app_path('file/m_xml.txt'), 'r', encoding='utf-8') as f:
@@ -2618,7 +2671,7 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
             _bk_clear()
             _bk_snapshot(snap)
             if message:
-                toast_tip.show_toast("保存成功！", window)
+                toast_tip.show_toast("保存成功。", window)
         return True
 
     def _reload_from_disk(path):
@@ -2750,6 +2803,13 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         table_update(persist=False)
 
     def osave():
+        """另存为 → 之后**当前项目就跟着新文件走**（save_path 指向它）。
+
+        以前只写文件、不换 save_path，于是「另存为」之后继续编辑时，Ctrl+S / 自动保存
+        仍然写回**旧文件**，新文件永远停在另存那一刻；恢复的项目 / 没有文件路径的项目
+        「先保存再加密」也就永远拿不到路径。与 `_save_recovered_as` 保持一致。
+        """
+        nonlocal save_path
         import json
         sp, sel = QFileDialog.getSaveFileName(
             window,  # 父窗口，可以是None或者您的主窗口
@@ -2762,8 +2822,13 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         sp = complete_project_suffix(sp, sel)
         snap = _write_project_file(sp)
         _bk_clear()
+        save_path = sp
         _bk_snapshot(snap)
-        toast_tip.show_toast("另存成功！", window)
+        if _rc() is None:
+            # 标题跟着新文件名走（多人日志下标题由会话决定，不动）
+            window._local_title = f'F HamLog 2 - {os.path.basename(save_path)}'
+            _set_title()
+        toast_tip.show_toast("另存成功。", window)
         return True
 
     def esave():
@@ -2788,7 +2853,7 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
             snap = _write_project_file(save_path)
             _bk_clear()
             _bk_snapshot(snap)
-            toast_tip.show_toast("保存成功！", window)
+            toast_tip.show_toast("保存成功。", window)
         sys.exit()
 
     def input_HAM_tolls_():
@@ -2942,28 +3007,70 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
 
     file_menu.addSeparator()
 
+    def _write_project_now():
+        """立即整份落盘，**不做**「内容没变就跳过」的判断。
+
+        加密 / 解密是用户显式动作，必须真的写一遍文件。原来这两处走
+        ``save(message=False)``（静默自动保存），而它会在「本会话已写过同样内容」
+        （打开项目时那次自动保存）时直接跳过 → 文件仍然是明文 / 仍是密文，
+        看起来就是「加密没生效、解密也没生效」。
+        """
+        snap = _write_project_file(save_path)
+        _bk_clear()
+        _bk_snapshot(snap)
+        return snap
+
     def aes_open_():
+        if is_adi_path(save_path):
+            # ADI 是通用明文交换格式，写出去必须是纯文本 ADIF → 不能加密。
+            # 菜单入口照给（不藏功能），点了就明说为什么不支持。
+            QMessageBox.information(
+                window, i18n.tr('加密项目'),
+                i18n.tr('ADI 是通用日志交换格式，不支持加密。') + '\n\n'
+                + i18n.tr('需要加密时，请「另存为」.fhla 项目文件后再加密。'))
+            return
+        if not save_path:
+            # 恢复的项目 / 尚未落盘的新建项目没有文件名 → 无法直接覆盖写盘
+            QMessageBox.information(window, '加密项目',
+                                    '请先保存此项目（Ctrl+S），再加密。')
+            return
         QMessageBox.information(window,'加密项目','F HamLog 将使用AES加密项目，\n请牢记你的密钥！若密钥丢失则无法恢复日志数据。')
-        _set_key(fhl_rw.get_user_key_dialog())
-        list_time(message=False)
-        save(message=False)
+        # 两次输入确认：两次不一致 / 为空就提示后重新输入（见 fhl_rw.get_new_key_dialog）
+        new_key = fhl_rw.get_new_key_dialog(window)
+        if not new_key:
+            return                      # 用户取消 → 保持原样
+        _set_key(new_key)
+        _fhla['dirty'] = True           # 只改了属性块（加密状态）也算一次编辑
+        try:
+            _write_project_now()
+        except Exception as e:
+            _set_key(None)              # 写盘失败 → 密钥一并回滚，别留下「假加密」状态
+            _fhla['dirty'] = False
+            QMessageBox.warning(window, '加密失败', f'写入加密文件失败：{e}')
+            return
         QMessageBox.information(window,'加密项目','加密成功！\n请重新打开此项目。')
         window.close()
     def aes_close_():
         input_key = fhl_rw.get_user_key_dialog()
-        if input_key == key:
-            _set_key(None)
-            list_time(message=False)
-            save(message=False)
-            QMessageBox.information(window,'解密项目','解密成功！\n请重新打开此项目。')
-            window.close()
-        else:
+        if input_key != key:
             QMessageBox.warning(window,'解密项目','密钥错误！')
+            return
+        _set_key(None)
+        _fhla['dirty'] = True
+        try:
+            _write_project_now()
+        except Exception as e:
+            _set_key(input_key)         # 写盘失败 → 密钥回滚，文件仍是加密的
+            _fhla['dirty'] = False
+            QMessageBox.warning(window, '解密项目', f'写入文件失败：{e}')
+            return
+        QMessageBox.information(window,'解密项目','解密成功！\n请重新打开此项目。')
+        window.close()
 
     aes_action = None
-    # ADI 是通用明文交换格式，没有加密概念 → 不给「加密此项目」菜单（避免误导：
-    # 加密后仍会被写成明文 ADIF）
-    if key is None and _rc() is None and not is_adi_path(save_path):
+    # 加密入口一律给（.adi 也给）：ADI 点了会明确提示「不支持加密」，而不是把菜单藏起来
+    # ——藏起来容易被当成漏了功能。多人日志模式除外（与服务端后端互斥）。
+    if key is None and _rc() is None:
         aes_action = QAction('加密此项目', window)
         aes_action.setShortcut('Ctrl+Alt+E')
         aes_action.triggered.connect(aes_open_)
@@ -2979,42 +3086,34 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
     file_menu.addSeparator()
 
     def show_project_props():
-        """「项目属性」（Alt+I）：展示 .fhla 的属性（上一次编辑者 / 上一次编辑时间 / 版本 / 加密状态）。
+        """「项目属性」（Alt+I）：按**当前文件的真实格式**分别展示。
 
-        属性保存在 .fhla 的 xml 块里（见本文件「.fhla 文件格式」一节）；.fhl 是纯记录格式、
-        没有这块 → 直接提示「不支持的格式」，不做半展示（避免把内存状态当成文件属性看）。
+        * ``.fhla`` → 属性块（上一次编辑者 / 上一次编辑时间 / 版本 / 加密状态 / 自定义字段）；
+        * ``.adi`` / ``.fhl`` / 未保存 → 同一套「没有属性」的提示版式（与 .fhl 一致），
+          但**话术按格式分开**：ADI 说 ADI 的，.fhl 说 .fhl 的，未保存就说未保存的
+          （见 ``format_reject_text``）——以前 ADI 也被甩 .fhl 那句，看着像开错了文件。
+
         加密状态一律按当前密钥（key）显示，而不是只信文件里的声明。
         """
-        if not is_fhla_path(save_path):
-            # 多段文案逐段 tr 后再拼：整条拼完再翻会漏翻（i18n 词表按整串匹配）
-            if is_adi_path(save_path):
-                QMessageBox.information(
-                    window, i18n.tr('项目属性'),
-                    i18n.tr('不支持的格式：当前项目不是 .fhla 文件。') + '\n\n'
-                    + i18n.tr('ADI 是通用日志交换格式，不含编辑者、编辑时间、版本、加密状态等属性。') + '\n'
-                    + i18n.tr('请「另存为」带属性的 .fhla 项目文件后再查看。'))
-                return
-            QMessageBox.information(
-                window, i18n.tr('项目属性'),
-                i18n.tr('不支持的格式：当前项目不是 .fhla 文件。') + '\n\n'
-                + i18n.tr('.fhl 是纯记录格式，不含编辑者、编辑时间、版本、加密状态等属性。') + '\n'
-                + i18n.tr('请「另存为」带属性的 .fhla 项目文件后再查看。'))
+        sep = ': ' if i18n.is_english() else '：'   # 冒号跟着语言走
+
+        if is_fhla_path(save_path):
+            meta = normalize_meta(_fhla['meta'] or empty_meta())
+            meta['encrypted'] = bool(key)
+            # QMessageBox 的文字**不经过控件树**（i18n 只翻控件文字 / 表头），所以这里逐行自己翻。
+            # **按行翻，别把整段拼完再翻** —— 词表是整串匹配的。
+            # 值只翻界面固定文案，用户数据（呼号 / 时间 / 版本 / 字段名 / 文件名）原样。
+            fixed_values = ('已加密', '未加密', '无')
+            lines = [f'{i18n.tr(name)}{sep}'
+                     f'{i18n.tr(value) if value in fixed_values else value}'
+                     for name, value in describe_meta(meta, path=save_path)]
+            QMessageBox.information(window, i18n.tr('项目属性'), '\n'.join(lines))
             return
-        meta = normalize_meta(_fhla['meta'] or empty_meta())
-        meta['encrypted'] = bool(key)
-        # QMessageBox 的文字**不经过控件树**（i18n 只翻控件文字 / 表头），所以这里逐行自己翻：
-        # 属性名查词表（文件 / 上一次编辑的人 / 加密状态 / 自定义记录项目 / 格式版本…），
-        # 值里的固定文案（已加密 / 未加密 / 无）也查；用户数据（呼号、时间、字段名）原样。
-        # **按行翻，别把整段拼完再翻** —— 词表是整串匹配的。冒号跟着语言走：
-        # 中文用全角「：」（历史上就是这个样子，一个字节都不改），英文用「: 」。
-        sep = ': ' if i18n.is_english() else '：'
-        # 值只翻「界面固定文案」这几个，其余（呼号 / 时间 / 版本 / 用户字段名 / 文件名）
-        # 一律原样 —— 别拿 tr() 无脑套用户数据，万一和词表撞上就成了「翻译用户数据」。
-        fixed_values = ('已加密', '未加密', '无')
-        lines = [f'{i18n.tr(name)}{sep}'
-                 f'{i18n.tr(value) if value in fixed_values else value}'
-                 for name, value in describe_meta(meta, path=save_path)]
-        QMessageBox.information(window, i18n.tr('项目属性'), '\n'.join(lines))
+
+        # .adi / .fhl / 未保存：都是「这个文件没有项目属性」，版式与 .fhl 一致，话术按格式分开
+        QMessageBox.information(window, i18n.tr('项目属性'),
+                                format_reject_text(save_path, '属性'))
+        return
 
     props_action = QAction('项目属性', window)
     props_action.setShortcut(QKeySequence('Alt+I'))
@@ -3038,12 +3137,9 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         """
         nonlocal custom_fields_window
         if not is_fhla_path(save_path):
-            # 多段文案逐段 tr 后再拼：整条拼完再翻会漏翻（i18n 词表按整串匹配）
-            QMessageBox.information(
-                window, '自定义日志字段',
-                i18n.tr('不支持的格式：当前项目不是 .fhla 文件。') + '\n\n'
-                + i18n.tr('.fhl 是纯记录格式，不含自定义日志字段。') + '\n'
-                + i18n.tr('请「另存为」带属性的 .fhla 项目文件后再使用。'))
+            # 按真实格式分别措辞：.adi 说 ADI 的话，.fhl 才说「纯记录格式」
+            QMessageBox.information(window, '自定义日志字段',
+                                    format_reject_text(save_path, '自定义字段'))
             return
         if custom_fields_window is not None:
             custom_fields_window.close()
@@ -3228,7 +3324,6 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
             _h0, _f0, _w0 = _main_cols()
             old_cols = (tuple(_h0), tuple(_f0), tuple(_w0))
             set_field_defs([tuple(e) for e in rows])
-            custom_count = sum(1 for e in rows if e[4])
             dlg.close()
             custom_fields_window = None
             window._custom_fields_window = None
@@ -3236,7 +3331,7 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
             _h1, _f1, _w1 = _main_cols()
             if (tuple(_h1), tuple(_f1), tuple(_w1)) != old_cols:
                 table_update()      # 主页列（表头 / 顺序 / 宽度）变了 → 重建
-            toast_tip.show_toast(i18n.tr('已保存 {} 个自定义字段。').format(custom_count), window)
+            toast_tip.show_toast(i18n.tr('已保存字段更改'), window)
 
         btn_row = QHBoxLayout()
         btn_row.setSpacing(10)
@@ -3481,25 +3576,8 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         h1 = QHBoxLayout()
         h1.addWidget(QLabel('字段：'))
         combo = QComboBox()
-        choices = [
-            ('o_call', '对方呼号'),
-            ('m_call', '己方呼号'),
-            ('date', '日期'),
-            ('time', '时间'),
-            ('freq', '频率'),
-            ('mode', '调制模式'),
-            ('m_dig', '己方设备'),
-            ('o_dig', '对方设备'),
-            ('m_qth', '己方QTH'),
-            ('o_qth', '对方QTH'),
-            ('m_ant', '己方天线'),
-            ('o_ant', '对方天线'),
-            ('m_pow', '己方功率'),
-            ('o_pow', '对方功率'),
-            ('notes', '备注')
-        ]
-        for k, v in choices:
-            combo.addItem(v, k)
+        # 标准 20 个 + 本项目自定义字段（以前是一份写死的清单 → 自定义字段搜不到）
+        bind_field_combo(combo)
         h1.addWidget(combo)
         dlg_layout.addLayout(h1)
 
@@ -3802,6 +3880,17 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         # 故需在创建后覆盖表头与列宽，并给该列挂上定位委托。
         # 列定义取 _main_cols()：主表可能因为「在主页显示」的自定义字段而多出若干列。
         _MC_HEADERS, _MC_FIELDS, _MC_WIDTHS = _main_cols()
+        # 搜的是「没在主页显示」的字段（典型就是自定义字段）→ 结果表补一列，
+        # 否则用户看到的是「确实搜到了，却看不出搜的是什么」。插在「更多」列**之前**：
+        # 「更多」始终是末列（委托按列号绑定）。只影响这张结果表，主表不动。
+        _extra_col = False
+        if field not in _MC_FIELDS:
+            _extra_label = next((lb for k, lb, _c in search_field_choices() if k == field),
+                                field)
+            _MC_HEADERS = _MC_HEADERS[:-1] + [_extra_label] + _MC_HEADERS[-1:]
+            _MC_FIELDS = _MC_FIELDS + [field]
+            _MC_WIDTHS = _MC_WIDTHS[:-1] + [CUSTOM_COL_WIDTH] + _MC_WIDTHS[-1:]
+            _extra_col = True
         _SR_HEADERS = _MC_HEADERS + ["定位到此条"]
         _SR_COL_WIDTHS = _MC_WIDTHS + [80]
         table_r.setColumnCount(len(_SR_HEADERS))
@@ -3831,8 +3920,9 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
             it = QTableWidgetItem()
             it.setData(_CHECK_ROLE, checked)
             _set_item(row, 0, it)
-            for c, field in enumerate(_fields, start=1):
-                val = rec.get(field, '')
+            # 循环变量别叫 field：它会把上面「被搜的字段」覆盖掉（后面还要用）
+            for c, _fld in enumerate(_fields, start=1):
+                val = rec.get(_fld, '')
                 _set_item(row, c, QTableWidgetItem('' if val is None else str(val)))
             _set_item(row, last_col, QTableWidgetItem())
             _set_item(row, locate_col, QTableWidgetItem())
@@ -3840,7 +3930,14 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         # 列宽与旧实现一致（14 列全部显式设宽，末列也是 80），末列后追加「定位到此条」
         for c, w in enumerate(_SR_COL_WIDTHS):
             table_r.setColumnWidth(c, w)
-        table_r.itemDelegateForColumn(last_col).set_click(_search_more_cb)
+        # 「更多」委托：补一列会让「更多」的列号右移，而 _new_table 是挂在**补列之前**
+        # 的末列上的（那格现在是新补的字段列，会画出「更多」按钮）→ 摘掉旧的（就在
+        # 「更多」左边一格）、按当前末列重新挂一次。
+        if _extra_col:
+            table_r.setItemDelegateForColumn(last_col - 1, None)
+        _more_delegate = MoreButtonDelegate(table_r)
+        _more_delegate.set_click(_search_more_cb)
+        table_r.setItemDelegateForColumn(last_col, _more_delegate)
         table_r.setUpdatesEnabled(True)
         lay.addWidget(table_r)
         table_r.scrollToBottom()
@@ -3901,27 +3998,8 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         h1 = QHBoxLayout()
         h1.addWidget(QLabel('字段：'))
         combo = QComboBox()
-        choices = [
-            ('o_call', '对方呼号'),
-            ('m_call', '己方呼号'),
-            ('date', '日期'),
-            ('time', '时间'),
-            ('freq', '频率'),
-            ('mode', '调制模式'),
-            ('prop_mode', '传播方式'),
-            ('sat_name', '卫星名称'),
-            ('m_dig', '己方设备'),
-            ('o_dig', '对方设备'),
-            ('m_qth', '己方QTH'),
-            ('o_qth', '对方QTH'),
-            ('m_ant', '己方天线'),
-            ('o_ant', '对方天线'),
-            ('m_pow', '己方功率'),
-            ('o_pow', '对方功率'),
-            ('notes', '备注')
-        ]
-        for k, v in choices:
-            combo.addItem(v, k)
+        # 与「搜索」同一份字段清单：标准 20 个 + 本项目自定义字段
+        bind_field_combo(combo)
         h1.addWidget(combo)
         dlg_layout.addLayout(h1)
 
@@ -4034,20 +4112,9 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         h1 = QHBoxLayout()
         h1.addWidget(QLabel('字段：'))
         combo_stat = QComboBox()
-        stat_choices = [
-            ('o_call', '对方呼号'),  # 添加对方呼号统计
-            ('mode', '调制模式'),
-            ('freq', '频率'),
-            ('prop_mode', '传播方式'),
-            ('sat_name', '卫星名称'),
-            ('m_qth', '己方QTH'),
-            ('o_qth', '对方QTH'),
-            ('m_dig', '己方设备'),
-            ('o_dig', '对方设备'),
-            ('notes', '备注')
-        ]
-        for k, v in stat_choices:
-            combo_stat.addItem(v, k)
+        # 统计范围 = 全部字段（标准 20 个 + 自定义字段），只把日期 / 时间排除在外：
+        # 它们每个取值几乎只出现一次，画出来是几千根柱子，没有统计意义。
+        bind_field_combo(combo_stat, skip=('date', 'time'))
         h1.addWidget(combo_stat)
         dlg_layout.addLayout(h1)
 
@@ -4134,7 +4201,9 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
             plt.pie(values, labels=labels, autopct='%1.1f%%')
 
         # 使用自定义标题或默认标题
-        display_map = {k: v for k, v in stat_choices}
+        # 显示名取下拉框上的文字（已按当前语言翻好；自定义字段名原样）
+        display_map = {combo_stat.itemData(i): combo_stat.itemText(i)
+                       for i in range(combo_stat.count())}
         plt.title(f"{display_map.get(field, field)} 统计")
         plt.tight_layout()
         plt.show()
@@ -4455,7 +4524,7 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
     table_update(scroll_to_bottom=True)   # 首次打开项目：跳到最后一条记录
 
     # ---------- 未保存内容自动备份 / 关闭守卫 ----------
-    # 打开项目时：把当前（已保存）内容写入备份作为基线；若为空则清空。
+    # 打开项目时**不写备份**（内容已在磁盘上，备份只为未落盘的内容存在）→ 见下面的 _bk_clear()。
     # 恢复场景例外：恢复进来的内容尚未落盘到真实项目文件，必须保持「未保存更改」状态
     # （快照置为永不等的哨兵值，使 _bk_is_dirty() 恒为 True，关闭时会提示保存/不保存/取消），
     # 且**不回写备份**——内容本就来自备份文件；若在此回写，即便用户刚刚已把恢复内容保存
@@ -4467,9 +4536,11 @@ def main(window, filee='', save_path='', key_=None, quick_poject=False, recovere
         # 换成值快照后 '' 同样不会等于列表，但 None 语义更清楚、也不会与空项目混淆。
         _bk_state['last'] = None
         _bk_state['local'] = None
-    elif file:
-        _bk_write()
     else:
+        # **打开时不写备份**：内容本来就已经在磁盘上，备份只为「还没落盘的东西」存在。
+        # 旧实现在这里写了一份和项目文件一模一样的备份，于是每个打开过的项目都会在数据
+        # 目录留下一个 project_backup_<hash>.fhl，用户看到的就是一堆没用的文件。
+        # 真改动由下面的 1.5 s 定时器（_bk_tick，仅在脏时写）负责。
         _bk_clear()
     _refresh_title()   # 基线复位后再刷一次标题（恢复项目保持 * 未保存；普通项目去掉 *）
 

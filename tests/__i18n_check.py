@@ -13,6 +13,7 @@ import re
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SEL_ROOT = os.path.join(ROOT, 'src', 'f_hamlog')   # src 布局：源码都在包目录下
 sys.path.insert(0, os.path.join(ROOT, 'src'))
 
 CJK = re.compile(r'[\u4e00-\u9fff]')
@@ -29,7 +30,7 @@ FILES = [
 
 
 def catalog_keys():
-    src = io.open(os.path.join(ROOT, 'i18n_zh_en.py'), encoding='utf-8').read()
+    src = io.open(os.path.join(SEL_ROOT, 'i18n_zh_en.py'), encoding='utf-8').read()
     tree = ast.parse(src)
     keys = []
     for node in ast.walk(tree):
@@ -68,7 +69,7 @@ def source_strings():
     """源码里所有含中文的「完整文案」（拼接后的形状，f-string 组装为 {} 模板）。"""
     out = {}
     for fn in FILES:
-        path = os.path.join(ROOT, fn)
+        path = os.path.join(SEL_ROOT, fn)
         if not os.path.exists(path):
             continue
         tree = ast.parse(io.open(path, encoding='utf-8').read())

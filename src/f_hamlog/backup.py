@@ -1,7 +1,8 @@
 """未保存内容自动备份与恢复工具。
 
 设计要点：
-- 备份文件本身即「可恢复的未保存状态」：非空表示有可恢复内容，空文件表示无需恢复。
+- **备份文件只在真有未保存内容时存在**：非空 = 有可恢复内容；没有可恢复内容时**直接删掉文件**，
+  不留 0 字节空壳（用户要求：不要生成 ``project_backup_<hash>.fhl`` 这种文件）。
 - project 备份：**按项目文件分开**——已落盘的项目用
   ``file/project_backup_<hash>.fhl``（见 :func:`project_backup_path`），尚未落盘的
   项目（新建 / 从备份恢复）用公共的 ``file/project_backup.fhl``；沿用原项目的加密 key。
@@ -99,6 +100,13 @@ def list_project_backups():
             continue
         full = os.path.join(d, fn)
         if not is_backup_nonempty(full):
+            # 0 字节的空壳 = 「无需恢复」。顺手删掉：旧版本每次「清空」都会建出这种文件，
+            # 用户看到一堆积灰的 project_backup_<hash>.fhl。
+            if os.path.exists(full):
+                try:
+                    os.remove(full)
+                except OSError:
+                    pass
             continue
         try:
             mtime = os.path.getmtime(full)
@@ -110,18 +118,34 @@ def list_project_backups():
 
 
 def write_backup(path, data, key=None):
-    """写入备份。data 为空（None 或空列表）时直接置空文件（表示无需恢复）。"""
-    _ensure_dir(path)
+    """写入备份。``data`` 为空（None 或空列表）= 无需恢复 → **删掉备份文件**。
+
+    不写 0 字节的空壳：旧实现「清空」是截断成空文件，于是每个打开过的项目都会在数据
+    目录留下一个 ``project_backup_<hash>.fhl``（全是 0 字节），用户看到的就是一堆垃圾文件。
+    现在**只有真有未保存内容时才存在备份文件**，保存 / 正常关闭后立刻删除。
+    """
     if data is None or (isinstance(data, list) and len(data) == 0):
-        open(path, 'w', encoding='utf-8').close()
+        clear_backup(path)
         return
+    _ensure_dir(path)
     fhl_rw.write_fhl_file(path, data, key)
 
 
 def clear_backup(path):
-    """将备份文件置空（表示无需恢复）。"""
-    _ensure_dir(path)
-    open(path, 'w', encoding='utf-8').close()
+    """删除备份文件（表示无需恢复）。
+
+    **不存在就什么都不做**——绝不顺手建一个空文件出来（见 :func:`write_backup` 的说明）。
+    删不掉（被占用 / 只读）时退回「置空」，至少别让旧内容被误当成待恢复内容。
+    """
+    try:
+        os.remove(path)
+    except FileNotFoundError:
+        return
+    except OSError:
+        try:
+            open(path, 'w', encoding='utf-8').close()
+        except OSError:
+            pass
 
 
 def is_backup_nonempty(path):

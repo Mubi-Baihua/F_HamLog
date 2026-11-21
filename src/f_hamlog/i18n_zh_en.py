@@ -381,6 +381,17 @@ TRANSLATIONS = {
     '密码': 'Password',
     '请输入加密密钥：': 'Enter encryption key:',
     '输入加密密钥': 'Enter encryption key',
+    '设置加密密钥': 'Set encryption key',
+    '密钥：': 'Key: ',
+    '再输入一次密钥：': 'Enter the key again:',
+    '确认密钥': 'Confirm key',
+    '密钥不能为空，请重新输入。':
+        'The key cannot be empty. Please enter it again.',
+    '两次输入的密钥不一致，请重新输入。':
+        'The two keys do not match. Please enter them again.',
+    '请先保存此项目（Ctrl+S），再加密。':
+        'Save this project first (Ctrl+S), then encrypt it.',
+    '写入加密文件失败：{}': 'Failed to write the encrypted file: {}',
     '设置观测站': 'Set up station',
     '默认取“观测站设置”里的本站位置，可临时修改。':
         'Defaults to the local station position from "Station setup"; can be changed '
@@ -426,8 +437,8 @@ TRANSLATIONS = {
     '密钥错误！': 'Wrong key!',
     '无可保存数据': 'Nothing to save',
     '已保存': 'Saved',
-    '保存成功！': 'Saved!',
-    '另存成功！': 'Saved!',
+    '保存成功。': 'Saved.',
+    '另存成功。': 'Saved.',
     '已复制': 'Copied',
     '已保存恢复的内容。': 'Recovered content saved.',
     '恢复未保存的内容': 'Recover unsaved changes',
@@ -674,7 +685,7 @@ TRANSLATIONS = {
     '已添加 {} 条记录到项目。': 'Added {} record(s) to the project.',
     '已添加 {} 条记录到默认通联日志': 'Added {} record(s) to the default log',
     '已添加 {} 条记录到多人日志（{}:{}）。': 'Added {} record(s) to the online log ({}:{}).',
-    '已保存到服务端！': 'Saved to the server!',
+    '已保存到服务端。': 'Saved to the server.',
     '已保存到服务端，多人日志已关闭。': 'Saved to the server; online log closed.',
     '无法保存到服务端：{}': 'Cannot save to the server: {}',
     # 批量记录「完成页 / 自动保存选位置」共用的选择页（2026-11-15 定稿：
@@ -744,6 +755,7 @@ TRANSLATIONS = {
     '无法启动与服务端的同步：{}': 'Cannot start syncing with the server: {}',
     '无法加载多人日志客户端：{}': 'Cannot load the online log client: {}',
     '写入文件失败：\n{}': 'Failed to write the file:\n{}',
+    '写入文件失败：{}': 'Failed to write the file: {}',
     '保存失败：{}': 'Save failed: {}',
     '添加失败：{}': 'Add failed: {}',
     '删除失败：{}': 'Delete failed: {}',
@@ -892,6 +904,25 @@ TRANSLATIONS = {
         'file (currently .fhl).',
 
     # ------------------------------------------------------------------
+    #  「这个文件格式没有该功能」的提示（项目属性 / 自定义日志字段共用）
+    #  版式与 .fhl 一致，但**话术按真实格式分开**：.adi 不提 .fhl，.fhl 不提 ADI。
+    # ------------------------------------------------------------------
+    '当前项目还没有保存到磁盘。': 'This project has not been saved to disk yet.',
+    '保存后（Ctrl+S）才能查看项目属性。':
+        'Save it first (Ctrl+S), then the project properties can be shown.',
+    '保存后（Ctrl+S）才能使用自定义日志字段。':
+        'Save it first (Ctrl+S), then custom log fields can be used.',
+    'ADI 是通用日志交换格式，不含编辑者、编辑时间、版本、加密状态等属性。':
+        'ADI is a generic log interchange format; it carries no '
+        'editor/edited-time/version/encryption properties.',
+    'ADI 是通用日志交换格式，不含自定义日志字段。':
+        'ADI is a generic log interchange format; it carries no custom log fields.',
+    '需要项目属性时，可用「另存为」保存为 .fhla 项目。':
+        'To keep project properties, use "Save As" to save an .fhla project.',
+    '需要自定义日志字段时，可用「另存为」保存为 .fhla 项目。':
+        'To keep custom log fields, use "Save As" to save an .fhla project.',
+
+    # ------------------------------------------------------------------
     #  项目属性（Alt+I）：.fhl 时提示不支持的格式
     # ------------------------------------------------------------------
     '不支持的格式：当前项目不是 .fhla 文件。':
@@ -899,11 +930,16 @@ TRANSLATIONS = {
     '.fhl 是纯记录格式，不含编辑者、编辑时间、版本、加密状态等属性。':
         '.fhl is a records-only format; it carries no editor/edited-time/version/encryption '
         'properties.',
-    'ADI 是通用日志交换格式，不含编辑者、编辑时间、版本、加密状态等属性。':
-        'ADI is a generic log interchange format; it carries no '
-        'editor/edited-time/version/encryption properties.',
     '请「另存为」带属性的 .fhla 项目文件后再查看。':
         'Please use "Save As" to write a .fhla project file first, then check again.',
+
+    # ------------------------------------------------------------------
+    #  加密（aes）：ADI 也有入口，点了明确说不支持
+    # ------------------------------------------------------------------
+    'ADI 是通用日志交换格式，不支持加密。':
+        'ADI is a generic log interchange format; it does not support encryption.',
+    '需要加密时，请「另存为」.fhla 项目文件后再加密。':
+        'To encrypt, use "Save As" to write a .fhla project file first.',
 
     # ------------------------------------------------------------------
     #  自定义日志字段（.fhla 属性块 other_item）——管理窗口
@@ -925,7 +961,7 @@ TRANSLATIONS = {
     '不能与标准字段重名：': 'Cannot reuse a standard field name: ',
     '字段名称重复：': 'Duplicate field name: ',
     '标准字段不能删除：': 'Standard fields cannot be deleted: ',
-    '已保存 {} 个自定义字段。': 'Saved {} custom field(s).',
+    '已保存字段更改': 'Field changes saved',
     '已恢复默认，点「保存更改」后生效。':
         'Restored the defaults — click "Save changes" to apply.',
     '.fhl 是纯记录格式，不含自定义日志字段。':

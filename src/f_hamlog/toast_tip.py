@@ -68,8 +68,28 @@ def _toast_bg_fg(kind):
     return bg, fg
 
 
+# 悬浮提示一律不带「！」「。」（用户指定的文案风格）：中文「！」先收成「。」，英文「!」收成「.」，
+# 最后把句末那个句号也抹掉（「保存成功。」→「保存成功」）。放在这里是因为它是所有提示的唯一出口——
+# 调用处即便写了标点，也不会显示出来。
+_BANG_MAP = {'！': '。', '!': '.'}
+_TRAIL_DOTS = '。.'
+
+
+def strip_bang(text):
+    """收拾提示文案的标点：感叹号收成句号，再把**句末**句号去掉（幂等）。
+
+    只动句末那一个（连同连续的一串），句中/缩写里的点一律保留：
+    ``'已保存到服务端！'`` → ``'已保存到服务端'``；``'Saved!'`` → ``'Saved'``。
+    """
+    s = '' if text is None else str(text)
+    for old, new in _BANG_MAP.items():
+        s = s.replace(old, new)
+    return s.rstrip().rstrip(_TRAIL_DOTS).rstrip()
+
+
 class _Toast(QWidget):
     def __init__(self, text, timeout, kind, parent):
+        text = strip_bang(text)
         super().__init__(
             parent,
             Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool,

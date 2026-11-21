@@ -10,10 +10,10 @@ import time
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, HERE)
+sys.path.insert(0, os.path.join(HERE, 'src'))
 
-import toast_tip  # noqa: E402
-import theme  # noqa: E402
+from f_hamlog import toast_tip  # noqa: E402
+from f_hamlog import theme  # noqa: E402
 from PySide6.QtWidgets import QApplication, QMainWindow  # noqa: E402
 
 app = QApplication(sys.argv)
@@ -85,15 +85,36 @@ def need_w(text, t):
     return fm.horizontalAdvance(text) + toast_tip._PAD_X * 2 + toast_tip._SLACK_X
 
 
+# 7.0 文案里的感叹号 / 句末句号一律不显示（中文「！」先收成「。」，句末句号最后也去掉）
+_tb = toast_tip.show_toast('已保存成功！', win)
+pump()
+ok('感叹号与句末句号都不显示（「已保存成功！」→「已保存成功」）',
+   _tb._label.text() == '已保存成功', _tb._label.text())
+_tb.close()
+_tb2 = toast_tip.show_toast('Saved to the server!', win)
+pump()
+ok('英文同样：! → 去掉（「Saved to the server!」→「Saved to the server」）',
+   _tb2._label.text() == 'Saved to the server', _tb2._label.text())
+_tb2.close()
+_tb3 = toast_tip.show_toast('已删除 3 条日志。', win)
+pump()
+ok('句末句号不显示（「…日志。」→「…日志」）',
+   _tb3._label.text() == '已删除 3 条日志', _tb3._label.text())
+_tb3.close()
+ok('strip_bang 幂等', toast_tip.strip_bang(toast_tip.strip_bang('好的！')) == '好的')
+ok('句中的点保留（不误删 .fhla / .adi）',
+   toast_tip.strip_bang('已迁移为 main.fhla') == '已迁移为 main.fhla')
+pump()
+
 # 7.1 短文案：宽度 = 当前口径（口径不变，即“保持现在的宽度”）
-s = '已保存成功！'
+s = '已保存成功'
 t6 = toast_tip.show_toast(s, win)
 pump()
 ok('短文案：宽度保持当前口径（不缩窄）', t6.width() == need_w(s, t6),
    '%d vs %d' % (t6.width(), need_w(s, t6)))
 
 # 7.2 长文案：需要的宽度 > 440 → 自动加宽到 need_w，且保持单行（高度 36）
-L = '没有可删除的日志：请先在“选择”列勾选要删除的行，或直接选中（高亮）这些行。'
+L = '没有可删除的日志：请先在“选择”列勾选要删除的行，或直接选中（高亮）这些行'  # 提示不带句末句号
 t7 = toast_tip.show_toast(L, win)
 pump()
 ok('长文案：按需要加宽（>旧上限 440）', t7.width() == need_w(L, t7) and t7.width() > 440,

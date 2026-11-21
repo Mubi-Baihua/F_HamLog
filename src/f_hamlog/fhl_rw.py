@@ -50,6 +50,72 @@ def get_user_key_dialog():
         return key_edit.text().strip()
     return None
 
+def _ask_key_pair(parent=None):
+    """弹一次「密钥 + 确认密钥」对话框 → ``(密钥, 确认密钥)``；取消返回 None。
+
+    两次输入放在同一个窗口里（不再一问一答），显示/隐藏按钮同时作用于两行。
+    """
+    dlg = QDialog(parent)
+    dlg.setWindowTitle("设置加密密钥")
+    dlg.resize(350, 205)
+    dlg.setFixedSize(350, 205)
+    layout = QVBoxLayout(dlg)
+
+    layout.addWidget(QLabel("密钥："))
+    key_edit = QLineEdit()
+    key_edit.setEchoMode(QLineEdit.Password)
+    key_edit.setPlaceholderText("密钥字符串")
+    layout.addWidget(key_edit)
+
+    layout.addWidget(QLabel("再输入一次密钥："))
+    confirm_edit = QLineEdit()
+    confirm_edit.setEchoMode(QLineEdit.Password)
+    confirm_edit.setPlaceholderText("确认密钥")
+    layout.addWidget(confirm_edit)
+
+    toggle_btn = QPushButton("显示/隐藏")
+
+    def toggle():
+        mode = (QLineEdit.Normal if key_edit.echoMode() == QLineEdit.Password
+                else QLineEdit.Password)
+        key_edit.setEchoMode(mode)
+        confirm_edit.setEchoMode(mode)
+
+    toggle_btn.clicked.connect(toggle)
+    layout.addWidget(toggle_btn)
+
+    btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+    layout.addWidget(btns)
+    btns.accepted.connect(dlg.accept)
+    btns.rejected.connect(dlg.reject)
+
+    if dlg.exec() != QDialog.Accepted:
+        return None
+    return key_edit.text(), confirm_edit.text()
+
+
+def get_new_key_dialog(parent=None):
+    """设置**新**加密密钥 → 密钥字符串；取消返回 None。
+
+    加密日志必须**输入两次**：两次不一致（或密钥为空）就提示一句，然后**重新输入**，
+    直到一致或用户取消为止 —— 密钥丢了日志就救不回来，不能让手滑决定一切。
+    """
+    while True:
+        pair = _ask_key_pair(parent)
+        if pair is None:
+            return None
+        key = pair[0].strip()
+        confirm = pair[1].strip()
+        if not key:
+            QMessageBox.warning(parent, "设置加密密钥", "密钥不能为空，请重新输入。")
+            continue
+        if key != confirm:
+            QMessageBox.warning(parent, "设置加密密钥",
+                                "两次输入的密钥不一致，请重新输入。")
+            continue
+        return key
+
+
 def read_fhl_file(file_path,key=None):
     """读取fhl文件，解密内容"""
     global window

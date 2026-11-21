@@ -12,6 +12,7 @@
 用法：python tests/__multiproject_adi_smoke.py
 """
 import os
+import re
 import sys
 import shutil
 import tempfile
@@ -374,7 +375,17 @@ with open(ADI, 'rb') as _f:
 ok('D4 标题显示 .adi 文件名', 'test.adi' in win_c.windowTitle(), win_c.windowTitle())
 ok('D4b 打开后没改动就不重写 .adi（不丢未映射的 ADIF 标签）',
    adi_after_open == adi_before_open)
-ok('D5 .adi 不给「加密此项目」菜单（明文交换格式）', win_c._aes_action is None)
+ok('D5 .adi 也有「加密此项目」菜单（入口不藏，点了解释为什么不支持）',
+   win_c._aes_action is not None and win_c._aes_action.text() == '加密此项目',
+   str(getattr(win_c._aes_action, 'text', lambda: None)()))
+POPUPS.clear()
+if win_c._aes_action is not None:
+    win_c._aes_action.trigger()
+    pump(2)
+ok('D5b 点「加密此项目」→ 明确提示 ADI 不支持加密（文件仍是明文 ADIF）',
+   any('不支持加密' in t for _k, _ti, t in POPUPS)
+   and win_c._key in (None, ''),
+   str([t.replace('\n', ' | ') for _k, _ti, t in POPUPS])[:200])
 
 api_c['append_to_project']([_rec('BG3C3', time='22:20')])
 pump(3)
@@ -427,9 +438,10 @@ ok('D13c 另存为新的 .adi（就是 ADIF 文本）',
 POPUPS.clear()
 api_c['show_project_props']()
 pump(2)
-ok('D14 .adi 的项目属性提示不支持的格式（提到 ADI）',
-   any('ADI' in t for _k, _ti, t in POPUPS),
-   str([t.splitlines()[2] for _k, _ti, t in POPUPS if t.count('\n') >= 2]))
+ok('D14 .adi 的项目属性用 ADI 的话术（版式同 .fhl，但一个字都不提 .fhl）',
+   any('ADI 是通用日志交换格式' in t and re.search(r'\.fhl(?!a)', t) is None
+       for _k, _ti, t in POPUPS),
+   str([t.replace('\n', ' | ') for _k, _ti, t in POPUPS])[:200])
 
 # 关闭窗口（脏标记已清；万一弹保存也已被静默/取消）
 for w in (bw2, win_c, win_b, win_a):
