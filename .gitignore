@@ -20,7 +20,7 @@ __pycache__/
 # 多人日志加密：运行时密钥与信任记录（绝不可入库）
 # 服务端长期私钥（每端口一份，泄露即可被冒名顶替）
 #   内嵌服务端（「开放多人日志」）→ src/f_hamlog/file/keys/
-#   独立服务端（F_HamLog_Remote_Log_Server_2.0.0）→ 其程序目录下的 keys/
+#   独立服务端（src/F_HamLog_Remote_Log_Server_2.0.0）→ 其程序目录下的 keys/
 src/f_hamlog/file/keys/
 keys/
 *.fhlkey
@@ -32,10 +32,10 @@ src/f_hamlog/file/remote_rooms/
 # 运行日志（app_log 写的 file/log/，按天切分只留三天，属运行时数据）
 src/f_hamlog/file/log/
 file/log/
-F_HamLog_Remote_Log_Server_2.0.0/main.fhl
-F_HamLog_Remote_Log_Server_2.0.0/keys/
+src/F_HamLog_Remote_Log_Server_2.0.0/main.fhl
+src/F_HamLog_Remote_Log_Server_2.0.0/keys/
 # 独立服务端的密码存储（明文密码，且由程序自动创建，绝不入库）
-F_HamLog_Remote_Log_Server_2.0.0/password_xml.txt
+src/F_HamLog_Remote_Log_Server_2.0.0/password_xml.txt
 
 # 密钥迁移备份（手工清理）
 #src/f_hamlog/file/_key_backup_*/

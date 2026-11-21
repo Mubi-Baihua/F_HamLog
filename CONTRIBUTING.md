@@ -161,7 +161,7 @@ F_HamLog/
 │   └── inno/                   # CI 专用 Inno Setup 脚本 + 中文语言文件
 ├── F HamLog 2 Inno Setup/      # 本地打包的安装包产物
 ├── 兼容版/                     # 各版本"兼容版" zip 产物
-├── F_HamLog_Remote_Log_Server_2.0.0/   # 独立服务端（自带 remote_* 副本，见下）
+├── src/F_HamLog_Remote_Log_Server_2.0.0/   # 独立服务端（自带 remote_* 副本，见下）
 ├── README.md / CONTRIBUTING.md / CODE_OF_CONDUCT.md / SECURITY.md / LICENSE
 └── 打包.txt / 第三方模块.txt / #remote_project.py
 ```
@@ -184,8 +184,8 @@ F_HamLog/
   星历数据源（`tle_sources.txt`）、地图标记、密钥（`keys/`）等。**其中部分是真实用户数据，不要随意改写。**
 - **`F HamLog 1` ~ `F HamLog 2.1`** —— 历史版本快照，仅作归档，不参与构建。
 - **`#remote_project.py`** —— 历史备份文件（文件名以 `#` 开头），当前无任何代码引用，请勿修改。
-- **`F_HamLog_Remote_Log_Server_2.0.0/`** —— 可独立分发的服务端。**它自带 `remote_server.py` /
-  `remote_crypto.py` 的副本**，若改动协议或密码学，需要**三处同步**（仓库根 + 该目录 + 打包脚本）。
+- **`src/F_HamLog_Remote_Log_Server_2.0.0/`** —— 可独立分发的服务端。**它自带 `remote_server.py` /
+  `remote_crypto.py` 的副本**，若改动协议或密码学，需要**三处同步**（`src/f_hamlog` + 该目录 + 打包脚本）。
 
 ---
 
@@ -306,7 +306,7 @@ nuitka --standalone --output-filename="F HamLog 2" --main=main.py \
 > 打包**必须**带上 `--include-package-data=skyfield` 与 `--include-data-dir=file=file/`，
 > 否则星历数据与图标会在运行时缺失。
 
-独立服务端的打包命令见 `F_HamLog_Remote_Log_Server_2.0.0/打包-服务端.txt`。
+独立服务端的打包命令见 `src/F_HamLog_Remote_Log_Server_2.0.0/打包-服务端.txt`。
 若你改动了 `remote_*` 协议或密码学，**必须同步三处副本并重新打包服务端**。
 
 ---
@@ -318,7 +318,7 @@ nuitka --standalone --output-filename="F HamLog 2" --main=main.py \
 - **以下内容绝不入库**（已被 `.gitignore` 忽略，请勿强行提交）：
   - `file/keys/`、`keys/`、`*.fhlkey`（长期私钥）
   - `file/known_server_keys.txt`（信任库）
-  - `F_HamLog_Remote_Log_Server_2.0.0/{keys/, main.fhl, password_xml.txt}`
+  - `src/F_HamLog_Remote_Log_Server_2.0.0/{keys/, main.fhl, password_xml.txt}`
   - `file/remote_rooms/`（会话日志）
 - 若你**发现安全漏洞**，请参考 [SECURITY.md](SECURITY.md)，**不要**在公开 issue 中披露细节。
 
@@ -499,7 +499,7 @@ F_HamLog/
 │   └── inno/                   # CI-only Inno Setup script + Chinese language file
 ├── F HamLog 2 Inno Setup/      # Locally built installer artifacts
 ├── 兼容版/                     # Per-version "compatible" zip artifacts
-├── F_HamLog_Remote_Log_Server_2.0.0/   # Standalone server (bundles remote_* copies, see below)
+├── src/F_HamLog_Remote_Log_Server_2.0.0/   # Standalone server (bundles remote_* copies, see below)
 ├── README.md / CONTRIBUTING.md / CODE_OF_CONDUCT.md / SECURITY.md / LICENSE
 └── 打包.txt / 第三方模块.txt / #remote_project.py
 ```
@@ -522,9 +522,9 @@ F_HamLog/
   TLE sources (`tle_sources.txt`), map markers, keys (`keys/`), etc. **Some of it is real user data — do not modify it casually.**
 - **`F HamLog 1` ~ `F HamLog 2.1`** — historical version snapshots, archived only; not part of the build.
 - **`#remote_project.py`** — a historical backup file (name starts with `#`); currently referenced by no code — do not modify.
-- **`F_HamLog_Remote_Log_Server_2.0.0/`** — a standalone, distributable server. **It bundles its own copies of
+- **`src/F_HamLog_Remote_Log_Server_2.0.0/`** — a standalone, distributable server. **It bundles its own copies of
   `remote_server.py` / `remote_crypto.py`**, so if you change the protocol or cryptography you must **keep three
-  copies in sync** (repo root + that directory + the packaging script).
+  copies in sync** (`src/f_hamlog` + that directory + the packaging script).
 
 ---
 
@@ -648,7 +648,7 @@ nuitka --standalone --output-filename="F HamLog 2" --main=main.py \
 > Packaging **must** include `--include-package-data=skyfield` and `--include-data-dir=file=file/`,
 > otherwise the ephemeris data and icons will be missing at runtime.
 
-The standalone server build command is in `F_HamLog_Remote_Log_Server_2.0.0/打包-服务端.txt`.
+The standalone server build command is in `src/F_HamLog_Remote_Log_Server_2.0.0/打包-服务端.txt`.
 If you change the `remote_*` protocol or cryptography, **you must keep the three copies in sync and rebuild the server**.
 
 ---
@@ -660,7 +660,7 @@ If you change the `remote_*` protocol or cryptography, **you must keep the three
 - **Never commit the following** (already ignored by `.gitignore`; do not force-add them):
   - `file/keys/`, `keys/`, `*.fhlkey` (long-term private keys)
   - `file/known_server_keys.txt` (trust store)
-  - `F_HamLog_Remote_Log_Server_2.0.0/{keys/, main.fhl, password_xml.txt}`
+  - `src/F_HamLog_Remote_Log_Server_2.0.0/{keys/, main.fhl, password_xml.txt}`
   - `file/remote_rooms/` (session logs)
 - If you **find a security vulnerability**, refer to [SECURITY.md](SECURITY.md) and **do not** disclose details in a public issue.
 

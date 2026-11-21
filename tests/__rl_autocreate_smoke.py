@@ -13,7 +13,7 @@ import subprocess
 import py_compile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SRC = os.path.join(ROOT, 'F_HamLog_Remote_Log_Server_2.0.0')
+SRC = os.path.join(ROOT, 'src', 'F_HamLog_Remote_Log_Server_2.0.0')
 REPORT = os.path.join(ROOT, '__rl_autocreate_out.txt')
 lines = []
 

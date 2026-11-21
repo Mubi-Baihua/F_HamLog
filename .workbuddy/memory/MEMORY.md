@@ -78,7 +78,7 @@
 - 「双方全部过境」= `emphasis=(起,止)` + `auto_spans=True`；过境/地图窗口都是**独立顶层窗口**；**经纬度 0° 合法**。
 
 ## 多人日志 / 服务端
-- **`remote_crypto.py` 是密码学唯一出处**（全帧加密、nonce 滑窗、服务端先说话）；退出必走 `RemoteConnection.shutdown()`；Qt 关窗只隐藏不触发 `destroyed`；独立服务端目录自带两份副本 → **改协议须三份同步**。
+- **`remote_crypto.py` 是密码学唯一出处**（全帧加密、nonce 滑窗、服务端先说话）；退出必走 `RemoteConnection.shutdown()`；Qt 关窗只隐藏不触发 `destroyed`；独立服务端目录 `src/F_HamLog_Remote_Log_Server_*` 自带两份副本 → **改协议须三份同步**。
 - 服务端 exe：启动即建 `keys/`、`main.fhl`、`password_xml.txt`；`_app_dir()` 不能信 `sys.executable`；带 `--windows-uac-admin`，端到端要另打去掉它的包。
 
 ## 冒烟验证

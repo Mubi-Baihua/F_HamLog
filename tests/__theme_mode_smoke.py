@@ -364,7 +364,7 @@ for fname in SCAN:
 
 # 未纳入改动、仅需报告的旧文件
 for fname in ('#remote_project.py',
-              'F_HamLog_Remote_Log_Server_2.0.0/main.py'):
+              'src/F_HamLog_Remote_Log_Server_2.0.0/main.py'):
     results.append(('INFO', '未处理（历史/独立分发）', fname))
 
 # ---------------------------------------------------------------------------

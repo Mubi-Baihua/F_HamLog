@@ -425,12 +425,15 @@ jobs:
       # 本工作流用「F HamLog 2 Preview」，与正式版「F HamLog 2」不同，
       # 因此 restore-keys 只回退到「同 exe 名」为止，绝不跨名回退 —— 否则会捞到正式版那份
       # 记录了 result_exe=F HamLog 2.exe 的构建目录，白白全量重编。
+      # ⚠️ glob 只扫 src/f_hamlog/**：src 下还有独立服务端（src/F_HamLog_Remote_Log_Server_*），
+      #    它自带 remote_* 副本、与主程序无关；写 src/**/*.py 会让「只改服务端」也把
+      #    主程序的构建缓存判为失效，白等一次全量重编。
       - name: 缓存 Nuitka 构建目录
         if: ${{ env.SHOULD_BUILD == 'true' }}
         uses: actions/cache@v4
         with:
           path: main.build
-          key: ${{ runner.os }}-nuitka-build-${{ env.PYTHON_VERSION }}-${{ env.APP_EXE_NAME }}-${{ hashFiles('src/**/*.py') }}
+          key: ${{ runner.os }}-nuitka-build-${{ env.PYTHON_VERSION }}-${{ env.APP_EXE_NAME }}-${{ hashFiles('src/f_hamlog/**/*.py') }}
           restore-keys: |
             ${{ runner.os }}-nuitka-build-${{ env.PYTHON_VERSION }}-${{ env.APP_EXE_NAME }}-
 

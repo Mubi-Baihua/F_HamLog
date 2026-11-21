@@ -5,7 +5,7 @@ import sys
 import traceback
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SRC = os.path.join(ROOT, 'F_HamLog_Remote_Log_Server_2.0.0')
+SRC = os.path.join(ROOT, 'src', 'F_HamLog_Remote_Log_Server_2.0.0')
 sys.path.insert(0, SRC)
 from f_hamlog import remote_crypto
 
