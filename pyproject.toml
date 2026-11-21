@@ -21,6 +21,9 @@ dependencies = [
 
 [project.scripts]
 f-hamlog = "f_hamlog.__main__:main"
+# 安装器：不带参数开 Qt 界面；带参数走命令行（见 src/f_hamlog_installer）
+f-hamlog-installer = "f_hamlog_installer.__main__:main"
+f-hamlog-installer-cli = "f_hamlog_installer.cli:main"
 
 # ---------------------------------------------------------------------------
 # setuptools 打包 / 开发安装配置
@@ -50,7 +53,8 @@ f-hamlog = "f_hamlog.__main__:main"
 [tool.setuptools]
 package-dir = {"" = "src"}
 # 显式声明包，替代原先的 packages.find 自动发现
-packages = ["f_hamlog"]
+# f_hamlog_installer：独立安装器（命令行），复用 check_update 的下载/安装链路
+packages = ["f_hamlog", "f_hamlog_installer"]
 
 # 运行时需要的静态资源。
 # 其余 file/ 内容属于「个人设置 / 日志 / 私密材料」，刻意不入包：
@@ -66,6 +70,8 @@ f_hamlog = [
     "file/world_land.json",
     "file/python-3.13.11-amd64.exe",
 ]
+# 安装器的开发文档：随包分发，界面不读它（窗口里的「关于」页是固定信息块）
+f_hamlog_installer = ["README.md"]
 
 [tool.setuptools.dynamic]
 version = { attr = "f_hamlog.__version__" }

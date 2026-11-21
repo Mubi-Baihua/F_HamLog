@@ -708,7 +708,7 @@ TRANSLATIONS = {
         'Imported{}\n(Importing plugins from other versions is not supported).',
     '用户设置': 'user settings',
     '问题反馈到：BI8SQL@outlook.com': 'Report issues to: BI8SQL@outlook.com',
-    '版本更新请访问：': 'For updates visit: ',
+    '项目网址：': 'Project site: ',
     'Github项目：': 'GitHub project: ',
     '、通联日志文件': ', QSO log file',
     '、卫星转发器表': ', satellite transponder table',

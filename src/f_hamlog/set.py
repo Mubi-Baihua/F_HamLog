@@ -825,7 +825,7 @@ def main(window):
                 </body></html>''' % (
             theme.link_color().name(),
             i18n.tr('问题反馈到：BI8SQL@outlook.com'),
-            i18n.tr('版本更新请访问：'),
+            i18n.tr('项目网址：'),
             i18n.tr('Github项目：'),
         )
 

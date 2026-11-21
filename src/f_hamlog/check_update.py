@@ -693,17 +693,21 @@ def _window_speed(url, seconds=SAMPLE_WINDOW, limit=SAMPLE_BYTES, cancel=None):
     return got / dt
 
 
-def choose_source(url, cancel=None):
+def choose_source(url, cancel=None, prefer='auto'):
     """挑下载地址：直连 vs 各个镜像，并行跑同一个测速窗口后取最快。
 
-    返回 ``(地址, 是否用了镜像)``。规则：
-      · 非 GitHub 地址（或镜像列表为空）→ 直接直连，**不多发任何请求**；
-      · 镜像没比直连快 MIRROR_GAIN 倍 → 仍走直连（宁可慢点也别乱换）。
+    ``prefer`` 给调用方留一个开关（安装器要用，主程序不用传）：
+      · ``auto``   —— 默认。镜像只有比直连快 MIRROR_GAIN 倍才用；
+      · ``direct`` —— 只用直连，**一个探测请求都不发**；
+      · ``mirror`` —— 强制走镜像（仍然挑最快的那个），所有镜像都不通/不支持
+        分段时退回直连，不让整个下载卡死在这一步。
+
+    返回 ``(地址, 是否用了镜像)``。
     并发测速的偏差是「大家一起分带宽」，正好对应国内最常见的
     「单连接被限速」场景：直连被掐住而镜像跑得动时，比值会明显大于 1。
     """
     mirrors = mirror_urls(url)
-    if not mirrors:
+    if prefer == 'direct' or not mirrors:
         return url, False
 
     scores = {}
@@ -726,6 +730,24 @@ def choose_source(url, cancel=None):
     best = max(mirrors, key=lambda u: scores.get(u, 0.0))
     direct = scores.get(url, 0.0)
     mirror = scores.get(best, 0.0)
+
+    if prefer == 'mirror':
+        # 强制走镜像：不看直连多快，只要求镜像能通、且支持 Range
+        # （不支持 Range 就只能单线程，16 线程的收益全没了）。
+        if mirror <= 0:
+            print('[更新] 没有可用的镜像，改走直连')
+            return url, False
+        try:
+            ranged, _total, _name = probe(best)
+        except Exception as e:
+            print('[更新] 镜像探测失败，改走直连：%s' % e)
+            return url, False
+        if not ranged:
+            print('[更新] 镜像不支持分段，改走直连')
+            return url, False
+        print('[更新] 按要求走镜像 %s（%.0f KB/s）' % (_host_of(best), mirror / 1024))
+        return best, True
+
     if mirror > 0 and mirror > direct * MIRROR_GAIN:
         # 有些代理不认 Range（返回 200 整包）→ 只能单线程，反而比 16 线程直连慢
         try:
@@ -981,7 +1003,7 @@ def find_installer(url, dest=None, sha256=None, total=None, version=None, verify
 
 
 def download(url, dest=None, progress=None, workers=None, cancel=None, sha256=None, version='',
-             force=False):
+             force=False, prefer='auto'):
     """多线程下载 ``url``，返回本地文件绝对路径。
 
     能分段就把文件切成「线程数 × 3」的小块**动态分配**（默认 16 线程，谁下完谁抢下一块，
@@ -997,6 +1019,8 @@ def download(url, dest=None, progress=None, workers=None, cancel=None, sha256=No
     version：只用于写缓存元数据（下次判断「本地已有这个包」），不影响下载。
     force：``True`` 时忽略本地已有的包，强制重下（用户在「本地已有安装包」里
            选了「重新下载」）。
+    prefer：``auto`` / ``direct`` / ``mirror``，透传给 :func:`choose_source`
+           （安装器用它实现「强制走镜像加速」）。
     """
     cancel = cancel or threading.Event()
     workers = WORKERS if workers is None else int(workers)
@@ -1024,7 +1048,7 @@ def download(url, dest=None, progress=None, workers=None, cancel=None, sha256=No
             return hit['path']
 
     # 1) 选路：GitHub 才比镜像，其它地址这一步零开销
-    source, via_mirror = choose_source(url, cancel)
+    source, via_mirror = choose_source(url, cancel, prefer)
     if cancel.is_set():
         raise Cancelled()
 
