@@ -4,6 +4,9 @@
 
 ---
 
+## 下载
+你可以通过[下载器](https://github.com/Mubi-Baihua/F_HamLog/F%20HamLog%20%E5%AE%89%E8%A3%85%E5%99%A8.exe)下载 F HamLog
+
 ## 基本功能
 
 ### 编辑日志
@@ -286,6 +289,9 @@ FHL 文件格式为 json 文件。编码使用 utf-8。
 > **Language:** [中文](#业余无线电台通联日志--f-hamlog) · English
 
 ---
+
+## Download
+You can download F HamLog via the [downloader](https://github.com/Mubi-Baihua/F_HamLog/F%20HamLog%20%E5%AE%89%E8%A3%85%E5%99%A8.exe).
 
 ## Basic Features
 
